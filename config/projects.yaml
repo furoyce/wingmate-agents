@@ -1,0 +1,85 @@
+workspace:
+  linearWorkspace: dfcf61c2-72c0-4d39-9485-96576cabb555
+  team: JRF
+  owner: 71aef180-1742-4a76-8d49-51f14e8ada1e
+  approvers: [71aef180-1742-4a76-8d49-51f14e8ada1e]
+labels:
+  agentGroup: Agent
+  lifecycleGroup: Lifecycle
+  agent: { supported: [agent-ready, claude, codex], human: human, unsupported: [gemini, manus, tunip, tweak] }
+  lifecycle: [Ready, In-Agent, Needs-Human, Review-Ready, Blocked]
+  allowDeps: allow-deps
+defaults:
+  timezone: America/New_York
+  # D14 extension (spike 2026-10-06 §3.5): Codex sandboxes do not block reads outside the worktree, so Codex runs only as a
+  # read-only verifier/reviewer in the pilot; set coordinatorCascade: [claude, codex] only after the owner accepts the extension.
+  providers: { default: claude, coordinatorCascade: [claude], workers: [claude, codex, cursor, antigravity], verifyCross: true }
+  autonomy: ask-first
+  done: review
+projects:
+  bouncr:
+    linearProject: 0ca67822-6416-447b-b7b2-08ab2a7346dd
+    repos:
+      api:
+        orcaRepo: 7b0ddfa8-7ef0-4be6-b4ef-38013c099fb8
+        github: furoyce/bouncr.lol
+        base: origin/main
+        setup: none
+        gates:
+          - [npm, --prefix, api, test]
+          - [npx, --prefix, api, tsc, --noEmit]
+          - [npm, --prefix, mobile, run, verify]
+        ui: { kind: ios, paths: [mobile/], dev: [npm, --prefix, mobile, run, ios] }
+        packageRoots: [api, mobile]
+      web:
+        orcaRepo: d77b22cb-74e2-42ac-b06e-5d90a0fd6c89
+        github: furoyce/BOUNCR-game
+        base: origin/main
+        setup: [pnpm, install, --frozen-lockfile]
+        gates: [[pnpm, test], [pnpm, check], [pnpm, build]]
+        ui: { kind: web, paths: [client/, src/], dev: [pnpm, dev], url: "http://localhost:5173" }
+    routing:
+      default: api
+      rules:
+        - { match: [ios, mobile, expo, api, "leaderboard api"], repo: api }
+        - { match: [web, game, level, browser], repo: web }
+  smart-dispatcher:
+    linearProject: a0d17ec1-b237-4481-9efb-1eff9fe69efe
+    repos:
+      main:
+        orcaRepo: d2386ea3-2a51-46b2-93b4-7f36da9e673d
+        github: furoyce/ehr-dispatch.smartdispatcher.io
+        base: origin/main
+        setup: [pnpm, install, --frozen-lockfile]
+        gates: [[pnpm, turbo, run, typecheck, lint], [pnpm, test]]
+        requiredCheck: "Smoke (typecheck + lint)"
+        ui: { kind: web, paths: [apps/web/], dev: [pnpm, dev], url: "http://localhost:3000" }
+        packageRoots: [.]
+    routing: { default: main, rules: [] }
+    conventions: [AGENTS.md, WORK_LOG.md]
+    coexist: { prReview: existing-orca-automation, githubIssues: leave-to-agent-fix }
+  jr-learning-plus:
+    linearProject: 70904929-eeb0-4b22-b8ab-e64907031c9a
+    repos:
+      main:
+        orcaRepo: 463253fe-ee53-426d-90c2-6fc4e4abd008
+        github: furoyce/jr-learning-plus
+        base: origin/main
+        setup: [pnpm, install, --frozen-lockfile]
+        gates: [[pnpm, lint], [pnpm, typecheck], [pnpm, test], [pnpm, build], [pnpm, courses:check]]
+        ui: { kind: web, paths: [apps/], dev: [pnpm, dev], url: "http://localhost:3000" }
+    routing: { default: main, rules: [] }
+  jr-travel-atlas:
+    linearProject: 65410a74-7fa2-4dbb-8494-54e3a90a4f95
+    repos:
+      main:
+        orcaRepo: de4b02a0-5fbf-44db-bb8d-56adfc5103de
+        github: furoyce/jr-travel-atlas
+        base: origin/main
+        setup: [pnpm, install, --frozen-lockfile]
+        gates:
+          - [pnpm, check]
+          - [env, SUPABASE_URL=https://ci.invalid, SUPABASE_SERVICE_ROLE_KEY=ci-not-a-real-key, pnpm, test]
+          - [pnpm, build]
+        ui: { kind: web, paths: [client/], dev: [pnpm, dev], url: "http://localhost:5173" }
+    routing: { default: main, rules: [] }
