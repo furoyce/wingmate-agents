@@ -131,6 +131,41 @@ export async function writeLocal(wt: string, l: Local): Promise<void> {
   ]);
 }
 
+const Questions = LocalSchema.shape.questions;
+
+/** The local `questions.json` for the dispatcher's merge; a missing or unparseable file reads as empty (it is rewritten next). */
+export async function readMirrorQuestions(wt: string): Promise<Local["questions"]> {
+  const t = await readText(p(wt, "questions.json"));
+  if (t === null) return [];
+  try {
+    const parsed = Questions.safeParse(JSON.parse(t));
+    return parsed.success ? parsed.data : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * The dispatcher's half of the mirror (§8.0): `record.json` and `questions.json` only, each written when its content changed.
+ * `gates.json` belongs to the `gate` verb and `run.json` to `spawn`/`run`; the dispatcher never rewrites either.
+ */
+export async function writeMirror(
+  wt: string,
+  m: { record: Local["record"]; questions: Local["questions"] },
+): Promise<string[]> {
+  const wrote: string[] = [];
+  for (const [file, value] of [
+    ["record.json", m.record],
+    ["questions.json", m.questions],
+  ] as const) {
+    const text = JSON.stringify(value, null, 2);
+    if ((await readText(p(wt, file))) === text) continue;
+    await writeAtomic(p(wt, file), text);
+    wrote.push(file);
+  }
+  return wrote;
+}
+
 export async function readLaunch(wt: string): Promise<Launch> {
   const t = await readText(p(wt, "launch.json"));
   if (t === null)

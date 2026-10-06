@@ -26,7 +26,17 @@ const pidAlive = (pid: number): boolean => {
 
 export interface AcquiredLock {
   kind: "acquired" | "reclaimed";
+  /**
+   * R16: true once a heartbeat found another holder's token on disk (or no lock file at all) — the lock was reclaimed while this
+   * process was frozen. The holder then stops heartbeating and never writes the file again; the tick checks this before every
+   * external action and aborts with outcome `lock_lost`.
+   */
+  lost(): boolean;
   release(): Promise<void>;
+}
+export interface AcquireOptions {
+  /** Heartbeat period; tests shorten it, production keeps HEARTBEAT_MS. */
+  heartbeatMs?: number;
 }
 export type AcquireResult = AcquiredLock | { kind: "held" };
 
@@ -57,7 +67,7 @@ async function readLock(path: string): Promise<LockRead> {
  */
 export const TickLock = {
   path: (dirs: Dirs) => join(dirs.state, "tick.lock"),
-  async acquire(dirs: Dirs, clock: Clock): Promise<AcquireResult> {
+  async acquire(dirs: Dirs, clock: Clock, opts: AcquireOptions = {}): Promise<AcquireResult> {
     const path = TickLock.path(dirs);
     const mine: LockFile = {
       pid: process.pid,
@@ -106,12 +116,35 @@ export const TickLock = {
       kind = "reclaimed";
     }
     if (!created) return { kind: "held" };
+    let lost = false;
+    let beating = false;
+    // R16: compare the on-disk token before every heartbeat write; a different (or missing) token means another tick reclaimed
+    // the lock while this one was frozen, so stop for good and never overwrite it. A failed write is retried by the next beat: a
+    // missed heartbeat only ages the lock, and the 15-minute staleness rule tolerates many of those.
+    const beat = async () => {
+      if (lost || beating) return;
+      beating = true;
+      try {
+        const cur = await readLock(path).catch((): LockRead => ({ kind: "garbage" }));
+        if (cur.kind !== "ok" || cur.lock.token !== mine.token) {
+          lost = true;
+          clearInterval(timer);
+          return;
+        }
+        await writeAtomic(path, JSON.stringify({ ...mine, heartbeatAt: iso(clock.now()) }));
+      } catch {
+        /* retried by the next beat (see above) */
+      } finally {
+        beating = false;
+      }
+    };
     const timer = setInterval(() => {
-      void writeAtomic(path, JSON.stringify({ ...mine, heartbeatAt: iso(clock.now()) }));
-    }, HEARTBEAT_MS);
+      void beat();
+    }, opts.heartbeatMs ?? HEARTBEAT_MS);
     timer.unref();
     return {
       kind,
+      lost: () => lost,
       release: async () => {
         clearInterval(timer);
         try {

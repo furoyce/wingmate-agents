@@ -195,6 +195,8 @@ export interface OrcaPort {
 export interface GitPort {
   revParse(cwd: string, ref: string): Promise<string>;
   commonDir(cwd: string): Promise<string>;
+  /** `git rev-parse --absolute-git-dir`: a linked worktree's admin dir (its basename is the gitdir name; git de-duplicates them). */
+  gitDir(cwd: string): Promise<string>;
   changedPaths(cwd: string, baseSha: string): Promise<string[]>;
   addedLines(cwd: string, baseSha: string): Promise<{ path: string; line: string }[]>;
   commitsAhead(cwd: string, baseSha: string): Promise<number>;

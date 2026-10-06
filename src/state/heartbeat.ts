@@ -13,6 +13,8 @@ export const HeartbeatSchema = z.object({
     "work",
     "paused",
     "lock_held",
+    // R16: the tick's lock was reclaimed while it was frozen (another tick now holds it); it aborted before acting
+    "lock_lost",
     "orca_unreachable",
     "linear_error",
     "stopped",

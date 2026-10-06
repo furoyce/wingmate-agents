@@ -1,4 +1,5 @@
 // tests/fakes/fakeGit.ts — in-memory GitPort/GhPort; push records the current HEAD and PR creation reuses an open PR per head (Ruling R2)
+import { basename } from "node:path";
 import type { GhPort, GitPort } from "../../src/ports";
 
 export class FakeGit implements GitPort {
@@ -7,12 +8,18 @@ export class FakeGit implements GitPort {
   added = new Map<string, { path: string; line: string }[]>();
   pushed: string[] = [];
   remoteSha = new Map<string, string>();
+  /** Real git dirs of worktrees the fake Orca created on disk (makeWorld wires them); other paths get made-up ones. */
+  commonDirs = new Map<string, string>();
+  gitDirs = new Map<string, string>();
 
   async revParse(_cwd: string, ref: string) {
     return ref === "HEAD" ? "headsha" : "basesha";
   }
   async commonDir(cwd: string) {
-    return `${cwd}/.git-common`;
+    return this.commonDirs.get(cwd) ?? `${cwd}/.git-common`;
+  }
+  async gitDir(cwd: string) {
+    return this.gitDirs.get(cwd) ?? `${cwd}/.git-common/worktrees/${basename(cwd)}`;
   }
   async changedPaths(cwd: string) {
     return this.changed.get(cwd) ?? [];
@@ -34,6 +41,8 @@ export class FakeGit implements GitPort {
 
 export class FakeGh implements GhPort {
   prs: { number: number; url: string; head: string }[] = [];
+  /** `gh pr view` state per PR number (default OPEN); tests merge or close PRs here. */
+  states = new Map<number, string>();
 
   async prCreate(
     _cwd: string,
@@ -49,6 +58,6 @@ export class FakeGh implements GhPort {
   async prView(_cwd: string, number: number) {
     const p = this.prs.find((x) => x.number === number);
     if (!p) throw new Error("no pr");
-    return { state: "OPEN", headRefName: p.head, url: p.url };
+    return { state: this.states.get(number) ?? "OPEN", headRefName: p.head, url: p.url };
   }
 }

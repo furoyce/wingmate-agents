@@ -1,11 +1,17 @@
 // src/machine/context.ts — everything a tick needs, built once per process
+import { join } from "node:path";
 import type { Config } from "../config/schema";
-import type { GhPort, GitPort, LinearPort, LinearTeamMeta, OrcaPort } from "../ports";
+import type { Intent } from "../kit/intents";
+import type { GhPort, GitPort, LinearIssue, LinearPort, LinearTeamMeta, OrcaPort } from "../ports";
+import { WingmateError } from "../shared/errors";
+import { run } from "../shared/exec";
 import { logger } from "../shared/logger";
 import type { Dirs } from "../shared/paths";
 import type { Clock } from "../shared/time";
 import { Journal } from "../state/journal";
 import { Ledger } from "../state/ledger";
+import type { WRecord } from "../state/records";
+import type { Reconciled } from "./reconcile";
 
 export interface Meta {
   states: LinearTeamMeta["states"];
@@ -17,6 +23,22 @@ export interface Meta {
   lifecycleGroupId: string;
   lifecycleIds: Set<string>;
 }
+
+/** §13.3(d) publishing (Task 11 wires the real module; until then `publishImpl` refuses with `publish_not_wired`). */
+export type PublishFn = (
+  ctx: Ctx,
+  r: WRecord,
+  issue: LinearIssue,
+  intent: Extract<Intent, { kind: "finish" }>,
+  rec: Reconciled,
+) => Promise<boolean>;
+export interface SweepResult {
+  killed: string[];
+  /** Process names (never command lines) for the ledger's proof. */
+  commands?: string[];
+}
+/** §13.3(i) process sweep; `spare` keeps the process whose command line carries it (the parked coordinator) and its ancestors. */
+export type SweepFn = (paths: string[], opts?: { spare?: string }) => Promise<SweepResult>;
 
 export interface Ctx {
   cfg: Config;
@@ -32,6 +54,12 @@ export interface Ctx {
   meta: Meta;
   home: string;
   now(): string;
+  /** The dispatcher-owned kit dir of an issue: `<state>/kit/<identifier>` (§13.3 a; `spawn` derives the same path). */
+  kitDirFor(identifier: string): string;
+  /** Read-only paths of the agents' toolchain for the sandbox `allowRead` (§13.3 b). */
+  toolchainPaths: string[];
+  sweep: SweepFn;
+  publishImpl(): Promise<{ publish: PublishFn }>;
 }
 
 export interface BuildCtxInput {
@@ -43,6 +71,40 @@ export interface BuildCtxInput {
   git: GitPort;
   gh: GhPort;
   home?: string;
+  toolchainPaths?: string[];
+  sweep?: SweepFn;
+  publishImpl?: () => Promise<{ publish: PublishFn }>;
+}
+
+/** The Homebrew prefix: git and gh may live under a user-level prefix inside `denyRead ~/` (spike 2026-10-06 §2.5, Ruling R11). */
+async function brewPrefix(): Promise<string | null> {
+  if (process.env.HOMEBREW_PREFIX) return process.env.HOMEBREW_PREFIX;
+  try {
+    const r = await run(["brew", "--prefix"], { timeoutMs: 5_000 });
+    return r.code === 0 && r.stdout.trim() ? r.stdout.trim() : null;
+  } catch {
+    return null; // brew is not installed
+  }
+}
+
+/**
+ * The default toolchain read grants. `~/.codex` is deliberately absent although the plan listed it: it holds Codex's `auth.json`,
+ * and the agent sandbox denies reading it (§13.3 b `Read(~/.codex/**)`, `denyWrite ~/.codex/**`).
+ */
+export async function defaultToolchainPaths(home: string): Promise<string[]> {
+  const brew = await brewPrefix();
+  return [
+    ...new Set([
+      "/usr/bin",
+      "/bin",
+      "/opt/homebrew",
+      "/usr/local/bin",
+      join(home, ".bun"),
+      join(home, ".local/bin"),
+      join(home, ".local/share/claude"),
+      ...(brew ? [brew] : []),
+    ]),
+  ];
 }
 
 export async function buildCtx(o: BuildCtxInput): Promise<Ctx> {
@@ -74,6 +136,7 @@ export async function buildCtx(o: BuildCtxInput): Promise<Ctx> {
       return s.id;
     },
   };
+  const home = o.home ?? process.env.HOME ?? "/";
   return {
     cfg: o.cfg,
     dirs: o.dirs,
@@ -82,12 +145,24 @@ export async function buildCtx(o: BuildCtxInput): Promise<Ctx> {
     orca: o.orca,
     git: o.git,
     gh: o.gh,
-    home: o.home ?? process.env.HOME ?? "/",
+    home,
     journal: new Journal(o.dirs, o.clock),
     ledger: new Ledger(o.dirs),
     // Logs go under this context's state root (never the real home when tests pass a temp Dirs).
     log: logger(o.dirs.logs),
     meta,
     now: () => o.clock.now().toISOString(),
+    kitDirFor: (identifier) => join(o.dirs.kit, identifier),
+    toolchainPaths: o.toolchainPaths ?? (await defaultToolchainPaths(home)),
+    sweep: o.sweep ?? ((paths, opts) => import("./sweep").then((m) => m.sweep(paths, opts))),
+    publishImpl:
+      o.publishImpl ??
+      (async () => {
+        throw new WingmateError(
+          "publish_not_wired",
+          "publishing arrives in Task 11",
+          "do not run finish yet",
+        );
+      }),
   };
 }

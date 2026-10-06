@@ -114,6 +114,49 @@ export async function listIntents(wt: string): Promise<Intent[]> {
   return out;
 }
 
+/** One outbox file parsed on its own: the intent, or why it is not one (an id that cannot name its file is invalid). */
+async function readOne(wt: string, n: string): Promise<Intent | { error: string } | null> {
+  const t = await readText(join(dir(wt), n));
+  if (t === null) return null; // consumed between readdir and read
+  let raw: unknown;
+  try {
+    raw = JSON.parse(t);
+  } catch (e) {
+    return { error: `not JSON (${(e as Error).message})` };
+  }
+  const p = IntentSchema.safeParse(raw);
+  if (!p.success) return { error: zodIssue(p.error) };
+  if (`${p.data.id}.json` !== n) return { error: `id ${p.data.id} does not match the file name` };
+  return p.data;
+}
+
+/**
+ * The dispatcher's read of the outbox: every file parsed on its own, so one invalid file cannot wedge every tick — valid intents
+ * come back in ULID order, invalid files are named for `quarantineIntent`.
+ */
+export async function readIntentFiles(
+  wt: string,
+): Promise<{ intents: Intent[]; invalid: { file: string; error: string }[] }> {
+  await mkdir(dir(wt), { recursive: true });
+  const intents: Intent[] = [];
+  const invalid: { file: string; error: string }[] = [];
+  for (const n of (await readdir(dir(wt))).filter((x) => x.endsWith(".json")).sort()) {
+    const one = await readOne(wt, n);
+    if (one === null) continue;
+    if ("error" in one) invalid.push({ file: n, error: one.error });
+    else intents.push(one);
+  }
+  return { intents, invalid };
+}
+
+/** Moves an outbox file aside — `invalid/` (unparseable) or `failed/` (failed three times) — where the dispatcher never reads it. */
+export async function quarantineIntent(wt: string, file: string, where: "invalid" | "failed"): Promise<void> {
+  if (!/^[^/\\]+\.json$/.test(file) || file.startsWith("."))
+    throw new WingmateError("intent_invalid", `intent_invalid: bad outbox file name ${JSON.stringify(file)}`);
+  await mkdir(join(dir(wt), where), { recursive: true });
+  await rename(join(dir(wt), file), join(dir(wt), where, file));
+}
+
 /** Executed intents move to `outbox/done/` (kept for the agent's own audit; never re-read by the dispatcher). */
 export async function consumeIntent(wt: string, id: string): Promise<void> {
   if (!Id.safeParse(id).success)

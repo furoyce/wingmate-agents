@@ -1,4 +1,5 @@
-// tests/fakes/fakeLinear.ts — in-memory LinearPort with programmable writes, history and failure injection
+// tests/fakes/fakeLinear.ts — in-memory LinearPort with programmable writes, history and failure injection. Reads return copies, as
+// a real API does, so a tick's snapshot never changes under it; every issue write is logged with the state before and after (I5).
 import type {
   LinearComment,
   LinearHistoryEntry,
@@ -7,6 +8,7 @@ import type {
   LinearPort,
   LinearTeamMeta,
 } from "../../src/ports";
+import { WingmateError } from "../../src/shared/errors";
 
 const AGENT_LABELS: LinearLabel[] = ["agent-ready", "claude", "codex", "human", "gemini"].map((n) => ({
   id: `lb-${n}`,
@@ -26,13 +28,23 @@ const OTHER_LABELS: LinearLabel[] = [
   { id: "lb-allow-deps", name: "allow-deps", parentId: null, parentName: null },
 ];
 
+export interface IssueWrite {
+  issueId: string;
+  before: { stateId: string; labelIds: string[] };
+  after: { stateId: string; labelIds: string[] };
+}
+
 export class FakeLinear implements LinearPort {
   issues = new Map<string, LinearIssue>();
   comments: LinearComment[] = [];
   history = new Map<string, LinearHistoryEntry[]>();
   writes: { kind: string; args: unknown }[] = [];
+  /** Every successful `updateIssue`, with the issue's state and labels before and after (invariant I5). */
+  issueWrites: IssueWrite[] = [];
   /** When set to a write kind, the next write of that kind throws once (replay tests). */
   failNext: string | null = null;
+  /** Called at the start of every port method (reads and writes): tests inject an owner edit "between read and write". */
+  onCall: ((method: string) => void) | null = null;
   meta: LinearTeamMeta = {
     states: [
       { id: "st-backlog", name: "Backlog", type: "backlog" },
@@ -46,10 +58,13 @@ export class FakeLinear implements LinearPort {
   };
   now = () => new Date().toISOString();
 
+  private call(method: string) {
+    this.onCall?.(method);
+  }
   private bump(kind: string, args: unknown) {
     if (this.failNext === kind) {
       this.failNext = null;
-      throw new Error(`fake linear failure: ${kind}`);
+      throw new WingmateError("linear_unreachable", `fake linear failure: ${kind}`); // as LinearClient reports transport failures
     }
     this.writes.push({ kind, args });
   }
@@ -58,41 +73,54 @@ export class FakeLinear implements LinearPort {
     this.issues.set(i.id, i);
   }
   async teamMeta() {
-    return this.meta;
+    return structuredClone(this.meta);
   }
   async listCandidates(projectIds: string[], labelNames: string[]) {
-    return [...this.issues.values()].filter(
-      (i) =>
-        i.projectId &&
-        projectIds.includes(i.projectId) &&
-        i.state.type === "unstarted" &&
-        i.labels.some((l) => labelNames.includes(l.name)),
+    this.call("listCandidates");
+    return structuredClone(
+      [...this.issues.values()].filter(
+        (i) =>
+          i.projectId &&
+          projectIds.includes(i.projectId) &&
+          i.state.type === "unstarted" &&
+          i.labels.some((l) => labelNames.includes(l.name)),
+      ),
     );
   }
   async listUpdatedSince(projectIds: string[], since: string) {
-    return [...this.issues.values()].filter(
-      (i) => i.projectId && projectIds.includes(i.projectId) && i.updatedAt > since,
+    this.call("listUpdatedSince");
+    return structuredClone(
+      [...this.issues.values()].filter(
+        (i) => i.projectId && projectIds.includes(i.projectId) && i.updatedAt > since,
+      ),
     );
   }
   async getIssues(ids: string[]) {
-    return ids.flatMap((id) => {
-      const i = this.issues.get(id);
-      return i ? [i] : [];
-    });
+    this.call("getIssues");
+    return structuredClone(
+      ids.flatMap((id) => {
+        const i = this.issues.get(id);
+        return i ? [i] : [];
+      }),
+    );
   }
   async listComments(issueIds: string[], since: string) {
-    return this.comments.filter((c) => issueIds.includes(c.issueId) && c.createdAt > since);
+    this.call("listComments");
+    return structuredClone(this.comments.filter((c) => issueIds.includes(c.issueId) && c.createdAt > since));
   }
   async issueHistory(issueId: string, since: string) {
-    return (this.history.get(issueId) ?? []).filter((h) => h.createdAt > since);
+    this.call("issueHistory");
+    return structuredClone((this.history.get(issueId) ?? []).filter((h) => h.createdAt > since));
   }
   async updateIssue(
     issueId: string,
     input: { stateId?: string; labelIds?: string[]; subscriberIds?: string[] },
   ) {
+    this.call("updateIssue");
     this.bump("issueUpdate", { issueId, input });
     const i = this.issues.get(issueId);
     if (!i) return;
+    const before = { stateId: i.state.id, labelIds: i.labels.map((l) => l.id) };
     if (input.stateId) {
       const s = this.meta.states.find((x) => x.id === input.stateId);
       if (s) i.state = { ...s };
@@ -100,13 +128,19 @@ export class FakeLinear implements LinearPort {
     if (input.labelIds) {
       i.labels = input.labelIds.flatMap((id) => {
         const l = this.meta.labels.find((x) => x.id === id);
-        return l ? [l] : [];
+        return l ? [{ ...l }] : [];
       });
     }
     if (input.subscriberIds) i.subscriberIds = input.subscriberIds;
     i.updatedAt = new Date(Date.parse(i.updatedAt) + 1000).toISOString();
+    this.issueWrites.push({
+      issueId,
+      before,
+      after: { stateId: i.state.id, labelIds: i.labels.map((l) => l.id) },
+    });
   }
   async createComment(issueId: string, body: string, opts: { id: string; parentId?: string }) {
+    this.call("createComment");
     this.bump("commentCreate", { issueId, opts });
     this.comments.push({
       id: opts.id,
@@ -121,11 +155,13 @@ export class FakeLinear implements LinearPort {
     return { id: opts.id };
   }
   async updateComment(id: string, body: string) {
+    this.call("updateComment");
     this.bump("commentUpdate", { id });
     const c = this.comments.find((x) => x.id === id);
     if (c) c.body = body;
   }
   async createAttachment(issueId: string, url: string, title: string) {
+    this.call("createAttachment");
     this.bump("attachment", { issueId, url, title });
     this.issues.get(issueId)?.attachments.push({ id: `att-${url}`, url, title });
   }
@@ -138,10 +174,12 @@ export class FakeLinear implements LinearPort {
     description: string;
     stateId: string;
   }) {
+    this.call("createIssue");
     this.bump("issueCreate", input);
     return { id: input.id, identifier: `JRF-${900 + this.writes.length}` };
   }
   async subscribe(issueId: string, userId: string) {
+    this.call("subscribe");
     this.bump("subscribe", { issueId, userId });
     const i = this.issues.get(issueId);
     if (i && !i.subscriberIds.includes(userId)) i.subscriberIds.push(userId);
@@ -196,7 +234,7 @@ export class FakeLinear implements LinearPort {
     i.labels = names.map((n) => {
       const l = this.meta.labels.find((x) => x.name === n);
       if (!l) throw new Error(`setLabels: unknown label ${n}`);
-      return l;
+      return { ...l };
     });
     const after = new Set(i.labels.map((l) => l.id));
     i.updatedAt = at;

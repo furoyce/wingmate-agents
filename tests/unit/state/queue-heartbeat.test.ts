@@ -50,6 +50,20 @@ describe("queue + heartbeat", () => {
       counts: {},
     });
     expect((await readHeartbeat(dirs))?.outcome).toBe("idle");
+    // R16: a tick whose lock was reclaimed while it was frozen records lock_lost
+    await writeHeartbeat(dirs, {
+      kind: "tick",
+      at: "2026-10-06T10:05:00.000Z",
+      exitCode: 1,
+      outcome: "lock_lost",
+      reason: "lock_lost",
+      durationMs: 900,
+      pausedScopes: [],
+      linearAuth: { ok: true, expiresAt: null },
+      orcaReachable: true,
+      counts: {},
+    });
+    expect((await readHeartbeat(dirs))?.outcome).toBe("lock_lost");
     expect(await stopRequested(dirs, "bouncr")).toBe(false);
     await requestStop(dirs, { scope: "project", key: "bouncr", at: "2026-10-06T10:01:00.000Z" });
     expect(await stopRequested(dirs, "bouncr")).toBe(true);

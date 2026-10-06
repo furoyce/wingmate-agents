@@ -1,6 +1,6 @@
 // tests/unit/state/lock.test.ts
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { homeDirs } from "../../../src/shared/paths";
@@ -65,6 +65,47 @@ describe("TickLock", () => {
     );
     const a = await TickLock.acquire(dirs, clock);
     expect(a.kind).toBe("held");
+  });
+});
+describe("TickLock heartbeat (R16)", () => {
+  const read = () =>
+    JSON.parse(readFileSync(join(root, "tick.lock"), "utf8")) as { token: string; heartbeatAt: string };
+  test("refreshes heartbeatAt while the on-disk token is its own, and is never lost", async () => {
+    const c = new FixedClock(new Date("2026-10-06T10:00:00Z"));
+    const a = await TickLock.acquire(dirs, c, { heartbeatMs: 10 });
+    if (a.kind === "held") throw new Error("expected the lock");
+    c.advance(60_000);
+    await Bun.sleep(60);
+    expect(read().heartbeatAt).toBe("2026-10-06T10:01:00.000Z");
+    expect(a.lost()).toBe(false);
+    await a.release();
+  });
+  test("a heartbeat that finds another holder's token flips lost(), stops beating and never overwrites the new lock", async () => {
+    const a = await TickLock.acquire(dirs, clock, { heartbeatMs: 10 });
+    if (a.kind === "held") throw new Error("expected the lock");
+    const foreign = JSON.stringify({
+      pid: process.pid,
+      startedAt: "2026-10-06T10:20:00Z",
+      token: "theirs",
+      heartbeatAt: "2026-10-06T10:20:00Z",
+    });
+    writeFileSync(join(root, "tick.lock"), foreign);
+    await Bun.sleep(60);
+    expect(a.lost()).toBe(true);
+    expect(readFileSync(join(root, "tick.lock"), "utf8")).toBe(foreign);
+    await Bun.sleep(40);
+    expect(readFileSync(join(root, "tick.lock"), "utf8")).toBe(foreign);
+    await a.release(); // releasing a lost lock leaves the new holder's file alone
+    expect(read().token).toBe("theirs");
+  });
+  test("a lock file removed under the holder counts as lost (it is never re-created by a heartbeat)", async () => {
+    const a = await TickLock.acquire(dirs, clock, { heartbeatMs: 10 });
+    if (a.kind === "held") throw new Error("expected the lock");
+    rmSync(join(root, "tick.lock"));
+    await Bun.sleep(60);
+    expect(a.lost()).toBe(true);
+    expect(readdirSync(root).filter((n) => n.startsWith("tick.lock"))).toEqual([]);
+    await a.release();
   });
 });
 describe("withRecordLock", () => {

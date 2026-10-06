@@ -2,6 +2,7 @@
 // validate/security are computed by the CLI, and proven verdicts of validate/security/ui go STALE once HEAD moves.
 import { createHash } from "node:crypto";
 import { join } from "node:path";
+import { parseAddedLines } from "../../../git/diff";
 import { writeIntent } from "../../../kit/intents";
 import {
   type Launch,
@@ -59,22 +60,7 @@ export async function changedNames(cwd: string, base: string): Promise<string[] 
   return r.code === 0 ? r.stdout.split("\0").filter(Boolean) : null;
 }
 
-/** Added lines of a unified diff, attributed to their file; header lines are recognized only outside hunks. */
-export function parseAddedLines(diff: string): { path: string; line: string }[] {
-  const added: { path: string; line: string }[] = [];
-  let path = "";
-  let inHunk = false;
-  for (const l of diff.split("\n")) {
-    if (l.startsWith("diff --git ")) {
-      inHunk = false;
-      path = "";
-    } else if (!inHunk) {
-      if (l.startsWith("+++ ")) path = l.startsWith("+++ b/") ? l.slice(6) : l.slice(4);
-      else if (l.startsWith("@@")) inHunk = true;
-    } else if (l.startsWith("+")) added.push({ path, line: l.slice(1) });
-  }
-  return added;
-}
+export { parseAddedLines };
 
 const passed = (local: Local, s: string) => ["PASS", "NA"].includes(local.gates[s]?.verdict ?? "");
 
