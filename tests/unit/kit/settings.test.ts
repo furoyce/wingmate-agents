@@ -31,6 +31,12 @@ type Settings = {
   };
   permissions: { deny: string[] };
 };
+/** Sandbox path semantics: a glob matches by pattern; a plain path covers itself and everything under it. */
+const covers = (pattern: string, path: string): boolean =>
+  /[*?[\]{}]/.test(pattern)
+    ? new Bun.Glob(pattern).match(path)
+    : path === pattern || path.startsWith(`${pattern}/`);
+const coveredBy = (patterns: string[], path: string) => patterns.filter((p) => covers(p, path));
 
 describe("settings", () => {
   test("claude settings enforce sandbox, deny region and git write policy", () => {
@@ -86,16 +92,64 @@ describe("settings", () => {
   });
   test("toolchain read paths come only from the input (no hardcoded brew paths)", () => {
     const s = claudeSettings({ ...input, toolchainPaths: [] }) as Settings;
-    expect(s.sandbox.filesystem.allowRead).toEqual(["/wt/wm-jrf-404", "/repo/.git/**"]);
+    expect(s.sandbox.filesystem.allowRead).toEqual([
+      "/wt/wm-jrf-404",
+      "~/.local/share/wingmate/bin/**",
+      "/repo/.git/**",
+    ]);
     const t = claudeSettings({ ...input, childWorktrees: ["/wt/wm-jrf-404-worker-ab12"] }) as Settings;
     expect(t.sandbox.filesystem.allowRead).toEqual([
       "/wt/wm-jrf-404",
       "/wt/wm-jrf-404-worker-ab12",
       "/usr/bin",
       "/opt/homebrew",
+      "~/.local/share/wingmate/bin/**",
       "/repo/.git/**",
     ]);
     expect(t.sandbox.filesystem.allowWrite).toContain("/wt/wm-jrf-404-worker-ab12");
+  });
+  test("§13.3(a): the compiled binary is readable (so `wingmate issue …` runs); the rest of the state dir is not, and none of it is writable", () => {
+    const fs = (claudeSettings(input) as Settings).sandbox.filesystem;
+    expect(fs.allowRead).toContain("~/.local/share/wingmate/bin/**");
+    expect(fs.allowRead.filter((p) => p.includes(".local/share/wingmate"))).toEqual([
+      "~/.local/share/wingmate/bin/**",
+    ]);
+    expect(fs.denyWrite).toContain("~/.local/share/wingmate/**");
+    expect(fs.allowWrite.filter((p) => p.includes(".local/share/wingmate"))).toEqual([]);
+  });
+  test("git in the own linked worktree can commit: no denyWrite pattern covers the own gitdir, and no other worktree's gitdir is writable", () => {
+    const fs = (claudeSettings(input) as Settings).sandbox.filesystem;
+    // deny wins over allow in Claude's sandbox, so a deny covering the own gitdir would fail `git add`/`git commit`
+    for (const f of ["index.lock", "index", "HEAD.lock", "HEAD", "logs/HEAD", "COMMIT_EDITMSG"]) {
+      const own = `/repo/.git/worktrees/wm-jrf-404/${f}`;
+      expect(coveredBy(fs.allowWrite, own)).toEqual(["/repo/.git/worktrees/wm-jrf-404/**"]);
+      expect(coveredBy(fs.denyWrite, own)).toEqual([]);
+      // §13.3(b) "every other <common>/worktrees/*/**": no allow rule reaches a sibling (default write deny)
+      expect(coveredBy(fs.allowWrite, `/repo/.git/worktrees/wm-jrf-999/${f}`)).toEqual([]);
+      expect(coveredBy(fs.allowWrite, `/repo/.git/worktrees/wm-jrf-4040/${f}`)).toEqual([]);
+    }
+  });
+  test("a gitdirName that is not one literal path component is refused: it would widen the own-gitdir grant", () => {
+    for (const g of ["", ".", "..", "a/b", "*", "wm-[1]", "{a,b}"])
+      expect(() => claudeSettings({ ...input, gitdirName: g })).toThrow(/gitdirName/);
+  });
+  test("only lock files under the allowed git paths are writable, never the common dir's top-level locks", () => {
+    const fs = (claudeSettings(input) as Settings).sandbox.filesystem;
+    expect(fs.allowWrite).not.toContain("/repo/.git/*.lock");
+    expect(
+      fs.allowWrite.filter((p) => /^\/repo\/\.git\/[^/]*\.lock$/.test(p) || p.endsWith("/*.lock")),
+    ).toEqual([]);
+    for (const l of ["config.lock", "HEAD.lock", "index.lock", "shallow.lock", "gc.pid.lock"])
+      expect(coveredBy(fs.allowWrite, `/repo/.git/${l}`)).toEqual([]);
+    for (const l of [
+      "packed-refs.lock",
+      "refs/heads/furoyce/wm-jrf-404.lock",
+      "refs/heads/wm-jrf-404-spike.lock",
+      "logs/refs/heads/furoyce/wm-jrf-404",
+      "objects/info/commit-graph.lock",
+      "worktrees/wm-jrf-404/index.lock",
+    ])
+      expect(coveredBy(fs.allowWrite, `/repo/.git/${l}`).length).toBeGreaterThan(0);
   });
   test("ui-reviewer keeps browser verbs; worker denies spawn", () => {
     const ui = claudeSettings({ ...input, role: "ui-reviewer" }) as Settings;

@@ -12,11 +12,13 @@ import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { type IssueDeps, issueCommand } from "../../../src/cli/commands/issue";
 import { parseArgv } from "../../../src/cli/index";
-import { integrityHashes } from "../../../src/kit/install";
+import { loadConfig } from "../../../src/config/load";
+import { installKit, integrityHashes } from "../../../src/kit/install";
 import { listIntents } from "../../../src/kit/intents";
 import { type Launch, type Local, readLocal, writeLocal } from "../../../src/kit/local";
 import type { WorkerRow } from "../../../src/ports";
 import { run } from "../../../src/shared/exec";
+import { newRecord } from "../../../src/state/records";
 
 const GIT_ID = ["-c", "user.name=t", "-c", "user.email=t@example.invalid"];
 const git = (wt: string, ...args: string[]) => run(["git", "-C", wt, ...GIT_ID, ...args]);
@@ -654,6 +656,95 @@ describe("wingmate issue spawn", () => {
     );
     expect(out.code).toBe("provider_unavailable");
     expect(none.calls.map((c) => c[0])).toEqual(["account"]);
+  });
+
+  test("a review provider without tier best is model_unresolved (§9.2): the fallback is reported, never a tierless start", async () => {
+    const wt = await spawnWorktree({ tiers: { claude: { model: "c", effort: "max" } } });
+    const f = fakeOrca();
+    const review = await runVerb(wt, ["spawn", "--role", "code-reviewer", "--spec", ".wingmate/spec.md"], {
+      orca: f.orca,
+    });
+    const o = JSON.parse(review.out) as { ok: boolean; provider: string; fallback: string };
+    expect(o).toMatchObject({ ok: true, provider: "claude" });
+    expect(o.fallback).toContain("codex unavailable (model_unresolved");
+    const ws = f.calls.find((c) => c[1] === "worker-start") ?? [];
+    expect(ws.slice(ws.indexOf("--model"))).toEqual(["--model", "c", "--effort", "max"]);
+    expect(
+      (await listIntents(wt)).some(
+        (i) => i.kind === "note" && i.payload.text.startsWith("spawn: codex unavailable (model_unresolved"),
+      ),
+    ).toBe(true);
+    // no candidate has a tier → refused before anything starts; workers (tier standard) are unaffected
+    const wt2 = await spawnWorktree({ tiers: {} });
+    const g = fakeOrca();
+    const none = refusal(
+      await runVerb(wt2, ["spawn", "--role", "plan-verifier", "--spec", ".wingmate/spec.md"], {
+        orca: g.orca,
+      }),
+    );
+    expect(none.code).toBe("provider_unavailable");
+    expect(none.message).toContain("codex model_unresolved");
+    expect(none.message).toContain("claude model_unresolved");
+    expect(g.calls.map((c) => c[0])).toEqual(["account"]);
+    const worker = await runVerb(wt2, ["spawn", "--role", "worker", "--spec", ".wingmate/spec.md"], {
+      orca: g.orca,
+    });
+    expect(JSON.parse(worker.out)).toMatchObject({ ok: true, provider: "claude" });
+  });
+
+  test("spawn applies the tier best installKit resolved at claim: the codex reviewer's argv carries --model and --effort", async () => {
+    const wt = mkdtempSync(join(tmpdir(), "wm-claim-"));
+    await run(["git", "init", "-q", wt]);
+    await git(wt, "commit", "-q", "--allow-empty", "-m", "init");
+    const cfg = await loadConfig("config/projects.yaml");
+    const project = cfg.projects.bouncr;
+    if (!project) throw new Error("bouncr project missing from config");
+    const record = newRecord({
+      identifier: "JRF-404",
+      linearId: "l",
+      project: "bouncr",
+      repo: "api",
+      provider: "claude",
+      autonomy: "ask-first",
+      now: "2026-10-06T10:00:00.000Z",
+    });
+    record.worktree = {
+      id: `r::${wt}`,
+      path: wt,
+      branch: "furoyce/wm-jrf-404",
+      baseSha: "abc",
+      gitCommonDir: join(wt, ".git"),
+      gitdirName: "wm",
+    };
+    await installKit({
+      worktreePath: wt,
+      kitDir: mkdtempSync(join(tmpdir(), "wm-kit-")),
+      record,
+      cfg,
+      project,
+      issue: {
+        identifier: "JRF-404",
+        title: "t",
+        description: null,
+        url: "u",
+        comments: [],
+        parent: null,
+        children: [],
+      },
+      nonce: "n",
+      launch: { model: "c", effort: "max" },
+      tiers: { claude: { model: "c", effort: "max" }, codex: { model: "gpt-x", effort: "xhigh" } },
+      toolchainPaths: [],
+    });
+    writeFileSync(join(wt, ".wingmate", "spec.md"), "review the diff");
+    const f = fakeOrca();
+    const res = await runVerb(wt, ["spawn", "--role", "code-reviewer", "--spec", ".wingmate/spec.md"], {
+      orca: f.orca,
+    });
+    expect(JSON.parse(res.out)).toMatchObject({ ok: true, provider: "codex", dispatchId: "ctx_7" });
+    const ws = f.calls.find((c) => c[1] === "worker-start") ?? [];
+    expect(ws.slice(ws.indexOf("--agent"), ws.indexOf("--agent") + 2)).toEqual(["--agent", "codex"]);
+    expect(ws.slice(ws.indexOf("--model"))).toEqual(["--model", "gpt-x", "--effort", "xhigh"]);
   });
 
   test("a tampered kit, a missing runner and an unparsed receipt are refused", async () => {

@@ -6,7 +6,7 @@ import { IntegrityFileSchema, verifyIntegrity } from "../../../kit/install";
 import { writeIntent } from "../../../kit/intents";
 import { type Local, readLaunch, worktreeFile, writeLocal } from "../../../kit/local";
 import { parseRateLimits } from "../../../orca/fleet";
-import { availability } from "../../../policy/quota";
+import { type Availability, availability } from "../../../policy/quota";
 import { WingmateError } from "../../../shared/errors";
 import { newUlid } from "../../../shared/ids";
 import { readText } from "../../../state/fs";
@@ -30,6 +30,7 @@ const DepsList = z.array(z.string().min(1));
 const NestedRun = z.object({ run: z.object({ id: z.string().min(1) }) });
 const FlatRun = z.object({ id: z.string().min(1) });
 const WorkerReceipt = z.object({ dispatchId: z.string().min(1), taskId: z.string().min(1).optional() });
+type Check = Availability | { available: false; reason: "model_unresolved"; detail: string };
 
 const rec = (v: unknown): Record<string, unknown> =>
   v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
@@ -130,7 +131,19 @@ export async function spawnVerb(argv: Argv, d: Deps): Promise<number> {
       : [launch.provider]
     : [...new Set([...(prefer ? [prefer] : []), ...launch.workers])];
   const rl = parseRateLimits({ ok: true, result: await d.exec(["account", "list"]) });
-  const checked = order.map((p) => ({ p, a: availability(rl, p, launch.quota, Date.now()) }));
+  // §9.2: a review role runs at tier best; a provider whose tier was not resolved at claim is unavailable (`model_unresolved`).
+  const unresolved = (p: string): Check | null =>
+    isReview && !launch.tiers[p]
+      ? {
+          available: false,
+          reason: "model_unresolved",
+          detail: `no tier best for ${p} in .wingmate/launch.json`,
+        }
+      : null;
+  const checked = order.map((p): { p: string; a: Check } => ({
+    p,
+    a: unresolved(p) ?? availability(rl, p, launch.quota, Date.now()),
+  }));
   const why = (p: string) => {
     const a = checked.find((c) => c.p === p)?.a;
     return a && !a.available ? `${a.reason}: ${a.detail}` : "available";

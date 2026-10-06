@@ -1,5 +1,6 @@
 // src/kit/settings.ts — the dispatcher-owned Claude settings file, the explicit agent argv and the agent environment (§4.4, §13.3 b/c).
 import { join } from "node:path";
+import { WingmateError } from "../shared/errors";
 
 export type Role =
   | "coordinator"
@@ -108,6 +109,18 @@ const ORCA_EXTRA_DENY = [
   "browser identity set",
 ];
 
+/**
+ * §13.3(a): the single exception to the state dir's deny region — read (hence execute) access to the compiled binary, which
+ * `~/.local/bin/wingmate` links to (§4.3), so `wingmate issue …` runs inside the sandbox. `denyWrite` still covers it.
+ */
+const WINGMATE_BIN_READ = "~/.local/share/wingmate/bin/**";
+/**
+ * The only grant into `<common>/worktrees/` is the agent's own `worktrees/<gitdirName>/**`; every other worktree's gitdir is
+ * unwritable through the sandbox's default write deny (§13.3(b) "every other"; a blanket `worktrees/*` deny would also cover
+ * the own gitdir, and deny wins). A name that is not one literal path component (`""` gives `worktrees//**`) could widen it.
+ */
+const GITDIR_NAME = /^(?!\.\.?$)[^/\\*?[\]{}]+$/;
+
 const covers = (pattern: string, host: string): boolean =>
   pattern.startsWith("*.") ? host === pattern || host.endsWith(pattern.slice(1)) : host === pattern;
 /** Case-insensitive: a blocked host, a host under a blocked `*.` wildcard, or an allowed wildcard that would cover a blocked host. */
@@ -119,6 +132,12 @@ const isBlocked = (domain: string): boolean => {
 export function claudeSettings(i: SettingsInput): object {
   const c = i.commonDir;
   const base = i.baseBranch.replace(/^origin\//, "");
+  if (!GITDIR_NAME.test(i.gitdirName))
+    throw new WingmateError(
+      "settings_invalid",
+      `gitdirName ${JSON.stringify(i.gitdirName)} is not one literal path component`,
+      "record the worktree's gitdir name before writing agent settings",
+    );
   const deny = [
     "Read(~/.config/wingmate/**)",
     "Read(~/.ssh/**)",
@@ -177,7 +196,15 @@ export function claudeSettings(i: SettingsInput): object {
       autoAllowBashIfSandboxed: true,
       filesystem: {
         denyRead: ["~/"],
-        allowRead: [i.worktreePath, ...i.childWorktrees, ...i.toolchainPaths, join(c, "**")],
+        allowRead: [
+          i.worktreePath,
+          ...i.childWorktrees,
+          ...i.toolchainPaths,
+          WINGMATE_BIN_READ,
+          join(c, "**"),
+        ],
+        // Lock files only under these paths (§13.3(b)): each glob covers its own `.lock`; no top-level `<common>/*.lock`, so
+        // an agent cannot plant `config.lock`/`HEAD.lock`/the main checkout's `index.lock` (spike §3.4: commits need none).
         allowWrite: [
           i.worktreePath,
           ...i.childWorktrees,
@@ -188,7 +215,6 @@ export function claudeSettings(i: SettingsInput): object {
           `${c}/logs/**`,
           `${c}/worktrees/${i.gitdirName}/**`,
           `${c}/packed-refs*`,
-          `${c}/*.lock`,
         ],
         denyWrite: [
           `${c}/config`,
@@ -196,7 +222,6 @@ export function claudeSettings(i: SettingsInput): object {
           `${c}/info/**`,
           `${c}/refs/heads/${base}*`,
           `${c}/refs/remotes/**`,
-          `${c}/worktrees/*/**`,
           "~/.local/share/wingmate/**",
           "~/.config/wingmate/**",
           "~/.claude/**",

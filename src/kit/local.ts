@@ -48,7 +48,7 @@ export const LaunchSchema = z.object({
   forbiddenPaths: z.array(z.string()),
   verifyCross: z.boolean(),
   workers: z.array(z.string()),
-  /** Tier `best` per provider for review roles (§9.2); a provider without an entry runs with its CLI's configured default. */
+  /** Tier `best` per provider for review roles (§9.2); `spawn` treats a review provider without an entry as `model_unresolved`. */
   tiers: z.record(Tier),
   quota: z.object({ weeklyMax: z.number(), sessionMax: z.number(), maxSnapshotAgeMin: z.number() }),
 });

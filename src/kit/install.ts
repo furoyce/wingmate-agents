@@ -24,6 +24,12 @@ export interface InstallInput {
   issue: BriefTicket & { identifier: string; url: string };
   nonce: string;
   launch: { model: string; effort: string };
+  /**
+   * Tier `best` per review provider, resolved at claim (`resolveTier`, §9.2); `null` = `model_unresolved`. Written to
+   * `launch.json` so `spawn` can pass `--model/--effort` to a cross-provider reviewer (§8.1); the coordinator's own provider
+   * always takes `launch`.
+   */
+  tiers?: Partial<Record<"claude" | "codex", { model: string; effort: string } | null>>;
   toolchainPaths: string[];
 }
 
@@ -166,6 +172,13 @@ const CourtesyZ = z
   })
   .passthrough();
 
+/**
+ * Every Claude session that loads the worktree's settings — the coordinator and any worker or reviewer `worker-start` places in
+ * it — is denied the spawn verbs: the coordinator reaches them only through `wingmate issue spawn`, a subprocess the permission
+ * layer never sees. `task-create` stays allowed (graph-method DAGs).
+ */
+const COURTESY_DENY = ["Bash(orca orchestration worker-start *)", "Bash(orca orchestration dispatch *)"];
+
 /** §5.4 step 4: the courtesy copy of the deny rules, merged into an existing `.claude/settings.local.json`. */
 async function writeCourtesySettings(wt: string, deny: string[]): Promise<void> {
   const file = join(wt, ".claude", "settings.local.json");
@@ -280,6 +293,9 @@ export async function installKit(i: InstallInput): Promise<{ hashes: Record<stri
   );
   for (const [k, v] of Object.entries(PROMPTS)) await writeAtomic(join(wm, "prompts", `${k}.md`), v);
   await writeAtomic(join(wm, "gates.json"), JSON.stringify({}, null, 2));
+  const tiers: Launch["tiers"] = {};
+  for (const [p, t] of Object.entries(i.tiers ?? {})) if (t) tiers[p] = { model: t.model, effort: t.effort };
+  tiers[r.provider] = { model: i.launch.model, effort: i.launch.effort };
   const launch: Launch = {
     provider: r.provider,
     model: i.launch.model,
@@ -293,7 +309,7 @@ export async function installKit(i: InstallInput): Promise<{ hashes: Record<stri
     forbiddenPaths: [...i.project.forbiddenPaths, ...repo.forbiddenPaths],
     verifyCross: i.cfg.defaults.providers.verifyCross,
     workers: i.cfg.defaults.providers.workers,
-    tiers: { [r.provider]: { model: i.launch.model, effort: i.launch.effort } },
+    tiers,
     quota: i.cfg.defaults.quota,
   };
   await writeAtomic(join(wm, "launch.json"), JSON.stringify(launch, null, 2));
@@ -328,7 +344,10 @@ export async function installKit(i: InstallInput): Promise<{ hashes: Record<stri
     role: "coordinator",
   });
   await writeKitDir(i, settings);
-  await writeCourtesySettings(wt, (settings as { permissions: { deny: string[] } }).permissions.deny);
+  await writeCourtesySettings(wt, [
+    ...(settings as { permissions: { deny: string[] } }).permissions.deny,
+    ...COURTESY_DENY,
+  ]);
   const created = await writeInstallPolicy(wt, repo.packageRoots);
   // Kit-created `.npmrc` files are excluded (anchored) so a `git add -A` cannot commit them into the path guard.
   await appendExclude(common, [".wingmate/", ".claude/settings.local.json", ...created.map((f) => `/${f}`)]);

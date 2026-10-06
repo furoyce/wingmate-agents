@@ -32,7 +32,8 @@ async function bouncr(): Promise<{ cfg: Config; project: ProjectConfig }> {
   if (!project) throw new Error("bouncr project missing from config");
   return { cfg, project };
 }
-async function install(repo: string, identifier = "JRF-404") {
+type Tiers = Parameters<typeof installKit>[0]["tiers"];
+async function install(repo: string, identifier = "JRF-404", tiers?: Tiers) {
   const kitDir = mkdtempSync(join(tmpdir(), "wm-kit-"));
   const { cfg, project } = await bouncr();
   const record = newRecord({
@@ -70,10 +71,13 @@ async function install(repo: string, identifier = "JRF-404") {
     issue,
     nonce: "n",
     launch: { model: "m", effort: "max" },
+    ...(tiers ? { tiers } : {}),
     toolchainPaths: [],
   });
   return { kitDir, hashes: res.hashes, project };
 }
+const launchOf = (repo: string) =>
+  LaunchSchema.parse(JSON.parse(readFileSync(join(repo, ".wingmate", "launch.json"), "utf8")));
 
 describe("installKit", () => {
   test("writes kit files, excludes them from git, writes install policy, hashes the integrity set", async () => {
@@ -178,6 +182,32 @@ describe("installKit", () => {
     expect(local.permissions.deny).toContain("Bash(git push *)");
     expect((await readLocal(repo)).record).toMatchObject({ identifier: "JRF-404", pipelineStage: "intake" });
     expect(existsSync(join(repo, ".git", "hooks", "pre-commit"))).toBe(false);
+  });
+
+  test("launch.json carries tier best for every review provider resolved at claim (§8.1, §9.2); an unresolved one is left out", async () => {
+    const repo = await gitRepo();
+    await install(repo, "JRF-404", { codex: { model: "gpt-x", effort: "xhigh" } });
+    expect(launchOf(repo).tiers).toEqual({
+      claude: { model: "m", effort: "max" },
+      codex: { model: "gpt-x", effort: "xhigh" },
+    });
+    // resolveTier → null (model_unresolved) is dropped; the coordinator's own provider always runs at its launch tier
+    const repo2 = await gitRepo();
+    await install(repo2, "JRF-404", { codex: null, claude: { model: "other", effort: "high" } });
+    expect(launchOf(repo2).tiers).toEqual({ claude: { model: "m", effort: "max" } });
+  });
+
+  test("the courtesy settings deny worker-start and dispatch to every Claude session in the worktree; task-create stays allowed", async () => {
+    const repo = await gitRepo();
+    await install(repo);
+    const local = JSON.parse(readFileSync(join(repo, ".claude", "settings.local.json"), "utf8")) as {
+      permissions: { deny: string[] };
+    };
+    for (const d of ["Bash(orca orchestration worker-start *)", "Bash(orca orchestration dispatch *)"])
+      expect(local.permissions.deny).toContain(d);
+    expect(local.permissions.deny).not.toContain("Bash(orca orchestration task-create *)");
+    expect(local.permissions.deny).toContain("Bash(git push *)");
+    expect(new Set(local.permissions.deny).size).toBe(local.permissions.deny.length);
   });
 
   test("the verbs' own writes (gates, questions, stage, outbox) never trip the integrity check", async () => {
