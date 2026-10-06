@@ -15,16 +15,24 @@ const files = (dir: string): string[] =>
     .filter((n) => n.endsWith(".json"))
     .map((n) => join(dir, n));
 
+// Hand-authored GraphQL response fixtures (Task 6) are `{ data }` documents, not Orca envelopes.
+const isGraphqlFixture = (f: string): boolean => f.split("/").pop()?.startsWith("graphql-") === true;
+
 describe("fixtures", () => {
-  test("every fixture is an envelope with ok=true and a result", () => {
+  test("every capture is an envelope with ok=true and a result; GraphQL fixtures carry data", () => {
     for (const dir of DIRS)
       for (const f of files(dir)) {
         const j = read(f);
+        if (isGraphqlFixture(f)) {
+          expect(j.data).toBeDefined();
+          continue;
+        }
         expect(j.ok).toBe(true);
         expect(j.result).toBeDefined();
       }
     expect(files("tests/fixtures/orca").length).toBe(11);
-    expect(files("tests/fixtures/linear").length).toBe(3);
+    expect(files("tests/fixtures/linear").length).toBe(5);
+    expect(files("tests/fixtures/linear").filter(isGraphqlFixture).length).toBe(2);
   });
 
   test("worktree ps rows expose the fields the machine relies on", () => {

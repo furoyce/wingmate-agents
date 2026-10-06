@@ -1,0 +1,141 @@
+{
+  "data": {
+    "issues": {
+      "pageInfo": {
+        "hasNextPage": true,
+        "endCursor": "cur-1"
+      },
+      "nodes": [
+        {
+          "id": "i-404",
+          "identifier": "JRF-404",
+          "title": "feature: bouncr lol ios add leaderboard",
+          "description": "scrubbed",
+          "url": "https://linear.app/jrf/issue/JRF-404",
+          "createdAt": "2026-10-01T12:00:00.000Z",
+          "updatedAt": "2026-10-02T14:34:58.225Z",
+          "archivedAt": null,
+          "trashed": false,
+          "priority": 2,
+          "branchName": "owner/jrf-404-feature-bouncr-lol-ios-add-leaderboard",
+          "state": {
+            "id": "4272de01-f71b-4583-a736-0b78c29c0b37",
+            "name": "Todo",
+            "type": "unstarted"
+          },
+          "project": {
+            "id": "0ca67822-6416-447b-b7b2-08ab2a7346dd"
+          },
+          "team": {
+            "id": "8ce71278-319b-4c81-997e-796ef354aea7",
+            "key": "JRF"
+          },
+          "assignee": {
+            "id": "71aef180-1742-4a76-8d49-51f14e8ada1e"
+          },
+          "delegate": null,
+          "labels": {
+            "nodes": [
+              {
+                "id": "a8ec6a45-f6ed-47cc-aaee-e3dccdde7486",
+                "name": "agent-ready",
+                "parent": {
+                  "id": "9703cfa1-b6b6-472c-9f0c-ad3d35628a83",
+                  "name": "Agent"
+                }
+              }
+            ]
+          },
+          "subscribers": {
+            "nodes": [
+              {
+                "id": "71aef180-1742-4a76-8d49-51f14e8ada1e"
+              }
+            ]
+          },
+          "parent": null,
+          "children": {
+            "nodes": []
+          },
+          "inverseRelations": {
+            "nodes": []
+          },
+          "attachments": {
+            "nodes": []
+          }
+        },
+        {
+          "id": "i-16",
+          "identifier": "JRF-16",
+          "title": "XRP research",
+          "description": null,
+          "url": "https://linear.app/jrf/issue/JRF-16",
+          "createdAt": "2026-04-01T00:00:00.000Z",
+          "updatedAt": "2026-09-01T00:00:00.000Z",
+          "archivedAt": null,
+          "trashed": false,
+          "priority": 0,
+          "branchName": "owner/jrf-16-xrp-research",
+          "state": {
+            "id": "4272de01-f71b-4583-a736-0b78c29c0b37",
+            "name": "Todo",
+            "type": "unstarted"
+          },
+          "project": {
+            "id": "0ca67822-6416-447b-b7b2-08ab2a7346dd"
+          },
+          "team": {
+            "id": "8ce71278-319b-4c81-997e-796ef354aea7",
+            "key": "JRF"
+          },
+          "assignee": null,
+          "delegate": null,
+          "labels": {
+            "nodes": [
+              {
+                "id": "4f131836-162e-4bad-9e1c-57c18aba18fd",
+                "name": "claude",
+                "parent": {
+                  "id": "9703cfa1-b6b6-472c-9f0c-ad3d35628a83",
+                  "name": "Agent"
+                }
+              }
+            ]
+          },
+          "subscribers": {
+            "nodes": []
+          },
+          "parent": null,
+          "children": {
+            "nodes": [
+              {
+                "id": "i-17",
+                "identifier": "JRF-17",
+                "state": {
+                  "type": "completed"
+                }
+              }
+            ]
+          },
+          "inverseRelations": {
+            "nodes": [
+              {
+                "type": "related",
+                "issue": {
+                  "id": "i-18",
+                  "identifier": "JRF-18",
+                  "state": {
+                    "type": "started"
+                  }
+                }
+              }
+            ]
+          },
+          "attachments": {
+            "nodes": []
+          }
+        }
+      ]
+    }
+  }
+}
