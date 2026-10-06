@@ -1,0 +1,388 @@
+{
+  "id": "4f3ea8a9-afbe-4b28-bcad-1e3f535b774f",
+  "ok": true,
+  "result": {
+    "issue": {
+      "id": "55d57e5b-6ebd-441b-8fe0-d524fe8d1c55",
+      "identifier": "JRF-404",
+      "title": "feature: bouncr lol ios add leaderboard",
+      "url": "https://linear.app/jrf/issue/JRF-404/feature-bouncr-lol-ios-add-leaderboard",
+      "description": "add leaderboard for the all players in the world to complete, it will display th…",
+      "state": {
+        "id": "bc5dd9e3-b509-4f69-a036-b0edce6276f4",
+        "name": "In Progress",
+        "type": "started",
+        "color": "#f2c94c"
+      },
+      "team": {
+        "id": "8ce71278-319b-4c81-997e-796ef354aea7",
+        "name": "JRF",
+        "key": "JRF",
+        "color": "#789c00"
+      },
+      "project": {
+        "id": "0ca67822-6416-447b-b7b2-08ab2a7346dd",
+        "name": "Bouncr",
+        "color": "#f2994a"
+      },
+      "cycle": {
+        "id": "56eadbb1-0aa5-434e-8193-26a727698bcc",
+        "name": null
+      },
+      "assignee": {
+        "id": "71aef180-1742-4a76-8d49-51f14e8ada1e",
+        "displayName": "royce.code",
+        "avatarUrl": "https://public.linear.app/dfcf61c2-72c0-4d39-9485-96576cabb555/7eef5c2d-203b-4bab-a484-fd8f238b2d45/3b02c7dd-4f76-45e1-b28c-16022ca3308d"
+      },
+      "labels": [
+        {
+          "id": "a8ec6a45-f6ed-47cc-aaee-e3dccdde7486",
+          "name": "agent-ready",
+          "color": "#06B6D4"
+        },
+        {
+          "id": "d97b103c-6a00-438e-b90a-38cfc0e109c0",
+          "name": "Blocked",
+          "color": "#EF4444"
+        }
+      ],
+      "priority": 2,
+      "priorityLabel": "high",
+      "estimate": null,
+      "dueDate": null,
+      "branchName": "roycecode/jrf-404-feature-bouncr-lol-ios-add-leaderboard",
+      "createdAt": "2026-10-01T12:44:17.738Z",
+      "updatedAt": "2026-10-02T14:34:58.225Z"
+    },
+    "meta": {
+      "requested": {
+        "id": "JRF-404",
+        "current": false,
+        "include": {
+          "comments": true,
+          "children": true,
+          "attachments": true,
+          "relations": true,
+          "activity": true
+        },
+        "depth": 2
+      },
+      "resolved": {
+        "id": "55d57e5b-6ebd-441b-8fe0-d524fe8d1c55",
+        "identifier": "JRF-404",
+        "workspaceId": "dfcf61c2-72c0-4d39-9485-96576cabb555",
+        "workspaceName": "JRF"
+      },
+      "partial": false,
+      "includeErrors": [],
+      "sections": {
+        "comments": {
+          "returned": 1,
+          "cap": 500,
+          "capReached": false,
+          "hasMore": false
+        },
+        "children": {
+          "returned": 0,
+          "cap": 200,
+          "capReached": false,
+          "mayHaveMore": false
+        },
+        "attachments": {
+          "returned": 0,
+          "cap": 100,
+          "capReached": false,
+          "hasMore": false
+        },
+        "relations": {
+          "returned": 0,
+          "cap": 100,
+          "capReached": false,
+          "hasMore": false
+        },
+        "activity": {
+          "returned": 11,
+          "cap": 250,
+          "capReached": false,
+          "hasMore": false
+        }
+      }
+    },
+    "comments": [
+      {
+        "id": "f2d13e6a-f3cd-4682-8720-fb9696b9ed0e",
+        "body": "Blocked before implementation: BOUNCR detects level completion on a fixed 60 Hz …",
+        "bodyTruncated": false,
+        "createdAt": "2026-10-02T12:23:59.680Z",
+        "updatedAt": "2026-10-02T12:23:59.637Z",
+        "parentId": null,
+        "user": {
+          "id": "71aef180-1742-4a76-8d49-51f14e8ada1e",
+          "displayName": "royce.code",
+          "avatarUrl": "https://public.linear.app/dfcf61c2-72c0-4d39-9485-96576cabb555/7eef5c2d-203b-4bab-a484-fd8f238b2d45/3b02c7dd-4f76-45e1-b28c-16022ca3308d"
+        }
+      }
+    ],
+    "children": [],
+    "attachments": [],
+    "relations": [],
+    "activity": [
+      {
+        "id": "efb53e00-45b2-4f76-b85b-a33e2a4d69a3",
+        "createdAt": "2026-10-02T14:34:58.169Z",
+        "updatedAt": "2026-10-02T14:34:58.169Z",
+        "actor": {
+          "id": "71aef180-1742-4a76-8d49-51f14e8ada1e",
+          "displayName": "royce.code",
+          "avatarUrl": "https://public.linear.app/dfcf61c2-72c0-4d39-9485-96576cabb555/7eef5c2d-203b-4bab-a484-fd8f238b2d45/3b02c7dd-4f76-45e1-b28c-16022ca3308d",
+          "kind": "user"
+        },
+        "changes": [
+          {
+            "field": "labelsAdded",
+            "to": [
+              {
+                "id": "d97b103c-6a00-438e-b90a-38cfc0e109c0",
+                "name": "Blocked",
+                "color": "#EF4444"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "3239d8e7-459e-49ab-8f0a-79d3887bc638",
+        "createdAt": "2026-10-02T14:34:53.902Z",
+        "updatedAt": "2026-10-02T14:34:53.902Z",
+        "actor": {
+          "id": "71aef180-1742-4a76-8d49-51f14e8ada1e",
+          "displayName": "royce.code",
+          "avatarUrl": "https://public.linear.app/dfcf61c2-72c0-4d39-9485-96576cabb555/7eef5c2d-203b-4bab-a484-fd8f238b2d45/3b02c7dd-4f76-45e1-b28c-16022ca3308d",
+          "kind": "user"
+        },
+        "changes": [
+          {
+            "field": "labelsRemoved",
+            "from": [
+              {
+                "id": "2e17910d-5e01-4b32-b1a9-de37b48cd11e",
+                "name": "In-Agent",
+                "color": "#06B6D4"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "f45e37a7-8761-4bd5-a8ba-48862fd8753b",
+        "createdAt": "2026-10-02T13:40:11.184Z",
+        "updatedAt": "2026-10-02T13:40:11.184Z",
+        "actor": {
+          "id": "71aef180-1742-4a76-8d49-51f14e8ada1e",
+          "displayName": "royce.code",
+          "avatarUrl": "https://public.linear.app/dfcf61c2-72c0-4d39-9485-96576cabb555/7eef5c2d-203b-4bab-a484-fd8f238b2d45/3b02c7dd-4f76-45e1-b28c-16022ca3308d",
+          "kind": "user"
+        },
+        "changes": [
+          {
+            "field": "labelsAdded",
+            "to": [
+              {
+                "id": "2e17910d-5e01-4b32-b1a9-de37b48cd11e",
+                "name": "In-Agent",
+                "color": "#06B6D4"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "eb4882d0-81e2-4654-a17d-43002855d482",
+        "createdAt": "2026-10-02T13:40:10.103Z",
+        "updatedAt": "2026-10-02T13:40:10.103Z",
+        "actor": {
+          "id": "71aef180-1742-4a76-8d49-51f14e8ada1e",
+          "displayName": "royce.code",
+          "avatarUrl": "https://public.linear.app/dfcf61c2-72c0-4d39-9485-96576cabb555/7eef5c2d-203b-4bab-a484-fd8f238b2d45/3b02c7dd-4f76-45e1-b28c-16022ca3308d",
+          "kind": "user"
+        },
+        "changes": [
+          {
+            "field": "labelsRemoved",
+            "from": [
+              {
+                "id": "d97b103c-6a00-438e-b90a-38cfc0e109c0",
+                "name": "Blocked",
+                "color": "#EF4444"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "1cdbf9a2-408a-4eac-aa89-3b894fe55ace",
+        "createdAt": "2026-10-02T13:33:40.283Z",
+        "updatedAt": "2026-10-02T13:33:40.283Z",
+        "actor": {
+          "id": "71aef180-1742-4a76-8d49-51f14e8ada1e",
+          "displayName": "royce.code",
+          "avatarUrl": "https://public.linear.app/dfcf61c2-72c0-4d39-9485-96576cabb555/7eef5c2d-203b-4bab-a484-fd8f238b2d45/3b02c7dd-4f76-45e1-b28c-16022ca3308d",
+          "kind": "user"
+        },
+        "changes": [
+          {
+            "field": "labelsAdded",
+            "to": [
+              {
+                "id": "d97b103c-6a00-438e-b90a-38cfc0e109c0",
+                "name": "Blocked",
+                "color": "#EF4444"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "2d90b9e9-a739-4719-96ec-eff915851ced",
+        "createdAt": "2026-10-02T13:33:34.870Z",
+        "updatedAt": "2026-10-02T13:33:34.870Z",
+        "actor": {
+          "id": "71aef180-1742-4a76-8d49-51f14e8ada1e",
+          "displayName": "royce.code",
+          "avatarUrl": "https://public.linear.app/dfcf61c2-72c0-4d39-9485-96576cabb555/7eef5c2d-203b-4bab-a484-fd8f238b2d45/3b02c7dd-4f76-45e1-b28c-16022ca3308d",
+          "kind": "user"
+        },
+        "changes": [
+          {
+            "field": "labelsRemoved",
+            "from": [
+              {
+                "id": "2e17910d-5e01-4b32-b1a9-de37b48cd11e",
+                "name": "In-Agent",
+                "color": "#06B6D4"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "250043f0-19fa-401c-a330-13f2c2e4d246",
+        "createdAt": "2026-10-02T12:42:20.024Z",
+        "updatedAt": "2026-10-02T12:42:20.024Z",
+        "actor": {
+          "id": "71aef180-1742-4a76-8d49-51f14e8ada1e",
+          "displayName": "royce.code",
+          "avatarUrl": "https://public.linear.app/dfcf61c2-72c0-4d39-9485-96576cabb555/7eef5c2d-203b-4bab-a484-fd8f238b2d45/3b02c7dd-4f76-45e1-b28c-16022ca3308d",
+          "kind": "user"
+        },
+        "changes": [
+          {
+            "field": "labelsAdded",
+            "to": [
+              {
+                "id": "2e17910d-5e01-4b32-b1a9-de37b48cd11e",
+                "name": "In-Agent",
+                "color": "#06B6D4"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "b63e0e31-01c7-4501-97fe-d3203bd719aa",
+        "createdAt": "2026-10-02T12:42:13.953Z",
+        "updatedAt": "2026-10-02T12:42:13.953Z",
+        "actor": {
+          "id": "71aef180-1742-4a76-8d49-51f14e8ada1e",
+          "displayName": "royce.code",
+          "avatarUrl": "https://public.linear.app/dfcf61c2-72c0-4d39-9485-96576cabb555/7eef5c2d-203b-4bab-a484-fd8f238b2d45/3b02c7dd-4f76-45e1-b28c-16022ca3308d",
+          "kind": "user"
+        },
+        "changes": [
+          {
+            "field": "labelsRemoved",
+            "from": [
+              {
+                "id": "d97b103c-6a00-438e-b90a-38cfc0e109c0",
+                "name": "Blocked",
+                "color": "#EF4444"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "f8f47b63-9f56-4ec0-8faf-0fd67bc60cdc",
+        "createdAt": "2026-10-02T12:23:43.247Z",
+        "updatedAt": "2026-10-02T12:23:43.247Z",
+        "actor": {
+          "id": "71aef180-1742-4a76-8d49-51f14e8ada1e",
+          "displayName": "royce.code",
+          "avatarUrl": "https://public.linear.app/dfcf61c2-72c0-4d39-9485-96576cabb555/7eef5c2d-203b-4bab-a484-fd8f238b2d45/3b02c7dd-4f76-45e1-b28c-16022ca3308d",
+          "kind": "user"
+        },
+        "changes": [
+          {
+            "field": "labelsAdded",
+            "to": [
+              {
+                "id": "d97b103c-6a00-438e-b90a-38cfc0e109c0",
+                "name": "Blocked",
+                "color": "#EF4444"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "106844db-bf77-405c-b467-fc387885e518",
+        "createdAt": "2026-10-02T12:23:30.842Z",
+        "updatedAt": "2026-10-02T12:23:30.842Z",
+        "actor": {
+          "id": "71aef180-1742-4a76-8d49-51f14e8ada1e",
+          "displayName": "royce.code",
+          "avatarUrl": "https://public.linear.app/dfcf61c2-72c0-4d39-9485-96576cabb555/7eef5c2d-203b-4bab-a484-fd8f238b2d45/3b02c7dd-4f76-45e1-b28c-16022ca3308d",
+          "kind": "user"
+        },
+        "changes": [
+          {
+            "field": "labelsRemoved",
+            "from": [
+              {
+                "id": "2e17910d-5e01-4b32-b1a9-de37b48cd11e",
+                "name": "In-Agent",
+                "color": "#06B6D4"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "4aed260c-66e3-480b-85c1-812c49e6c69a",
+        "createdAt": "2026-10-02T12:02:47.602Z",
+        "updatedAt": "2026-10-02T12:02:47.602Z",
+        "actor": {
+          "id": "71aef180-1742-4a76-8d49-51f14e8ada1e",
+          "displayName": "royce.code",
+          "avatarUrl": "https://public.linear.app/dfcf61c2-72c0-4d39-9485-96576cabb555/7eef5c2d-203b-4bab-a484-fd8f238b2d45/3b02c7dd-4f76-45e1-b28c-16022ca3308d",
+          "kind": "user"
+        },
+        "changes": [
+          {
+            "field": "labelsAdded",
+            "to": [
+              {
+                "id": "2e17910d-5e01-4b32-b1a9-de37b48cd11e",
+                "name": "In-Agent",
+                "color": "#06B6D4"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "_meta": {
+    "runtimeId": "c75f606e-8651-49ea-afcd-1514da5b1aa5"
+  }
+}

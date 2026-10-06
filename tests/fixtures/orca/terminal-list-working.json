@@ -12,18 +12,18 @@
       "omittedHostIds": []
     },
     "topologyRevisions": {
-      "1f1e7f87-e283-4432-beaf-92efba56ddb9::/Users/jujufugh/orca/workspaces/wingmate-agents/wm-spike-3a04789d": 37
+      "1f1e7f87-e283-4432-beaf-92efba56ddb9::/Users/owner/orca/workspaces/wingmate-agents/wm-spike-3a04789d": 37
     },
     "totalCount": 2,
     "truncated": false,
     "terminals": [
       {
         "handle": "term_38dae45b-18dc-4651-b7da-c344f2761b2e",
-        "ptyId": "1f1e7f87-e283-4432-beaf-92efba56ddb9::/Users/jujufugh/orca/workspaces/wingmate-agents/wm-spike-3a04789d@@13ffc95a",
+        "ptyId": "1f1e7f87-e283-4432-beaf-92efba56ddb9::/Users/owner/orca/workspaces/wingmate-agents/wm-spike-3a04789d@@13ffc95a",
         "incarnationId": "848c161e-5b80-4492-919b-e7c66f1ea2ef",
         "orphaned": false,
-        "worktreeId": "1f1e7f87-e283-4432-beaf-92efba56ddb9::/Users/jujufugh/orca/workspaces/wingmate-agents/wm-spike-3a04789d",
-        "worktreePath": "/Users/jujufugh/orca/workspaces/wingmate-agents/wm-spike-3a04789d",
+        "worktreeId": "1f1e7f87-e283-4432-beaf-92efba56ddb9::/Users/owner/orca/workspaces/wingmate-agents/wm-spike-3a04789d",
+        "worktreePath": "/Users/owner/orca/workspaces/wingmate-agents/wm-spike-3a04789d",
         "branch": "refs/heads/wm-spike-3a04789d",
         "tabId": "af38f303-f0fa-43fc-aa9b-45b49da99f4d",
         "leafId": "e0fdf220-2649-436b-b567-9fb81e0a1f16",
@@ -31,16 +31,16 @@
         "connected": true,
         "writable": true,
         "lastOutputAt": 1791290724633,
-        "preview": "jujufugh@Mac wm-spike-3a04789d %",
+        "preview": "owner@host wm-spike-3a04789d %",
         "executionHostId": "local"
       },
       {
         "handle": "term_1a518846-07d7-40be-8f9c-52cf9707e0fd",
-        "ptyId": "1f1e7f87-e283-4432-beaf-92efba56ddb9::/Users/jujufugh/orca/workspaces/wingmate-agents/wm-spike-3a04789d@@c31daddc",
+        "ptyId": "1f1e7f87-e283-4432-beaf-92efba56ddb9::/Users/owner/orca/workspaces/wingmate-agents/wm-spike-3a04789d@@c31daddc",
         "incarnationId": "0a04e643-a70b-4287-bad9-c2deb421adc5",
         "orphaned": false,
-        "worktreeId": "1f1e7f87-e283-4432-beaf-92efba56ddb9::/Users/jujufugh/orca/workspaces/wingmate-agents/wm-spike-3a04789d",
-        "worktreePath": "/Users/jujufugh/orca/workspaces/wingmate-agents/wm-spike-3a04789d",
+        "worktreeId": "1f1e7f87-e283-4432-beaf-92efba56ddb9::/Users/owner/orca/workspaces/wingmate-agents/wm-spike-3a04789d",
+        "worktreePath": "/Users/owner/orca/workspaces/wingmate-agents/wm-spike-3a04789d",
         "branch": "refs/heads/wm-spike-3a04789d",
         "tabId": "e083d10d-a29a-4df3-ad5b-5ed5d669cea2",
         "leafId": "08c64aea-f680-4d69-8899-eeb9d7cf0a4c",

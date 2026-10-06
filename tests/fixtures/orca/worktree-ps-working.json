@@ -15,12 +15,12 @@
     "worktrees": [
       {
         "workspaceKind": "git",
-        "worktreeId": "1f1e7f87-e283-4432-beaf-92efba56ddb9::/Users/jujufugh/orca/workspaces/wingmate-agents/wm-spike-3a04789d",
+        "worktreeId": "1f1e7f87-e283-4432-beaf-92efba56ddb9::/Users/owner/orca/workspaces/wingmate-agents/wm-spike-3a04789d",
         "repoId": "1f1e7f87-e283-4432-beaf-92efba56ddb9",
         "hostId": "local",
         "terminalPlatform": "darwin",
         "repo": "wingmate-agents",
-        "path": "/Users/jujufugh/orca/workspaces/wingmate-agents/wm-spike-3a04789d",
+        "path": "/Users/owner/orca/workspaces/wingmate-agents/wm-spike-3a04789d",
         "branch": "refs/heads/wm-spike-3a04789d",
         "isArchived": false,
         "isMainWorktree": false,

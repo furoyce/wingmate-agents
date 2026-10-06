@@ -249,7 +249,7 @@
         "usageMetadata": {
           "source": "cli",
           "credentialSource": "keychain",
-          "authProvenance": "921fd14a8f51",
+          "authProvenance": "[scrubbed]",
           "lastSuccessfulSource": "cli"
         }
       },

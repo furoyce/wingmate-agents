@@ -6,14 +6,14 @@
   },
   "result": {
     "counts": {
-      "retained": 11,
-      "released": 243
+      "retained": 1,
+      "released": 3
     },
     "page": {
       "limit": 100,
-      "total": 254,
+      "total": 4,
       "hasMore": true,
-      "nextCursor": "REDACTED"
+      "nextCursor": "[scrubbed]"
     },
     "warnings": [
       "Showing 100 of 254 Dispatches, newest first; more are on later pages. Follow page.nextCursor with --cursor."
@@ -36,9 +36,9 @@
           "releaseState": "released",
           "retainedReason": null,
           "terminalHandle": "term_74154334-fbd7-4b34-83b6-c09258283fa4",
-          "worktreeId": "d2386ea3-2a51-46b2-93b4-7f36da9e673d::/Users/jujufugh/orca/workspaces/ehr-dispatch.smartdispatcher.io/rv-1088",
+          "worktreeId": "d2386ea3-2a51-46b2-93b4-7f36da9e673d::/Users/owner/orca/workspaces/project-2/rv-1088",
           "endpointId": "c75f606e-8651-49ea-afcd-1514da5b1aa5",
-          "endpointIncarnation": "d2386ea3-2a51-46b2-93b4-7f36da9e673d::/Users/jujufugh/orca/workspaces/ehr-dispatch.smartdispatcher.io/rv-1088@@903aeb6f:0c27d1b1-f426-40e8-8376-bcb6ba5c9bd6",
+          "endpointIncarnation": "d2386ea3-2a51-46b2-93b4-7f36da9e673d::/Users/owner/orca/workspaces/project-2/rv-1088@@903aeb6f:0c27d1b1-f426-40e8-8376-bcb6ba5c9bd6",
           "originDispatchId": "ctx_7ffd641283d2",
           "ownerDispatchId": "ctx_7ffd641283d2",
           "releaseRequestedAt": "2026-10-06 03:52:17",
@@ -64,7 +64,7 @@
             "id": "local"
           },
           "workspace": {
-            "id": "d2386ea3-2a51-46b2-93b4-7f36da9e673d::/Users/jujufugh/orca/workspaces/ehr-dispatch.smartdispatcher.io/rv-1088",
+            "id": "d2386ea3-2a51-46b2-93b4-7f36da9e673d::/Users/owner/orca/workspaces/project-2/rv-1088",
             "kind": "folder_or_worktree"
           },
           "stage": {
@@ -120,7 +120,7 @@
             "id": "local"
           },
           "workspace": {
-            "id": "d2386ea3-2a51-46b2-93b4-7f36da9e673d::/Users/jujufugh/orca/workspaces/ehr-dispatch.smartdispatcher.io/fix-1088-codex",
+            "id": "d2386ea3-2a51-46b2-93b4-7f36da9e673d::/Users/owner/orca/workspaces/project-2/fix-1088-codex",
             "kind": "folder_or_worktree"
           },
           "stage": {
@@ -170,9 +170,9 @@
           "releaseState": "released",
           "retainedReason": null,
           "terminalHandle": "term_b6c4345f-da32-420a-8678-ad9f40454ec2",
-          "worktreeId": "d2386ea3-2a51-46b2-93b4-7f36da9e673d::/Users/jujufugh/orca/workspaces/ehr-dispatch.smartdispatcher.io/fix-1088-codex",
+          "worktreeId": "d2386ea3-2a51-46b2-93b4-7f36da9e673d::/Users/owner/orca/workspaces/project-2/fix-1088-codex",
           "endpointId": "c75f606e-8651-49ea-afcd-1514da5b1aa5",
-          "endpointIncarnation": "d2386ea3-2a51-46b2-93b4-7f36da9e673d::/Users/jujufugh/orca/workspaces/ehr-dispatch.smartdispatcher.io/fix-1088-codex@@9819aff1:8d2011eb-96b9-4149-b288-9e669e4f6191",
+          "endpointIncarnation": "d2386ea3-2a51-46b2-93b4-7f36da9e673d::/Users/owner/orca/workspaces/project-2/fix-1088-codex@@9819aff1:8d2011eb-96b9-4149-b288-9e669e4f6191",
           "originDispatchId": "ctx_67920c7bc80a",
           "ownerDispatchId": "ctx_2b4e24253cba",
           "releaseRequestedAt": "2026-10-06 03:45:31",
@@ -198,7 +198,7 @@
             "id": "local"
           },
           "workspace": {
-            "id": "d2386ea3-2a51-46b2-93b4-7f36da9e673d::/Users/jujufugh/orca/workspaces/ehr-dispatch.smartdispatcher.io/fix-1088-codex",
+            "id": "d2386ea3-2a51-46b2-93b4-7f36da9e673d::/Users/owner/orca/workspaces/project-2/fix-1088-codex",
             "kind": "folder_or_worktree"
           },
           "stage": {
@@ -246,9 +246,9 @@
           "releaseState": "released",
           "retainedReason": null,
           "terminalHandle": "term_4857e14f-7ac0-4280-8668-fb2f66525e90",
-          "worktreeId": "d2386ea3-2a51-46b2-93b4-7f36da9e673d::/Users/jujufugh/orca/workspaces/ehr-dispatch.smartdispatcher.io/rv-1087-mobile-2",
+          "worktreeId": "d2386ea3-2a51-46b2-93b4-7f36da9e673d::/Users/owner/orca/workspaces/project-2/rv-1087-mobile-2",
           "endpointId": "c75f606e-8651-49ea-afcd-1514da5b1aa5",
-          "endpointIncarnation": "d2386ea3-2a51-46b2-93b4-7f36da9e673d::/Users/jujufugh/orca/workspaces/ehr-dispatch.smartdispatcher.io/rv-1087-mobile-2@@a09715d2:9583cbbb-a524-4c6f-9dbc-8aaf0c2f7b01",
+          "endpointIncarnation": "d2386ea3-2a51-46b2-93b4-7f36da9e673d::/Users/owner/orca/workspaces/project-2/rv-1087-mobile-2@@a09715d2:9583cbbb-a524-4c6f-9dbc-8aaf0c2f7b01",
           "originDispatchId": "ctx_8f26df3e605b",
           "ownerDispatchId": "ctx_8f26df3e605b",
           "releaseRequestedAt": "2026-10-06 03:44:01",
@@ -274,7 +274,7 @@
             "id": "local"
           },
           "workspace": {
-            "id": "d2386ea3-2a51-46b2-93b4-7f36da9e673d::/Users/jujufugh/orca/workspaces/ehr-dispatch.smartdispatcher.io/rv-1087-mobile-2",
+            "id": "d2386ea3-2a51-46b2-93b4-7f36da9e673d::/Users/owner/orca/workspaces/project-2/rv-1087-mobile-2",
             "kind": "folder_or_worktree"
           },
           "stage": {

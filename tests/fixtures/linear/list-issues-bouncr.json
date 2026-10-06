@@ -1,0 +1,756 @@
+{
+  "id": "ac76cf54-b5d2-4d87-a769-b4567469cae1",
+  "ok": true,
+  "result": {
+    "issues": [
+      {
+        "id": "8954bc5a-d232-4715-8dd8-7ae6d40e46a7",
+        "identifier": "JRF-402",
+        "title": "feature: bouncr game add leaderboard",
+        "url": "https://linear.app/jrf/issue/JRF-402/feature-bouncr-game-add-leaderboard",
+        "description": "add leaderboard for the all players in the world to complete, it will display th…",
+        "state": {
+          "id": "9961332a-2edb-4274-b4df-8ac8df40a623",
+          "name": "In Review",
+          "type": "started",
+          "color": "#0f783c"
+        },
+        "team": {
+          "id": "8ce71278-319b-4c81-997e-796ef354aea7",
+          "name": "JRF",
+          "key": "JRF",
+          "color": "#789c00"
+        },
+        "project": {
+          "id": "0ca67822-6416-447b-b7b2-08ab2a7346dd",
+          "name": "Bouncr",
+          "color": "#f2994a"
+        },
+        "cycle": {
+          "id": "56eadbb1-0aa5-434e-8193-26a727698bcc",
+          "name": null
+        },
+        "assignee": {
+          "id": "71aef180-1742-4a76-8d49-51f14e8ada1e",
+          "displayName": "royce.code",
+          "avatarUrl": "https://public.linear.app/dfcf61c2-72c0-4d39-9485-96576cabb555/7eef5c2d-203b-4bab-a484-fd8f238b2d45/3b02c7dd-4f76-45e1-b28c-16022ca3308d"
+        },
+        "labels": [
+          {
+            "id": "a8ec6a45-f6ed-47cc-aaee-e3dccdde7486",
+            "name": "agent-ready",
+            "color": "#06B6D4"
+          },
+          {
+            "id": "d97b103c-6a00-438e-b90a-38cfc0e109c0",
+            "name": "Blocked",
+            "color": "#EF4444"
+          }
+        ],
+        "priority": 2,
+        "priorityLabel": "high",
+        "estimate": null,
+        "dueDate": null,
+        "branchName": "roycecode/jrf-402-feature-bouncr-game-add-leaderboard",
+        "createdAt": "2026-10-01T12:18:11.866Z",
+        "updatedAt": "2026-10-02T21:00:29.555Z",
+        "workspace": {
+          "id": "dfcf61c2-72c0-4d39-9485-96576cabb555",
+          "name": "JRF"
+        }
+      },
+      {
+        "id": "55d57e5b-6ebd-441b-8fe0-d524fe8d1c55",
+        "identifier": "JRF-404",
+        "title": "feature: bouncr lol ios add leaderboard",
+        "url": "https://linear.app/jrf/issue/JRF-404/feature-bouncr-lol-ios-add-leaderboard",
+        "description": "add leaderboard for the all players in the world to complete, it will display th…",
+        "state": {
+          "id": "bc5dd9e3-b509-4f69-a036-b0edce6276f4",
+          "name": "In Progress",
+          "type": "started",
+          "color": "#f2c94c"
+        },
+        "team": {
+          "id": "8ce71278-319b-4c81-997e-796ef354aea7",
+          "name": "JRF",
+          "key": "JRF",
+          "color": "#789c00"
+        },
+        "project": {
+          "id": "0ca67822-6416-447b-b7b2-08ab2a7346dd",
+          "name": "Bouncr",
+          "color": "#f2994a"
+        },
+        "cycle": {
+          "id": "56eadbb1-0aa5-434e-8193-26a727698bcc",
+          "name": null
+        },
+        "assignee": {
+          "id": "71aef180-1742-4a76-8d49-51f14e8ada1e",
+          "displayName": "royce.code",
+          "avatarUrl": "https://public.linear.app/dfcf61c2-72c0-4d39-9485-96576cabb555/7eef5c2d-203b-4bab-a484-fd8f238b2d45/3b02c7dd-4f76-45e1-b28c-16022ca3308d"
+        },
+        "labels": [
+          {
+            "id": "a8ec6a45-f6ed-47cc-aaee-e3dccdde7486",
+            "name": "agent-ready",
+            "color": "#06B6D4"
+          },
+          {
+            "id": "d97b103c-6a00-438e-b90a-38cfc0e109c0",
+            "name": "Blocked",
+            "color": "#EF4444"
+          }
+        ],
+        "priority": 2,
+        "priorityLabel": "high",
+        "estimate": null,
+        "dueDate": null,
+        "branchName": "roycecode/jrf-404-feature-bouncr-lol-ios-add-leaderboard",
+        "createdAt": "2026-10-01T12:44:17.738Z",
+        "updatedAt": "2026-10-02T14:34:58.225Z",
+        "workspace": {
+          "id": "dfcf61c2-72c0-4d39-9485-96576cabb555",
+          "name": "JRF"
+        }
+      },
+      {
+        "id": "44a62596-9177-410e-9899-db8f39d690eb",
+        "identifier": "JRF-401",
+        "title": "bouncr game add stop watch to each round",
+        "url": "https://linear.app/jrf/issue/JRF-401/bouncr-game-add-stop-watch-to-each-round",
+        "description": "BOUNCR game to include stop watch feature for each challenge round. so the playe…",
+        "state": {
+          "id": "9961332a-2edb-4274-b4df-8ac8df40a623",
+          "name": "In Review",
+          "type": "started",
+          "color": "#0f783c"
+        },
+        "team": {
+          "id": "8ce71278-319b-4c81-997e-796ef354aea7",
+          "name": "JRF",
+          "key": "JRF",
+          "color": "#789c00"
+        },
+        "project": {
+          "id": "0ca67822-6416-447b-b7b2-08ab2a7346dd",
+          "name": "Bouncr",
+          "color": "#f2994a"
+        },
+        "cycle": {
+          "id": "56eadbb1-0aa5-434e-8193-26a727698bcc",
+          "name": null
+        },
+        "assignee": {
+          "id": "71aef180-1742-4a76-8d49-51f14e8ada1e",
+          "displayName": "royce.code",
+          "avatarUrl": "https://public.linear.app/dfcf61c2-72c0-4d39-9485-96576cabb555/7eef5c2d-203b-4bab-a484-fd8f238b2d45/3b02c7dd-4f76-45e1-b28c-16022ca3308d"
+        },
+        "labels": [
+          {
+            "id": "a8ec6a45-f6ed-47cc-aaee-e3dccdde7486",
+            "name": "agent-ready",
+            "color": "#06B6D4"
+          },
+          {
+            "id": "5333f3f8-2744-4027-bda8-6c3f4c3826c6",
+            "name": "Review-Ready",
+            "color": "#F59E0B"
+          }
+        ],
+        "priority": 2,
+        "priorityLabel": "high",
+        "estimate": null,
+        "dueDate": null,
+        "branchName": "roycecode/jrf-401-bouncr-game-add-stop-watch-to-each-round",
+        "createdAt": "2026-10-01T12:15:16.716Z",
+        "updatedAt": "2026-10-02T02:47:20.339Z",
+        "workspace": {
+          "id": "dfcf61c2-72c0-4d39-9485-96576cabb555",
+          "name": "JRF"
+        }
+      },
+      {
+        "id": "285c3f43-d4cb-4234-ba68-7e26b8e4d610",
+        "identifier": "JRF-407",
+        "title": "Bouncr API: reject malformed progress JSON with 400",
+        "url": "https://linear.app/jrf/issue/JRF-407/bouncr-api-reject-malformed-progress-json-with-400",
+        "description": "Observed during JRF-401 guarded API fixture validation on both the unchanged bas…",
+        "state": {
+          "id": "1a8200d2-6b1f-4c57-a457-b313ec9292ed",
+          "name": "Backlog",
+          "type": "backlog",
+          "color": "#bec2c8"
+        },
+        "team": {
+          "id": "8ce71278-319b-4c81-997e-796ef354aea7",
+          "name": "JRF",
+          "key": "JRF",
+          "color": "#789c00"
+        },
+        "project": {
+          "id": "0ca67822-6416-447b-b7b2-08ab2a7346dd",
+          "name": "Bouncr",
+          "color": "#f2994a"
+        },
+        "cycle": null,
+        "assignee": null,
+        "labels": [],
+        "priority": 4,
+        "priorityLabel": "low",
+        "estimate": null,
+        "dueDate": null,
+        "branchName": "roycecode/jrf-407-bouncr-api-reject-malformed-progress-json-with-400",
+        "createdAt": "2026-10-01T15:35:59.809Z",
+        "updatedAt": "2026-10-01T15:35:59.809Z",
+        "workspace": {
+          "id": "dfcf61c2-72c0-4d39-9485-96576cabb555",
+          "name": "JRF"
+        }
+      },
+      {
+        "id": "3f5a93cf-9e11-4056-9c9b-9b2b45e2e1ce",
+        "identifier": "JRF-403",
+        "title": "consolidate the API layer for both web app and mobile app",
+        "url": "https://linear.app/jrf/issue/JRF-403/consolidate-the-api-layer-for-both-web-app-and-mobile-app",
+        "description": "",
+        "state": {
+          "id": "4272de01-f71b-4583-a736-0b78c29c0b37",
+          "name": "Todo",
+          "type": "unstarted",
+          "color": "#e2e2e2"
+        },
+        "team": {
+          "id": "8ce71278-319b-4c81-997e-796ef354aea7",
+          "name": "JRF",
+          "key": "JRF",
+          "color": "#789c00"
+        },
+        "project": {
+          "id": "0ca67822-6416-447b-b7b2-08ab2a7346dd",
+          "name": "Bouncr",
+          "color": "#f2994a"
+        },
+        "cycle": {
+          "id": "56eadbb1-0aa5-434e-8193-26a727698bcc",
+          "name": null
+        },
+        "assignee": {
+          "id": "71aef180-1742-4a76-8d49-51f14e8ada1e",
+          "displayName": "royce.code",
+          "avatarUrl": "https://public.linear.app/dfcf61c2-72c0-4d39-9485-96576cabb555/7eef5c2d-203b-4bab-a484-fd8f238b2d45/3b02c7dd-4f76-45e1-b28c-16022ca3308d"
+        },
+        "labels": [
+          {
+            "id": "1ffe4fcf-234f-43f8-9f43-4a5ccfcbe578",
+            "name": "App",
+            "color": "#10B981"
+          }
+        ],
+        "priority": 2,
+        "priorityLabel": "high",
+        "estimate": null,
+        "dueDate": null,
+        "branchName": "roycecode/jrf-403-consolidate-the-api-layer-for-both-web-app-and-mobile-app",
+        "createdAt": "2026-10-01T12:37:02.886Z",
+        "updatedAt": "2026-10-01T12:37:12.078Z",
+        "workspace": {
+          "id": "dfcf61c2-72c0-4d39-9485-96576cabb555",
+          "name": "JRF"
+        }
+      },
+      {
+        "id": "0d572193-3eb7-4e80-9470-d2ca7c8d741a",
+        "identifier": "JRF-409",
+        "title": "For the AI Journal creation, it should support the display language of the app",
+        "url": "https://linear.app/jrf/issue/JRF-409/for-the-ai-journal-creation-it-should-support-the-display-language-of",
+        "description": "* Chinese\n* Spanish\n* French\n* English\n\nSo we need to create the system prompt w…",
+        "state": {
+          "id": "3803d97c-d0d3-434b-8927-8725e57982de",
+          "name": "Done",
+          "type": "completed",
+          "color": "#5e6ad2"
+        },
+        "team": {
+          "id": "8ce71278-319b-4c81-997e-796ef354aea7",
+          "name": "JRF",
+          "key": "JRF",
+          "color": "#789c00"
+        },
+        "project": {
+          "id": "65410a74-7fa2-4dbb-8494-54e3a90a4f95",
+          "name": "JR Travel Atlas",
+          "color": "#26b5ce"
+        },
+        "cycle": {
+          "id": "56eadbb1-0aa5-434e-8193-26a727698bcc",
+          "name": null
+        },
+        "assignee": {
+          "id": "71aef180-1742-4a76-8d49-51f14e8ada1e",
+          "displayName": "royce.code",
+          "avatarUrl": "https://public.linear.app/dfcf61c2-72c0-4d39-9485-96576cabb555/7eef5c2d-203b-4bab-a484-fd8f238b2d45/3b02c7dd-4f76-45e1-b28c-16022ca3308d"
+        },
+        "labels": [],
+        "priority": 1,
+        "priorityLabel": "urgent",
+        "estimate": null,
+        "dueDate": null,
+        "branchName": "roycecode/jrf-409-for-the-ai-journal-creation-it-should-support-the-display",
+        "createdAt": "2026-10-02T02:43:08.863Z",
+        "updatedAt": "2026-10-02T12:36:26.072Z",
+        "workspace": {
+          "id": "dfcf61c2-72c0-4d39-9485-96576cabb555",
+          "name": "JRF"
+        }
+      },
+      {
+        "id": "9f843b03-6b2f-40a5-b617-5a5281f51531",
+        "identifier": "JRF-391",
+        "title": "Rebuild Grafana dashboard and alerts for JR Travel Atlas",
+        "url": "https://linear.app/jrf/issue/JRF-391/rebuild-grafana-dashboard-and-alerts-for-jr-travel-atlas",
+        "description": "Grafana alerts are currently too noisy. Recreate the centralized dashboard and a…",
+        "state": {
+          "id": "bc5dd9e3-b509-4f69-a036-b0edce6276f4",
+          "name": "In Progress",
+          "type": "started",
+          "color": "#f2c94c"
+        },
+        "team": {
+          "id": "8ce71278-319b-4c81-997e-796ef354aea7",
+          "name": "JRF",
+          "key": "JRF",
+          "color": "#789c00"
+        },
+        "project": {
+          "id": "65410a74-7fa2-4dbb-8494-54e3a90a4f95",
+          "name": "JR Travel Atlas",
+          "color": "#26b5ce"
+        },
+        "cycle": {
+          "id": "56eadbb1-0aa5-434e-8193-26a727698bcc",
+          "name": null
+        },
+        "assignee": {
+          "id": "71aef180-1742-4a76-8d49-51f14e8ada1e",
+          "displayName": "royce.code",
+          "avatarUrl": "https://public.linear.app/dfcf61c2-72c0-4d39-9485-96576cabb555/7eef5c2d-203b-4bab-a484-fd8f238b2d45/3b02c7dd-4f76-45e1-b28c-16022ca3308d"
+        },
+        "labels": [],
+        "priority": 0,
+        "priorityLabel": "none",
+        "estimate": null,
+        "dueDate": null,
+        "branchName": "roycecode/jrf-391-rebuild-grafana-dashboard-and-alerts-for-jr-travel-atlas",
+        "createdAt": "2026-09-29T01:56:58.939Z",
+        "updatedAt": "2026-10-01T02:18:16.087Z",
+        "workspace": {
+          "id": "dfcf61c2-72c0-4d39-9485-96576cabb555",
+          "name": "JRF"
+        }
+      },
+      {
+        "id": "7b88983b-b2e5-4788-885c-2bdc95a5764a",
+        "identifier": "JRF-399",
+        "title": "smart dispatcher repair workorder history on the equipments",
+        "url": "https://linear.app/jrf/issue/JRF-399/smart-dispatcher-repair-workorder-history-on-the-equipments",
+        "description": "once the repair order is closed and completed, it will not show as an active wor…",
+        "state": {
+          "id": "3803d97c-d0d3-434b-8927-8725e57982de",
+          "name": "Done",
+          "type": "completed",
+          "color": "#5e6ad2"
+        },
+        "team": {
+          "id": "8ce71278-319b-4c81-997e-796ef354aea7",
+          "name": "JRF",
+          "key": "JRF",
+          "color": "#789c00"
+        },
+        "project": {
+          "id": "a0d17ec1-b237-4481-9efb-1eff9fe69efe",
+          "name": "Smart Dispatcher",
+          "color": "#bec2c8"
+        },
+        "cycle": {
+          "id": "56eadbb1-0aa5-434e-8193-26a727698bcc",
+          "name": null
+        },
+        "assignee": {
+          "id": "71aef180-1742-4a76-8d49-51f14e8ada1e",
+          "displayName": "royce.code",
+          "avatarUrl": "https://public.linear.app/dfcf61c2-72c0-4d39-9485-96576cabb555/7eef5c2d-203b-4bab-a484-fd8f238b2d45/3b02c7dd-4f76-45e1-b28c-16022ca3308d"
+        },
+        "labels": [
+          {
+            "id": "a8ec6a45-f6ed-47cc-aaee-e3dccdde7486",
+            "name": "agent-ready",
+            "color": "#06B6D4"
+          }
+        ],
+        "priority": 2,
+        "priorityLabel": "high",
+        "estimate": null,
+        "dueDate": null,
+        "branchName": "roycecode/jrf-399-smart-dispatcher-repair-workorder-history-on-the-equipments",
+        "createdAt": "2026-10-01T03:53:45.724Z",
+        "updatedAt": "2026-10-02T16:10:58.944Z",
+        "workspace": {
+          "id": "dfcf61c2-72c0-4d39-9485-96576cabb555",
+          "name": "JRF"
+        }
+      },
+      {
+        "id": "015bb842-1cc4-4c26-9751-9753bd3656a1",
+        "identifier": "JRF-412",
+        "title": "Smart dispatcher web app orders page has old orders from 2023, 2024, 2025",
+        "url": "https://linear.app/jrf/issue/JRF-412/smart-dispatcher-web-app-orders-page-has-old-orders-from-2023-2024",
+        "description": "\nWe should make sure that ordered field filter by default are looking at this we…",
+        "state": {
+          "id": "3803d97c-d0d3-434b-8927-8725e57982de",
+          "name": "Done",
+          "type": "completed",
+          "color": "#5e6ad2"
+        },
+        "team": {
+          "id": "8ce71278-319b-4c81-997e-796ef354aea7",
+          "name": "JRF",
+          "key": "JRF",
+          "color": "#789c00"
+        },
+        "project": {
+          "id": "a0d17ec1-b237-4481-9efb-1eff9fe69efe",
+          "name": "Smart Dispatcher",
+          "color": "#bec2c8"
+        },
+        "cycle": {
+          "id": "56eadbb1-0aa5-434e-8193-26a727698bcc",
+          "name": null
+        },
+        "assignee": {
+          "id": "71aef180-1742-4a76-8d49-51f14e8ada1e",
+          "displayName": "royce.code",
+          "avatarUrl": "https://public.linear.app/dfcf61c2-72c0-4d39-9485-96576cabb555/7eef5c2d-203b-4bab-a484-fd8f238b2d45/3b02c7dd-4f76-45e1-b28c-16022ca3308d"
+        },
+        "labels": [
+          {
+            "id": "a8ec6a45-f6ed-47cc-aaee-e3dccdde7486",
+            "name": "agent-ready",
+            "color": "#06B6D4"
+          }
+        ],
+        "priority": 1,
+        "priorityLabel": "urgent",
+        "estimate": null,
+        "dueDate": null,
+        "branchName": "roycecode/jrf-412-smart-dispatcher-web-app-orders-page-has-old-orders-from",
+        "createdAt": "2026-10-02T13:50:41.146Z",
+        "updatedAt": "2026-10-02T15:20:34.159Z",
+        "workspace": {
+          "id": "dfcf61c2-72c0-4d39-9485-96576cabb555",
+          "name": "JRF"
+        }
+      },
+      {
+        "id": "c5e64d1d-0ce8-4d91-96c9-540e40a4f880",
+        "identifier": "JRF-397",
+        "title": "smart dispatcher add permit scanning/reading/truck routing",
+        "url": "https://linear.app/jrf/issue/JRF-397/smart-dispatcher-add-permit-scanningreadingtruck-routing",
+        "description": "",
+        "state": {
+          "id": "3803d97c-d0d3-434b-8927-8725e57982de",
+          "name": "Done",
+          "type": "completed",
+          "color": "#5e6ad2"
+        },
+        "team": {
+          "id": "8ce71278-319b-4c81-997e-796ef354aea7",
+          "name": "JRF",
+          "key": "JRF",
+          "color": "#789c00"
+        },
+        "project": {
+          "id": "a0d17ec1-b237-4481-9efb-1eff9fe69efe",
+          "name": "Smart Dispatcher",
+          "color": "#bec2c8"
+        },
+        "cycle": {
+          "id": "56eadbb1-0aa5-434e-8193-26a727698bcc",
+          "name": null
+        },
+        "assignee": {
+          "id": "71aef180-1742-4a76-8d49-51f14e8ada1e",
+          "displayName": "royce.code",
+          "avatarUrl": "https://public.linear.app/dfcf61c2-72c0-4d39-9485-96576cabb555/7eef5c2d-203b-4bab-a484-fd8f238b2d45/3b02c7dd-4f76-45e1-b28c-16022ca3308d"
+        },
+        "labels": [
+          {
+            "id": "a8ec6a45-f6ed-47cc-aaee-e3dccdde7486",
+            "name": "agent-ready",
+            "color": "#06B6D4"
+          }
+        ],
+        "priority": 2,
+        "priorityLabel": "high",
+        "estimate": null,
+        "dueDate": null,
+        "branchName": "roycecode/jrf-397-smart-dispatcher-add-permit-scanningreadingtruck-routing",
+        "createdAt": "2026-09-30T01:35:48.541Z",
+        "updatedAt": "2026-10-02T13:26:34.965Z",
+        "workspace": {
+          "id": "dfcf61c2-72c0-4d39-9485-96576cabb555",
+          "name": "JRF"
+        }
+      },
+      {
+        "id": "c8bc8ede-503c-4685-8abc-e9cee8b37b67",
+        "identifier": "JRF-411",
+        "title": "smart dispatcher ERP writeback research",
+        "url": "https://linear.app/jrf/issue/JRF-411/smart-dispatcher-erp-writeback-research",
+        "description": "smart dispatcher ERP writeback research",
+        "state": {
+          "id": "3803d97c-d0d3-434b-8927-8725e57982de",
+          "name": "Done",
+          "type": "completed",
+          "color": "#5e6ad2"
+        },
+        "team": {
+          "id": "8ce71278-319b-4c81-997e-796ef354aea7",
+          "name": "JRF",
+          "key": "JRF",
+          "color": "#789c00"
+        },
+        "project": {
+          "id": "a0d17ec1-b237-4481-9efb-1eff9fe69efe",
+          "name": "Smart Dispatcher",
+          "color": "#bec2c8"
+        },
+        "cycle": {
+          "id": "56eadbb1-0aa5-434e-8193-26a727698bcc",
+          "name": null
+        },
+        "assignee": {
+          "id": "71aef180-1742-4a76-8d49-51f14e8ada1e",
+          "displayName": "royce.code",
+          "avatarUrl": "https://public.linear.app/dfcf61c2-72c0-4d39-9485-96576cabb555/7eef5c2d-203b-4bab-a484-fd8f238b2d45/3b02c7dd-4f76-45e1-b28c-16022ca3308d"
+        },
+        "labels": [
+          {
+            "id": "a8ec6a45-f6ed-47cc-aaee-e3dccdde7486",
+            "name": "agent-ready",
+            "color": "#06B6D4"
+          }
+        ],
+        "priority": 1,
+        "priorityLabel": "urgent",
+        "estimate": null,
+        "dueDate": null,
+        "branchName": "roycecode/jrf-411-smart-dispatcher-erp-writeback-research",
+        "createdAt": "2026-10-02T12:41:48.959Z",
+        "updatedAt": "2026-10-02T13:06:32.980Z",
+        "workspace": {
+          "id": "dfcf61c2-72c0-4d39-9485-96576cabb555",
+          "name": "JRF"
+        }
+      },
+      {
+        "id": "9cf860fe-232a-4417-ba44-ee09320444ae",
+        "identifier": "JRF-122",
+        "title": "Continuous code review loop — guard repo + dispatch codex reviews",
+        "url": "https://linear.app/jrf/issue/JRF-122/continuous-code-review-loop-guard-repo-dispatch-codex-reviews",
+        "description": "Automated /loop running every 10 minutes from Claude Code session:\n\n1. Pull repo…",
+        "state": {
+          "id": "1a8200d2-6b1f-4c57-a457-b313ec9292ed",
+          "name": "Backlog",
+          "type": "backlog",
+          "color": "#bec2c8"
+        },
+        "team": {
+          "id": "8ce71278-319b-4c81-997e-796ef354aea7",
+          "name": "JRF",
+          "key": "JRF",
+          "color": "#789c00"
+        },
+        "project": {
+          "id": "a0d17ec1-b237-4481-9efb-1eff9fe69efe",
+          "name": "Smart Dispatcher",
+          "color": "#bec2c8"
+        },
+        "cycle": null,
+        "assignee": {
+          "id": "71aef180-1742-4a76-8d49-51f14e8ada1e",
+          "displayName": "royce.code",
+          "avatarUrl": "https://public.linear.app/dfcf61c2-72c0-4d39-9485-96576cabb555/7eef5c2d-203b-4bab-a484-fd8f238b2d45/3b02c7dd-4f76-45e1-b28c-16022ca3308d"
+        },
+        "labels": [],
+        "priority": 3,
+        "priorityLabel": "medium",
+        "estimate": null,
+        "dueDate": null,
+        "branchName": "roycecode/jrf-122-continuous-code-review-loop-guard-repo-dispatch-codex",
+        "createdAt": "2026-05-12T17:28:21.394Z",
+        "updatedAt": "2026-10-02T02:26:22.870Z",
+        "workspace": {
+          "id": "dfcf61c2-72c0-4d39-9485-96576cabb555",
+          "name": "JRF"
+        }
+      },
+      {
+        "id": "4d42faef-a2ef-4389-a2cb-297aaa1c03b2",
+        "identifier": "JRF-384",
+        "title": "validate the equipment gps location from intellishift integration",
+        "url": "https://linear.app/jrf/issue/JRF-384/validate-the-equipment-gps-location-from-intellishift-integration",
+        "description": null,
+        "state": {
+          "id": "3803d97c-d0d3-434b-8927-8725e57982de",
+          "name": "Done",
+          "type": "completed",
+          "color": "#5e6ad2"
+        },
+        "team": {
+          "id": "8ce71278-319b-4c81-997e-796ef354aea7",
+          "name": "JRF",
+          "key": "JRF",
+          "color": "#789c00"
+        },
+        "project": {
+          "id": "a0d17ec1-b237-4481-9efb-1eff9fe69efe",
+          "name": "Smart Dispatcher",
+          "color": "#bec2c8"
+        },
+        "cycle": {
+          "id": "56eadbb1-0aa5-434e-8193-26a727698bcc",
+          "name": null
+        },
+        "assignee": {
+          "id": "71aef180-1742-4a76-8d49-51f14e8ada1e",
+          "displayName": "royce.code",
+          "avatarUrl": "https://public.linear.app/dfcf61c2-72c0-4d39-9485-96576cabb555/7eef5c2d-203b-4bab-a484-fd8f238b2d45/3b02c7dd-4f76-45e1-b28c-16022ca3308d"
+        },
+        "labels": [],
+        "priority": 0,
+        "priorityLabel": "none",
+        "estimate": null,
+        "dueDate": null,
+        "branchName": "roycecode/jrf-384-validate-the-equipment-gps-location-from-intellishift",
+        "createdAt": "2026-09-28T23:39:27.646Z",
+        "updatedAt": "2026-10-02T02:26:08.958Z",
+        "workspace": {
+          "id": "dfcf61c2-72c0-4d39-9485-96576cabb555",
+          "name": "JRF"
+        }
+      },
+      {
+        "id": "0f0dfdaf-ef1d-4eae-9251-fbfafd7865f9",
+        "identifier": "JRF-387",
+        "title": "Set up Grafana monitoring for key API integration endpoints",
+        "url": "https://linear.app/jrf/issue/JRF-387/set-up-grafana-monitoring-for-key-api-integration-endpoints",
+        "description": "Enable Grafana for these API integration endpoints:\n\n* Intempo DB connection val…",
+        "state": {
+          "id": "3803d97c-d0d3-434b-8927-8725e57982de",
+          "name": "Done",
+          "type": "completed",
+          "color": "#5e6ad2"
+        },
+        "team": {
+          "id": "8ce71278-319b-4c81-997e-796ef354aea7",
+          "name": "JRF",
+          "key": "JRF",
+          "color": "#789c00"
+        },
+        "project": {
+          "id": "a0d17ec1-b237-4481-9efb-1eff9fe69efe",
+          "name": "Smart Dispatcher",
+          "color": "#bec2c8"
+        },
+        "cycle": {
+          "id": "56eadbb1-0aa5-434e-8193-26a727698bcc",
+          "name": null
+        },
+        "assignee": {
+          "id": "71aef180-1742-4a76-8d49-51f14e8ada1e",
+          "displayName": "royce.code",
+          "avatarUrl": "https://public.linear.app/dfcf61c2-72c0-4d39-9485-96576cabb555/7eef5c2d-203b-4bab-a484-fd8f238b2d45/3b02c7dd-4f76-45e1-b28c-16022ca3308d"
+        },
+        "labels": [],
+        "priority": 0,
+        "priorityLabel": "none",
+        "estimate": null,
+        "dueDate": null,
+        "branchName": "roycecode/jrf-387-set-up-grafana-monitoring-for-key-api-integration-endpoints",
+        "createdAt": "2026-09-29T00:02:36.736Z",
+        "updatedAt": "2026-10-02T02:19:19.671Z",
+        "workspace": {
+          "id": "dfcf61c2-72c0-4d39-9485-96576cabb555",
+          "name": "JRF"
+        }
+      },
+      {
+        "id": "19dce211-cf63-4a51-8de1-4b923934505b",
+        "identifier": "JRF-396",
+        "title": "smart dispatcher add truck tractor/trailers and dimensions",
+        "url": "https://linear.app/jrf/issue/JRF-396/smart-dispatcher-add-truck-tractortrailers-and-dimensions",
+        "description": "",
+        "state": {
+          "id": "3803d97c-d0d3-434b-8927-8725e57982de",
+          "name": "Done",
+          "type": "completed",
+          "color": "#5e6ad2"
+        },
+        "team": {
+          "id": "8ce71278-319b-4c81-997e-796ef354aea7",
+          "name": "JRF",
+          "key": "JRF",
+          "color": "#789c00"
+        },
+        "project": {
+          "id": "a0d17ec1-b237-4481-9efb-1eff9fe69efe",
+          "name": "Smart Dispatcher",
+          "color": "#bec2c8"
+        },
+        "cycle": {
+          "id": "56eadbb1-0aa5-434e-8193-26a727698bcc",
+          "name": null
+        },
+        "assignee": {
+          "id": "71aef180-1742-4a76-8d49-51f14e8ada1e",
+          "displayName": "royce.code",
+          "avatarUrl": "https://public.linear.app/dfcf61c2-72c0-4d39-9485-96576cabb555/7eef5c2d-203b-4bab-a484-fd8f238b2d45/3b02c7dd-4f76-45e1-b28c-16022ca3308d"
+        },
+        "labels": [
+          {
+            "id": "a8ec6a45-f6ed-47cc-aaee-e3dccdde7486",
+            "name": "agent-ready",
+            "color": "#06B6D4"
+          }
+        ],
+        "priority": 2,
+        "priorityLabel": "high",
+        "estimate": null,
+        "dueDate": null,
+        "branchName": "roycecode/jrf-396-smart-dispatcher-add-truck-tractortrailers-and-dimensions",
+        "createdAt": "2026-09-30T01:35:08.732Z",
+        "updatedAt": "2026-10-02T02:09:49.301Z",
+        "workspace": {
+          "id": "dfcf61c2-72c0-4d39-9485-96576cabb555",
+          "name": "JRF"
+        }
+      }
+    ],
+    "truncated": true,
+    "meta": {
+      "limit": 15,
+      "returned": 15,
+      "hasMore": true,
+      "nextCursor": "[scrubbed]",
+      "orderBy": "updatedAt",
+      "workspaceId": "dfcf61c2-72c0-4d39-9485-96576cabb555",
+      "partial": false,
+      "workspaceErrors": []
+    }
+  },
+  "_meta": {
+    "runtimeId": "c75f606e-8651-49ea-afcd-1514da5b1aa5"
+  }
+}

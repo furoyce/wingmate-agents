@@ -9,7 +9,7 @@
     "automations": [
       {
         "id": "2631faa3-9ab9-4b64-81d8-9ced947506c4",
-        "name": "Bouncr-auto Linear engineering",
+        "name": "automation-1",
         "prompt": "REDACTED",
         "precheck": {
           "command": "REDACTED",
@@ -22,7 +22,7 @@
           "hostId": "local",
           "projectHostSetupId": "d77b22cb-74e2-42ac-b06e-5d90a0fd6c89",
           "repoId": "d77b22cb-74e2-42ac-b06e-5d90a0fd6c89",
-          "path": "/Users/jujufugh/orca/BOUNCR-game"
+          "path": "/Users/owner/orca/BOUNCR-game"
         },
         "sourceContext": {
           "kind": "task-source",
@@ -59,7 +59,7 @@
       },
       {
         "id": "45780f47-375e-428b-8b34-41348010e95a",
-        "name": "JR Family Studio daily health",
+        "name": "automation-2",
         "prompt": "REDACTED",
         "precheck": {
           "command": "REDACTED",
@@ -72,7 +72,7 @@
           "hostId": "local",
           "projectHostSetupId": "463253fe-ee53-426d-90c2-6fc4e4abd008",
           "repoId": "463253fe-ee53-426d-90c2-6fc4e4abd008",
-          "path": "/Users/jujufugh/orca/jr-learning-plus"
+          "path": "/Users/owner/orca/jr-learning-plus"
         },
         "sourceContext": {
           "kind": "task-source",
@@ -93,7 +93,7 @@
         "executionTargetId": "local",
         "schedulerOwner": "local_host_service",
         "workspaceMode": "existing",
-        "workspaceId": "463253fe-ee53-426d-90c2-6fc4e4abd008::/Users/jujufugh/orca/workspaces/jr-learning-plus/family-learning-studio",
+        "workspaceId": "463253fe-ee53-426d-90c2-6fc4e4abd008::/Users/owner/orca/workspaces/jr-learning-plus/family-learning-studio",
         "baseBranch": null,
         "reuseSession": true,
         "timezone": "America/New_York",
@@ -109,29 +109,29 @@
       },
       {
         "id": "c9c6b386-d734-46e0-a50b-1ea5df964b47",
-        "name": "RentalMan integration details reminder",
+        "name": "automation-3",
         "prompt": "REDACTED",
         "precheck": null,
         "agentId": "codex",
         "runContext": {
           "kind": "workspace-run",
-          "projectId": "github:furoyce/ehr-dispatch.smartdispatcher.io",
+          "projectId": "github:furoyce/project-2",
           "hostId": "local",
           "projectHostSetupId": "d2386ea3-2a51-46b2-93b4-7f36da9e673d",
           "repoId": "d2386ea3-2a51-46b2-93b4-7f36da9e673d",
-          "path": "/Users/jujufugh/work/ehr-dispatch.smartdispatcher.io"
+          "path": "/Users/owner/work/project-2"
         },
         "sourceContext": {
           "kind": "task-source",
           "provider": "github",
-          "projectId": "github:furoyce/ehr-dispatch.smartdispatcher.io",
+          "projectId": "github:furoyce/project-2",
           "hostId": "local",
           "projectHostSetupId": "d2386ea3-2a51-46b2-93b4-7f36da9e673d",
           "repoId": "d2386ea3-2a51-46b2-93b4-7f36da9e673d",
           "providerIdentity": {
             "provider": "github",
             "owner": "furoyce",
-            "repo": "ehr-dispatch.smartdispatcher.io"
+            "repo": "project-2"
           },
           "accountLabel": null
         },
@@ -140,7 +140,7 @@
         "executionTargetId": "local",
         "schedulerOwner": "local_host_service",
         "workspaceMode": "existing",
-        "workspaceId": "d2386ea3-2a51-46b2-93b4-7f36da9e673d::/Users/jujufugh/work/ehr-dispatch.smartdispatcher.io",
+        "workspaceId": "d2386ea3-2a51-46b2-93b4-7f36da9e673d::/Users/owner/work/project-2",
         "baseBranch": null,
         "reuseSession": false,
         "timezone": "America/New_York",
