@@ -34,12 +34,23 @@ export const LocalSchema = z.object({
 export type Local = z.infer<typeof LocalSchema>;
 
 const Tier = z.object({ model: z.string().min(1), effort: z.string().min(1) });
+const Path = z.string().min(1);
 /** `.wingmate/launch.json`, written by `installKit` (integrity-protected) and read by `gate` and `spawn`; every field is required. */
 export const LaunchSchema = z.object({
   provider: z.enum(["claude", "codex"]),
   model: z.string().min(1),
   effort: z.string().min(1),
-  kitDir: z.string().min(1),
+  kitDir: Path,
+  /** The Orca worktree id `spawn` creates role terminals in (`terminal create --worktree id:<worktreeId>`, §8.1). */
+  worktreeId: z.string().min(1),
+  /** Each spawned role's dispatcher-written Claude settings file in the kit dir (`claude-settings.<role>.json`, §8.1). */
+  roleSettings: z.object({
+    "plan-verifier": Path,
+    "code-reviewer": Path,
+    "security-reviewer": Path,
+    "ui-reviewer": Path,
+    worker: Path,
+  }),
   baseSha: z.string().nullable(),
   commonDir: z.string().min(1),
   pinnedGates: z.array(z.array(z.string().min(1)).min(1)),

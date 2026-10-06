@@ -16,6 +16,8 @@ import { loadConfig } from "../../../src/config/load";
 import { installKit, integrityHashes } from "../../../src/kit/install";
 import { listIntents } from "../../../src/kit/intents";
 import { type Launch, type Local, readLocal, writeLocal } from "../../../src/kit/local";
+import { agentEnv, codexArgv, launchCommand } from "../../../src/kit/settings";
+import { OrcaError } from "../../../src/orca/cli";
 import type { WorkerRow } from "../../../src/ports";
 import { run } from "../../../src/shared/exec";
 import { newRecord } from "../../../src/state/records";
@@ -53,11 +55,20 @@ async function commit(wt: string, files: Record<string, string>): Promise<string
   await git(wt, "commit", "-q", "-m", "change");
   return headOf(wt);
 }
+const WT_ID = "repo1::/wt/wm-jrf-404";
 const launchFor = (wt: string, over: Partial<Launch> = {}): Launch => ({
   provider: "claude",
   model: "m",
   effort: "max",
   kitDir: "/k",
+  worktreeId: WT_ID,
+  roleSettings: {
+    "plan-verifier": "/k/claude-settings.plan-verifier.json",
+    "code-reviewer": "/k/claude-settings.code-reviewer.json",
+    "security-reviewer": "/k/claude-settings.security-reviewer.json",
+    "ui-reviewer": "/k/claude-settings.ui-reviewer.json",
+    worker: "/k/claude-settings.worker.json",
+  },
   baseSha: null,
   commonDir: join(wt, ".git"),
   pinnedGates: [["sh", "-c", "exit 0"]],
@@ -610,7 +621,7 @@ describe("wingmate issue", () => {
   });
 });
 
-describe("wingmate issue spawn", () => {
+describe("wingmate issue spawn (§8.1 amended: launch the role agent with the kit, then bind it with worker-start --terminal)", () => {
   async function spawnWorktree(over: Partial<Launch> = {}) {
     const wt = await worktree({ git: true });
     writeFileSync(join(wt, ".wingmate", "spec.md"), "verify the plan");
@@ -625,27 +636,72 @@ describe("wingmate issue spawn", () => {
     );
     return wt;
   }
-  function fakeOrca(opts: { claude?: number; codex?: number; receipt?: unknown } = {}) {
+  const TRUST = { wait: { satisfied: false, status: "running", blockedReason: "agent-trust-workspace" } };
+  const READY = { wait: { satisfied: true, status: "running" } };
+  const NOT_READY = { wait: { satisfied: false, status: "running" } };
+  function fakeOrca(
+    opts: { claude?: number; codex?: number; receipt?: unknown; waits?: unknown[]; startError?: Error } = {},
+  ) {
     const calls: string[][] = [];
+    const waits = [...(opts.waits ?? [])];
+    let terminals = 0;
     const window = (used: number) => ({ usedPercent: used, windowMinutes: 10080, resetsAt: null });
     const exec = async (args: string[]): Promise<unknown> => {
       calls.push(args);
-      if (args[0] === "account")
+      const [verb, sub] = args;
+      if (verb === "account")
         return {
           rateLimits: {
             claude: { status: "ok", weekly: window(opts.claude ?? 10), updatedAt: Date.now() },
             codex: { status: "ok", weekly: window(opts.codex ?? 10), updatedAt: Date.now() },
           },
         };
-      if (args[1] === "run-create") return { run: { id: "run_new" } };
-      if (args[1] === "worker-start")
+      if (sub === "run-create") return { run: { id: "run_new" } };
+      if (verb === "terminal" && sub === "create") {
+        terminals += 1;
+        const n = terminals;
+        return { terminal: { handle: `term_${n}`, tabId: `tab${n}`, paneKey: `tab${n}:leaf${n}` } };
+      }
+      if (verb === "terminal" && sub === "wait") return waits.shift() ?? READY;
+      if (verb === "terminal" && (sub === "send" || sub === "close")) return {};
+      if (sub === "worker-start") {
+        if (opts.startError) throw opts.startError;
         return opts.receipt ?? { worker: { dispatchId: "ctx_7", taskId: "task_7" } };
+      }
       throw new Error(`unexpected orca ${args.join(" ")}`);
     };
     return { calls, orca: { workerList: async () => [], exec } };
   }
+  const creates = (calls: string[][]) => calls.filter((c) => c[0] === "terminal" && c[1] === "create");
+  const starts = (calls: string[][]) => calls.filter((c) => c[1] === "worker-start");
+  const commandOf = (c: string[] | undefined) => (c ? (c[c.indexOf("--command") + 1] ?? "") : "");
+  const sessionOf = (cmd: string) => /--session-id ([0-9a-f-]{36})/.exec(cmd)?.[1] ?? "no-session-id";
+  const wait = (ms: number) => [
+    "terminal",
+    "wait",
+    "--terminal",
+    "term_1",
+    "--for",
+    "tui-idle",
+    "--timeout-ms",
+    String(ms),
+  ];
+  const verifierStart = (wtId: string) => [
+    "orchestration",
+    "worker-start",
+    "--run",
+    "run_new",
+    "--worktree",
+    `id:${wtId}`,
+    "--terminal",
+    "term_1",
+    "--spec",
+    "Role: plan-verifier for JRF-404. Read .wingmate/prompts/planVerifier.md first.\n\nverify the plan",
+    "--task-title",
+    "JRF-404 plan-verifier",
+  ];
 
-  test("reviewers go to the other provider at tier best; the run is created once; the real binary is never called", async () => {
+  test("a codex plan-verifier: account, run-create, terminal create with the role argv, tui-idle, worker-start --terminal (exact argv)", async () => {
     const wt = await spawnWorktree();
     const f = fakeOrca();
     const spawn = (args: string[]) => runVerb(wt, ["spawn", ...args], { orca: f.orca });
@@ -656,68 +712,188 @@ describe("wingmate issue spawn", () => {
       provider: "codex",
       tier: { model: "gpt-x", effort: "xhigh" },
     });
+    expect(f.calls).toEqual([["account", "list"]]);
     const real = await spawn(["--role", "plan-verifier", "--spec", ".wingmate/spec.md"]);
     expect(JSON.parse(real.out)).toEqual({
       ok: true,
       provider: "codex",
       dispatchId: "ctx_7",
       taskId: "task_7",
+      terminalHandle: "term_1",
       runId: "run_new",
     });
-    const ws = f.calls.find((c) => c[1] === "worker-start") ?? [];
-    expect(ws).toEqual([
-      "orchestration",
-      "worker-start",
-      "--run",
-      "run_new",
-      "--worktree",
-      "current",
-      "--agent",
-      "codex",
-      "--spec",
-      "Role: plan-verifier for JRF-404. Read .wingmate/prompts/planVerifier.md first.\n\nverify the plan",
-      "--task-title",
-      "JRF-404 plan-verifier",
-      "--model",
-      "gpt-x",
-      "--effort",
-      "xhigh",
+    const command = launchCommand(
+      codexArgv({ model: "gpt-x", effort: "xhigh", worktreePath: wt, role: "plan-verifier" }),
+      agentEnv("/k"),
+    );
+    expect(command).toStartWith("GH_TOKEN='' GITHUB_TOKEN='' ");
+    expect(command).toContain(" exec codex -C ");
+    expect(command).toEndWith(" --sandbox read-only");
+    expect(f.calls.slice(1)).toEqual([
+      ["account", "list"],
+      ["orchestration", "run-create", "--objective", "JRF-404 workers"],
+      [
+        "terminal",
+        "create",
+        "--worktree",
+        `id:${WT_ID}`,
+        "--title",
+        "wingmate JRF-404 plan-verifier",
+        "--command",
+        command,
+      ],
+      wait(120_000),
+      verifierStart(WT_ID),
     ]);
     expect((await listIntents(wt)).some((i) => i.kind === "run" && i.payload.runId === "run_new")).toBe(true);
     expect((await readLocal(wt)).run).toEqual({ childRunId: "run_new" });
-    const worker = await spawn([
-      "--role",
-      "worker",
-      "--spec",
-      ".wingmate/spec.md",
-      "--worktree",
-      "new-child",
-    ]);
-    expect(JSON.parse(worker.out)).toMatchObject({ ok: true, provider: "claude", runId: "run_new" });
-    const ws2 = f.calls.filter((c) => c[1] === "worker-start").at(-1) ?? [];
-    expect(ws2).not.toContain("--model"); // workers run at tier standard (provider default)
-    expect(ws2[ws2.indexOf("--name") + 1]).toMatch(/^wm-jrf-404-worker-[0-9a-z]{4}$/);
-    expect(f.calls.filter((c) => c[1] === "run-create").length).toBe(1);
+    // the Run is created once; the next spawn reuses it and gets a terminal of its own
+    expect(
+      JSON.parse((await spawn(["--role", "plan-verifier", "--spec", ".wingmate/spec.md"])).out),
+    ).toMatchObject({
+      terminalHandle: "term_2",
+    });
+    expect(f.calls.filter((c) => c[1] === "run-create")).toHaveLength(1);
   });
 
-  test("--task maps to worker-start --task; a cross-provider fallback is reported, not silent", async () => {
+  test("Claude roles run with their role's kit settings file and agentEnv: tier best for a reviewer, provider default for a worker", async () => {
+    const wt = await spawnWorktree({ provider: "codex", workers: ["cursor", "claude"] });
+    const f = fakeOrca();
+    const spawn = (args: string[]) => runVerb(wt, ["spawn", ...args], { orca: f.orca });
+    // coordinator codex → the cross-provider reviewer is Claude, at its tier best
+    const review = await spawn(["--role", "code-reviewer", "--spec", ".wingmate/spec.md"]);
+    expect(JSON.parse(review.out)).toMatchObject({ ok: true, provider: "claude", terminalHandle: "term_1" });
+    const rc = commandOf(creates(f.calls)[0]);
+    expect(rc).toBe(
+      launchCommand(
+        [
+          "claude",
+          "--model",
+          "c",
+          "--effort",
+          "max",
+          "--session-id",
+          sessionOf(rc),
+          "--permission-mode",
+          "bypassPermissions",
+          "--settings",
+          "/k/claude-settings.code-reviewer.json",
+          "--strict-mcp-config",
+        ],
+        agentEnv("/k"),
+      ),
+    );
+    // workers: cursor cannot be launched under the kit, so the next listed provider runs, at tier standard
+    const worker = await spawn(["--role", "worker", "--spec", ".wingmate/spec.md"]);
+    expect(JSON.parse(worker.out)).toMatchObject({ ok: true, provider: "claude", terminalHandle: "term_2" });
+    const wc = commandOf(creates(f.calls)[1]);
+    expect(wc).toBe(
+      launchCommand(
+        [
+          "claude",
+          "--session-id",
+          sessionOf(wc),
+          "--permission-mode",
+          "bypassPermissions",
+          "--settings",
+          "/k/claude-settings.worker.json",
+          "--strict-mcp-config",
+        ],
+        agentEnv("/k"),
+      ),
+    );
+    expect(sessionOf(wc)).not.toBe(sessionOf(rc));
+    expect(creates(f.calls)[1]?.slice(0, 6)).toEqual([
+      "terminal",
+      "create",
+      "--worktree",
+      `id:${WT_ID}`,
+      "--title",
+      "wingmate JRF-404 worker",
+    ]);
+    // worker-start only binds: never the --agent/--model/--effort of an Orca-launched agent, never a child worktree
+    expect(starts(f.calls)).toHaveLength(2);
+    for (const s of starts(f.calls))
+      for (const flag of ["--agent", "--model", "--effort", "--name"]) expect(s).not.toContain(flag);
+  });
+
+  test("the folder-trust dialog is answered with Down then Enter and waited out again; the spec never goes into the terminal", async () => {
+    const wt = await spawnWorktree();
+    const f = fakeOrca({ waits: [TRUST, READY] });
+    const r = await runVerb(wt, ["spawn", "--role", "plan-verifier", "--spec", ".wingmate/spec.md"], {
+      orca: f.orca,
+    });
+    expect(JSON.parse(r.out)).toMatchObject({ ok: true, dispatchId: "ctx_7", terminalHandle: "term_1" });
+    const created = f.calls.findIndex((c) => c[0] === "terminal" && c[1] === "create");
+    expect(f.calls.slice(created + 1)).toEqual([
+      wait(120_000),
+      ["terminal", "send", "--terminal", "term_1", "--text", "\x1b[B"],
+      ["terminal", "send", "--terminal", "term_1", "--enter"],
+      wait(120_000),
+      verifierStart(WT_ID),
+    ]);
+    expect(f.calls.filter((c) => c[1] === "send").some((c) => c.join(" ").includes("verify the plan"))).toBe(
+      false,
+    );
+  });
+
+  test("a terminal that never gets ready is closed and spawn refuses spawn_not_ready; the trust answer is sent once", async () => {
+    const wt = await spawnWorktree();
+    const spawn = (orca: ReturnType<typeof fakeOrca>["orca"]) =>
+      runVerb(wt, ["spawn", "--role", "plan-verifier", "--spec", ".wingmate/spec.md"], { orca });
+    const slow = fakeOrca({ waits: [NOT_READY, NOT_READY] });
+    const r = refusal(await spawn(slow.orca));
+    expect(r.code).toBe("spawn_not_ready");
+    expect(r.message).toContain("term_1");
+    expect(slow.calls.filter((c) => c[1] === "wait").map((c) => c.at(-1))).toEqual(["120000", "180000"]);
+    expect(slow.calls.at(-1)).toEqual(["terminal", "close", "--terminal", "term_1"]);
+    expect(starts(slow.calls)).toEqual([]);
+    const stuck = fakeOrca({ waits: [TRUST, TRUST, TRUST] });
+    const s = refusal(await spawn(stuck.orca));
+    expect(s.code).toBe("spawn_not_ready");
+    expect(s.message).toContain("agent-trust-workspace");
+    expect(stuck.calls.filter((c) => c[1] === "send")).toHaveLength(2); // Down and Enter, once
+    expect(stuck.calls.filter((c) => c[1] === "wait").map((c) => c.at(-1))).toEqual([
+      "120000",
+      "120000",
+      "180000",
+    ]);
+    expect(stuck.calls.at(-1)).toEqual(["terminal", "close", "--terminal", "term_1"]);
+    expect(starts(stuck.calls)).toEqual([]);
+  });
+
+  test("new-child, --task and a --prefer spawn cannot launch are refused before Orca is touched; --deps travels with --spec", async () => {
+    const wt = await spawnWorktree();
+    const f = fakeOrca();
+    const spawn = (args: string[]) => runVerb(wt, ["spawn", ...args], { orca: f.orca });
+    const spec = ["--spec", ".wingmate/spec.md"];
+    const child = refusal(await spawn(["--role", "worker", ...spec, "--worktree", "new-child"]));
+    expect(child.code).toBe("new_child_unsupported");
+    expect(child.nextStep).toContain("--worktree current");
+    const task = refusal(await spawn(["--role", "worker", "--task", "t1"]));
+    expect(task.code).toBe("task_unsupported");
+    expect(task.nextStep).toContain("--spec <file>");
+    expect(refusal(await spawn(["--role", "worker", ...spec, "--task", "t1"])).code).toBe("task_unsupported");
+    expect(refusal(await spawn(["--role", "worker", ...spec, "--worktree", "elsewhere"])).code).toBe("usage");
+    expect(refusal(await spawn(["--role", "worker", ...spec, "--prefer", "cursor"])).code).toBe("usage");
+    expect(refusal(await spawn(["--role", "code-reviewer", ...spec, "--prefer", "codex"])).code).toBe(
+      "usage",
+    );
+    expect(refusal(await spawn(["--role", "worker", ...spec, "--deps", "nope"])).code).toBe("usage");
+    expect(refusal(await spawn(["--role", "worker"])).code).toBe("usage");
+    expect(f.calls).toEqual([]);
+    const ok = await spawn(["--role", "worker", ...spec, "--prefer", "codex", "--deps", '["task_1"]']);
+    expect(JSON.parse(ok.out)).toMatchObject({ ok: true, provider: "codex" });
+    expect(starts(f.calls)[0]?.slice(-2)).toEqual(["--deps", '["task_1"]']);
+    expect(commandOf(creates(f.calls)[0])).toContain("--sandbox workspace-write");
+  });
+
+  test("a cross-provider fallback is reported, not silent; with no provider available nothing starts", async () => {
     const wt = await spawnWorktree();
     const f = fakeOrca({ codex: 95 });
-    const spawn = (args: string[]) => runVerb(wt, ["spawn", ...args], { orca: f.orca });
-    expect(
-      refusal(await spawn(["--role", "worker", "--spec", ".wingmate/spec.md", "--task", "t1"])).code,
-    ).toBe("usage");
-    expect(refusal(await spawn(["--role", "worker", "--task", "t1", "--deps", '["t0"]'])).code).toBe("usage");
-    expect(
-      refusal(await spawn(["--role", "code-reviewer", "--spec", ".wingmate/spec.md", "--prefer", "codex"]))
-        .code,
-    ).toBe("usage");
-    const task = await spawn(["--role", "worker", "--task", "t1"]);
-    expect(JSON.parse(task.out)).toMatchObject({ ok: true, provider: "claude" });
-    const ws = f.calls.find((c) => c[1] === "worker-start") ?? [];
-    expect(ws).toContain("--task");
-    expect(ws).not.toContain("--spec");
-    const review = await spawn(["--role", "code-reviewer", "--spec", ".wingmate/spec.md"]);
+    const review = await runVerb(wt, ["spawn", "--role", "code-reviewer", "--spec", ".wingmate/spec.md"], {
+      orca: f.orca,
+    });
     expect(JSON.parse(review.out)).toMatchObject({ ok: true, provider: "claude" });
     expect((JSON.parse(review.out) as { fallback: string }).fallback).toContain("codex unavailable (quota");
     expect(
@@ -742,8 +918,8 @@ describe("wingmate issue spawn", () => {
     const o = JSON.parse(review.out) as { ok: boolean; provider: string; fallback: string };
     expect(o).toMatchObject({ ok: true, provider: "claude" });
     expect(o.fallback).toContain("codex unavailable (model_unresolved");
-    const ws = f.calls.find((c) => c[1] === "worker-start") ?? [];
-    expect(ws.slice(ws.indexOf("--model"))).toEqual(["--model", "c", "--effort", "max"]);
+    expect(commandOf(creates(f.calls)[0])).toContain(" exec claude --model c --effort max --session-id ");
+    expect(starts(f.calls)[0]).not.toContain("--model");
     expect(
       (await listIntents(wt)).some(
         (i) => i.kind === "note" && i.payload.text.startsWith("spawn: codex unavailable (model_unresolved"),
@@ -767,7 +943,7 @@ describe("wingmate issue spawn", () => {
     expect(JSON.parse(worker.out)).toMatchObject({ ok: true, provider: "claude" });
   });
 
-  test("spawn applies the tier best installKit resolved at claim: the codex reviewer's argv carries --model and --effort", async () => {
+  test("after a real installKit: the codex reviewer runs read-only at tier best and a Claude worker gets the kit's worker settings file", async () => {
     const wt = mkdtempSync(join(tmpdir(), "wm-claim-"));
     await run(["git", "init", "-q", wt]);
     await git(wt, "commit", "-q", "--allow-empty", "-m", "init");
@@ -791,9 +967,10 @@ describe("wingmate issue spawn", () => {
       gitCommonDir: join(wt, ".git"),
       gitdirName: "wm",
     };
+    const kitDir = mkdtempSync(join(tmpdir(), "wm-kit-"));
     await installKit({
       worktreePath: wt,
-      kitDir: mkdtempSync(join(tmpdir(), "wm-kit-")),
+      kitDir,
       record,
       cfg,
       project,
@@ -813,16 +990,43 @@ describe("wingmate issue spawn", () => {
     });
     writeFileSync(join(wt, ".wingmate", "spec.md"), "review the diff");
     const f = fakeOrca();
-    const res = await runVerb(wt, ["spawn", "--role", "code-reviewer", "--spec", ".wingmate/spec.md"], {
-      orca: f.orca,
+    const spawn = (role: string) =>
+      runVerb(wt, ["spawn", "--role", role, "--spec", ".wingmate/spec.md"], { orca: f.orca });
+    expect(JSON.parse((await spawn("code-reviewer")).out)).toMatchObject({
+      ok: true,
+      provider: "codex",
+      dispatchId: "ctx_7",
+      terminalHandle: "term_1",
     });
-    expect(JSON.parse(res.out)).toMatchObject({ ok: true, provider: "codex", dispatchId: "ctx_7" });
-    const ws = f.calls.find((c) => c[1] === "worker-start") ?? [];
-    expect(ws.slice(ws.indexOf("--agent"), ws.indexOf("--agent") + 2)).toEqual(["--agent", "codex"]);
-    expect(ws.slice(ws.indexOf("--model"))).toEqual(["--model", "gpt-x", "--effort", "xhigh"]);
+    const c = creates(f.calls)[0] ?? [];
+    expect(c.slice(0, 4)).toEqual(["terminal", "create", "--worktree", `id:r::${wt}`]);
+    expect(commandOf(c)).toBe(
+      launchCommand(
+        codexArgv({ model: "gpt-x", effort: "xhigh", worktreePath: wt, role: "code-reviewer" }),
+        agentEnv(kitDir),
+      ),
+    );
+    expect(starts(f.calls)[0]?.slice(0, 8)).toEqual([
+      "orchestration",
+      "worker-start",
+      "--run",
+      "run_new",
+      "--worktree",
+      `id:r::${wt}`,
+      "--terminal",
+      "term_1",
+    ]);
+    expect(JSON.parse((await spawn("worker")).out)).toMatchObject({ ok: true, provider: "claude" });
+    const settings = join(kitDir, "claude-settings.worker.json");
+    expect(commandOf(creates(f.calls)[1])).toContain(` --settings ${settings} --strict-mcp-config`);
+    expect(
+      (JSON.parse(readFileSync(settings, "utf8")) as { permissions: { deny: string[] } }).permissions.deny,
+    ).toContain("Bash(orca orchestration worker-start *)");
+    for (const s of starts(f.calls))
+      for (const flag of ["--agent", "--model", "--effort"]) expect(s).not.toContain(flag);
   });
 
-  test("a tampered kit, a missing runner and an unparsed receipt are refused", async () => {
+  test("a tampered kit and a missing runner are refused; a failed or unparsed worker-start leaves the possibly bound terminal alone", async () => {
     const wt = await spawnWorktree();
     const f = fakeOrca();
     writeFileSync(
@@ -836,14 +1040,21 @@ describe("wingmate issue spawn", () => {
     expect(tampered.message).toContain(".wingmate/launch.json");
     expect(f.calls).toEqual([]);
     const wt2 = await spawnWorktree();
-    expect(
-      refusal(await runVerb(wt2, ["spawn", "--role", "worker", "--spec", ".wingmate/spec.md"])).code,
-    ).toBe("orca_unavailable");
+    const spawn2 = (orca?: ReturnType<typeof fakeOrca>["orca"]) =>
+      runVerb(wt2, ["spawn", "--role", "worker", "--spec", ".wingmate/spec.md"], orca ? { orca } : {});
+    expect(refusal(await spawn2()).code).toBe("orca_unavailable");
     const g = fakeOrca({ receipt: { status: "ready" } });
-    const unparsed = refusal(
-      await runVerb(wt2, ["spawn", "--role", "worker", "--spec", ".wingmate/spec.md"], { orca: g.orca }),
-    );
+    const unparsed = refusal(await spawn2(g.orca));
     expect(unparsed.code).toBe("spawn_receipt_unparsed");
+    expect(unparsed.message).toContain("term_1");
     expect(unparsed.nextStep).toContain("worker-list --run run_new");
+    const h = fakeOrca({ startError: new OrcaError("invalid_argument", "Unknown flag: --frob") });
+    const failed = refusal(await spawn2(h.orca));
+    expect(failed.code).toBe("spawn_unconfirmed");
+    expect(failed.message).toContain("term_1");
+    expect(failed.message).toContain("invalid_argument");
+    expect(failed.nextStep).toContain("worker-list --run run_new");
+    for (const calls of [g.calls, h.calls])
+      expect(calls.some((c) => c[0] === "terminal" && c[1] === "close")).toBe(false);
   });
 });

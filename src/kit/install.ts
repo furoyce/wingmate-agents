@@ -13,7 +13,18 @@ import { type BriefTicket, renderBrief } from "./brief";
 import { type Launch, writeLocal } from "./local";
 import { PROMPTS } from "./prompts";
 import { PROTOCOL_MD } from "./protocol";
-import { agentEnv, claudeSettings, siblingDenyWrite } from "./settings";
+import {
+  type Role,
+  SPAWN_ROLES,
+  type SettingsInput,
+  agentEnv,
+  claudeSettings,
+  isSiblingDeny,
+  otherWorktrees,
+  roleSettingsFile,
+  roleSettingsFiles,
+  siblingDenies,
+} from "./settings";
 
 export interface InstallInput {
   worktreePath: string;
@@ -31,6 +42,12 @@ export interface InstallInput {
    */
   tiers?: Partial<Record<"claude" | "codex", { model: string; effort: string } | null>>;
   toolchainPaths: string[];
+}
+
+export interface InstallResult {
+  hashes: Record<string, string>;
+  /** `skipped_tracked`: the repo tracks `.claude/settings.local.json`, so the courtesy copy was not merged into it (F15). */
+  courtesySettings: "written" | "skipped_tracked";
 }
 
 /**
@@ -179,6 +196,20 @@ const CourtesyZ = z
  */
 const COURTESY_DENY = ["Bash(orca orchestration worker-start *)", "Bash(orca orchestration dispatch *)"];
 
+const COURTESY_FILE = ".claude/settings.local.json";
+
+/** Whether git tracks `rel` in the worktree; a failing `git ls-files` is an error, never "untracked". */
+async function isTracked(wt: string, rel: string): Promise<boolean> {
+  const r = await run(["git", "-C", wt, "ls-files", "-z", "--", rel], { timeoutMs: 30_000 });
+  if (r.code !== 0)
+    throw new WingmateError(
+      "kit_install_failed",
+      `git ls-files in ${wt} failed (exit ${r.code}): ${r.stderr.trim().slice(0, 200)}`,
+      "check the worktree's git state, then re-queue the issue",
+    );
+  return r.stdout.length > 0;
+}
+
 /** §5.4 step 4: the courtesy copy of the deny rules, merged into an existing `.claude/settings.local.json`. */
 async function writeCourtesySettings(wt: string, deny: string[]): Promise<void> {
   const file = join(wt, ".claude", "settings.local.json");
@@ -253,18 +284,14 @@ const KitSettingsZ = z
   })
   .passthrough();
 
-/**
- * Re-lists the other worktrees' gitdirs into the kit's `claude-settings.json` and returns the denied paths (F7). `installKit` lists
- * them at claim; the tick calls this before every (re)launch and after a claim or cleanup in the same repo, with the record's
- * `gitCommonDir` and `gitdirName`. Claude Code pins a `--settings` file's content at launch (2.1.292), so a running session keeps
- * the list it started with until it is relaunched.
- */
-export async function refreshSiblingDenies(
-  kitDir: string,
-  commonDir: string,
-  gitdirName: string,
-): Promise<string[]> {
-  const file = join(kitDir, "claude-settings.json");
+/** Every Claude settings file in a kit dir: the coordinator's, then one per spawned role (§8.1). */
+const settingsFiles = (kitDir: string): string[] => [
+  join(kitDir, "claude-settings.json"),
+  ...SPAWN_ROLES.map((r) => roleSettingsFile(kitDir, r)),
+];
+
+/** A kit settings file, Zod-validated; missing or invalid files are errors with context, never skipped. */
+async function readKitSettings(file: string): Promise<{ text: string; s: z.infer<typeof KitSettingsZ> }> {
   const again = "re-queue the issue so the kit is installed again";
   const text = await readText(file);
   if (text === null) throw new WingmateError("kit_install_failed", `${file} is missing`, again);
@@ -285,24 +312,51 @@ export async function refreshSiblingDenies(
       `${file}: ${parsed.error.issues[0]?.path.join(".") ?? ""} ${parsed.error.issues[0]?.message ?? ""}`,
       again,
     );
-  const siblings = siblingDenyWrite(commonDir, gitdirName);
-  // Spread the validated input rather than Zod's output, which reorders keys: an unchanged list leaves the file byte-identical.
-  const s = raw as z.infer<typeof KitSettingsZ>;
-  const prefix = `${commonDir}/worktrees/`;
-  const denyWrite = [...s.sandbox.filesystem.denyWrite.filter((p) => !p.startsWith(prefix)), ...siblings];
-  const next = JSON.stringify(
-    { ...s, sandbox: { ...s.sandbox, filesystem: { ...s.sandbox.filesystem, denyWrite } } },
-    null,
-    2,
-  );
-  if (next !== text) await writeAtomic(file, next, 0o644);
+  // The validated input rather than Zod's output, which reorders keys: an unchanged list leaves the file byte-identical.
+  return { text, s: raw as z.infer<typeof KitSettingsZ> };
+}
+
+/**
+ * Re-lists the other worktrees' gitdirs and checked-out branches (F7, F10) into every settings file of the kit — the coordinator's
+ * and each spawned role's — and returns the denied paths. `installKit` lists them at claim; the tick calls this before every
+ * (re)launch and after a claim or cleanup in the same repo, with the record's `gitCommonDir`, `gitdirName` and `branch` (the own
+ * branch comes from the record: the agent can rewrite its own HEAD). Claude Code pins a `--settings` file's content at launch
+ * (2.1.292), so a running session keeps the lists it started with until it is relaunched.
+ */
+export async function refreshSiblingDenies(
+  kitDir: string,
+  commonDir: string,
+  gitdirName: string,
+  branch: string,
+): Promise<string[]> {
+  const files = [];
+  for (const file of settingsFiles(kitDir)) files.push({ file, ...(await readKitSettings(file)) });
+  const siblings = siblingDenies(commonDir, gitdirName, branch);
+  for (const { file, text, s } of files) {
+    const denyWrite = [
+      ...s.sandbox.filesystem.denyWrite.filter((p) => !isSiblingDeny(commonDir, p)),
+      ...siblings,
+    ];
+    const next = JSON.stringify(
+      { ...s, sandbox: { ...s.sandbox, filesystem: { ...s.sandbox.filesystem, denyWrite } } },
+      null,
+      2,
+    );
+    if (next !== text) await writeAtomic(file, next, 0o644);
+  }
   return siblings;
 }
 
-async function writeKitDir(i: InstallInput, settings: object): Promise<void> {
+async function writeKitDir(i: InstallInput, settings: Record<Role, object>): Promise<void> {
   await mkdir(join(i.kitDir, "gh-empty"), { recursive: true });
   await mkdir(join(i.kitDir, "no-hooks"), { recursive: true });
-  await writeAtomic(join(i.kitDir, "claude-settings.json"), JSON.stringify(settings, null, 2), 0o644);
+  await writeAtomic(
+    join(i.kitDir, "claude-settings.json"),
+    JSON.stringify(settings.coordinator, null, 2),
+    0o644,
+  );
+  for (const role of SPAWN_ROLES)
+    await writeAtomic(roleSettingsFile(i.kitDir, role), JSON.stringify(settings[role], null, 2), 0o644);
   await writeAtomic(
     join(i.kitDir, "gitconfig"),
     `[credential]\n\thelper =\n[core]\n\thooksPath = ${join(i.kitDir, "no-hooks")}\n[user]\n\tname = Wingmate\n\temail = wingmate@users.noreply.github.com\n`,
@@ -310,10 +364,78 @@ async function writeKitDir(i: InstallInput, settings: object): Promise<void> {
   await writeAtomic(join(i.kitDir, "env.json"), JSON.stringify(agentEnv(i.kitDir), null, 2));
 }
 
-export async function installKit(i: InstallInput): Promise<{ hashes: Record<string, string> }> {
+type Repo = ProjectConfig["repos"][string];
+type Worktree = NonNullable<WRecord["worktree"]>;
+
+/** `.wingmate/launch.json`: what `gate` and `spawn` need, resolved at claim (§8.0, §8.1, §9.2). */
+function launchFile(i: InstallInput, repo: Repo, w: Worktree): Launch {
+  const r = i.record;
+  const tiers: Launch["tiers"] = {};
+  for (const [p, t] of Object.entries(i.tiers ?? {})) if (t) tiers[p] = { model: t.model, effort: t.effort };
+  tiers[r.provider] = { model: i.launch.model, effort: i.launch.effort };
+  return {
+    provider: r.provider,
+    model: i.launch.model,
+    effort: i.launch.effort,
+    kitDir: i.kitDir,
+    worktreeId: w.id,
+    roleSettings: roleSettingsFiles(i.kitDir),
+    baseSha: w.baseSha,
+    commonDir: w.gitCommonDir,
+    pinnedGates: repo.gates,
+    ui: repo.ui,
+    allowDeps: false,
+    forbiddenPaths: [...i.project.forbiddenPaths, ...repo.forbiddenPaths],
+    verifyCross: i.cfg.defaults.providers.verifyCross,
+    workers: i.cfg.defaults.providers.workers,
+    tiers,
+    quota: i.cfg.defaults.quota,
+  };
+}
+
+/**
+ * The coordinator's settings and one per spawned role (§8.1): the same paths and network, each role's own deny list. The other
+ * worktrees' gitdirs and branches are listed once, so the six files agree (F7, F10); `refreshSiblingDenies` re-lists them later.
+ */
+function agentSettings(i: InstallInput, repo: Repo, w: Worktree): Record<Role, object> {
+  const known = otherWorktrees(w.gitCommonDir, w.gitdirName);
+  const base: SettingsInput = {
+    worktreePath: i.worktreePath,
+    childWorktrees: [],
+    commonDir: w.gitCommonDir,
+    gitdirName: w.gitdirName,
+    branch: w.branch,
+    baseBranch: repo.base,
+    kitDir: i.kitDir,
+    toolchainPaths: i.toolchainPaths,
+    allowedDomains: [...i.cfg.defaults.sandbox.allowedDomains, ...repo.sandbox.allowedDomains],
+    role: "coordinator",
+    siblingGitdirs: known.gitdirs,
+    siblingBranches: known.branches,
+  };
+  const of = (role: Role) => claudeSettings({ ...base, role });
+  return {
+    coordinator: of("coordinator"),
+    "plan-verifier": of("plan-verifier"),
+    "code-reviewer": of("code-reviewer"),
+    "security-reviewer": of("security-reviewer"),
+    "ui-reviewer": of("ui-reviewer"),
+    worker: of("worker"),
+  };
+}
+
+export async function installKit(i: InstallInput): Promise<InstallResult> {
   const wt = i.worktreePath;
   const wm = join(wt, ".wingmate");
   const r = i.record;
+  const w = r.worktree;
+  // F14: the git paths of every settings file come from the worktree; empty ones would widen the grants
+  if (!w)
+    throw new WingmateError(
+      "kit_no_worktree",
+      `${r.identifier} has no worktree recorded, so the kit has no branch, gitdir or common dir to scope`,
+      "create the issue worktree (claim step) before installing the kit",
+    );
   const repo = i.project.repos[r.repo];
   if (!repo)
     throw new WingmateError(
@@ -321,7 +443,8 @@ export async function installKit(i: InstallInput): Promise<{ hashes: Record<stri
       `repo ${r.repo} is not in project ${i.project.key}`,
       "fix config/projects.yaml or re-route the issue",
     );
-  const common = r.worktree?.gitCommonDir ?? join(wt, ".git");
+  const common = w.gitCommonDir;
+  const settings = agentSettings(i, repo, w); // before any write: a settings_invalid leaves nothing half-installed
   for (const d of ["evidence", "inbox", "outbox", "ticket", "prompts"])
     await mkdir(join(wm, d), { recursive: true });
   await writeAtomic(join(wm, "PROTOCOL.md"), PROTOCOL_MD);
@@ -332,8 +455,8 @@ export async function installKit(i: InstallInput): Promise<{ hashes: Record<stri
       project: r.project,
       repo: r.repo,
       worktreePath: wt,
-      branch: r.worktree?.branch ?? "",
-      baseSha: r.worktree?.baseSha ?? "",
+      branch: w.branch,
+      baseSha: w.baseSha,
       provider: r.provider,
       launch: i.launch,
       autonomy: r.autonomy,
@@ -347,26 +470,7 @@ export async function installKit(i: InstallInput): Promise<{ hashes: Record<stri
   );
   for (const [k, v] of Object.entries(PROMPTS)) await writeAtomic(join(wm, "prompts", `${k}.md`), v);
   await writeAtomic(join(wm, "gates.json"), JSON.stringify({}, null, 2));
-  const tiers: Launch["tiers"] = {};
-  for (const [p, t] of Object.entries(i.tiers ?? {})) if (t) tiers[p] = { model: t.model, effort: t.effort };
-  tiers[r.provider] = { model: i.launch.model, effort: i.launch.effort };
-  const launch: Launch = {
-    provider: r.provider,
-    model: i.launch.model,
-    effort: i.launch.effort,
-    kitDir: i.kitDir,
-    baseSha: r.worktree?.baseSha ?? null,
-    commonDir: common,
-    pinnedGates: repo.gates,
-    ui: repo.ui,
-    allowDeps: false,
-    forbiddenPaths: [...i.project.forbiddenPaths, ...repo.forbiddenPaths],
-    verifyCross: i.cfg.defaults.providers.verifyCross,
-    workers: i.cfg.defaults.providers.workers,
-    tiers,
-    quota: i.cfg.defaults.quota,
-  };
-  await writeAtomic(join(wm, "launch.json"), JSON.stringify(launch, null, 2));
+  await writeAtomic(join(wm, "launch.json"), JSON.stringify(launchFile(i, repo, w), null, 2));
   await writeAtomic(join(wm, "ticket", "title.md"), i.issue.title);
   await writeAtomic(join(wm, "ticket", "description.md"), i.issue.description ?? "");
   await writeAtomic(
@@ -385,28 +489,19 @@ export async function installKit(i: InstallInput): Promise<{ hashes: Record<stri
     questions: [],
     run: null,
   });
-  // lists the other worktrees' gitdirs now (F7); `refreshSiblingDenies` re-lists them before each (re)launch
-  const settings = claudeSettings({
-    worktreePath: wt,
-    childWorktrees: [],
-    commonDir: common,
-    gitdirName: r.worktree?.gitdirName ?? "",
-    branch: r.worktree?.branch ?? "",
-    baseBranch: repo.base,
-    kitDir: i.kitDir,
-    toolchainPaths: i.toolchainPaths,
-    allowedDomains: [...i.cfg.defaults.sandbox.allowedDomains, ...repo.sandbox.allowedDomains],
-    role: "coordinator",
-  });
   await writeKitDir(i, settings);
-  await writeCourtesySettings(wt, [
-    ...(settings as { permissions: { deny: string[] } }).permissions.deny,
-    ...COURTESY_DENY,
-  ]);
+  // F15: a tracked courtesy file stays as the repo has it — merging would show as a local change and trip `kit_tampered`; the
+  // authoritative settings are the kit dir's
+  const tracked = await isTracked(wt, COURTESY_FILE);
+  if (!tracked)
+    await writeCourtesySettings(wt, [
+      ...(settings.coordinator as { permissions: { deny: string[] } }).permissions.deny,
+      ...COURTESY_DENY,
+    ]);
   const created = await writeInstallPolicy(wt, repo.packageRoots);
   // Kit-created `.npmrc` files are excluded (anchored) so a `git add -A` cannot commit them into the path guard.
-  await appendExclude(common, [".wingmate/", ".claude/settings.local.json", ...created.map((f) => `/${f}`)]);
+  await appendExclude(common, [".wingmate/", COURTESY_FILE, ...created.map((f) => `/${f}`)]);
   const hashes = await integrityHashes(wt, common);
   await writeAtomic(join(wm, "integrity.json"), JSON.stringify({ commonDir: common, hashes }, null, 2));
-  return { hashes };
+  return { hashes, courtesySettings: tracked ? "skipped_tracked" : "written" };
 }

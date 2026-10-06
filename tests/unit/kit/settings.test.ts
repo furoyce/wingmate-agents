@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -8,7 +8,10 @@ import {
   codexArgv,
   coordinatorArgv,
   launchCommand,
+  roleArgv,
+  roleSettingsFile,
   shellQuote,
+  siblingBranches,
   siblingDenyWrite,
 } from "../../../src/kit/settings";
 import { run } from "../../../src/shared/exec";
@@ -36,10 +39,13 @@ type Settings = {
   };
   permissions: { deny: string[] };
 };
+/** The home directory the `~/` entries stand for in these tests (`input.kitDir` sits under it, as the real kit does). */
+const HOME = "/home";
+const expandHome = (p: string) => (p === "~" || p.startsWith("~/") ? `${HOME}${p.slice(1)}` : p);
 /**
  * Claude Code 2.1.292's sandbox path rules, as read from its binary (`Hqt`, `Mqt`, `yl`): a plain path is a `subpath` rule (itself and
  * everything under it); a glob becomes an anchored regex with `.^$+{}()|\` escaped (so `[^x]` is the positive class `[\^x]`), and a
- * deny glob also covers everything under what it matches.
+ * deny glob also covers everything under what it matches. `~/` is the home directory.
  */
 const globRegex = (g: string) =>
   `^${g
@@ -51,12 +57,14 @@ const globRegex = (g: string) =>
     .replace(/\?/g, "[^/]")
     .replace(/__GLOBSTAR_SLASH__/g, "(.*/)?")
     .replace(/__GLOBSTAR__/g, ".*")}$`;
-const covers = (pattern: string, path: string, rule: "allow" | "deny"): boolean =>
-  /[*?[\]]/.test(pattern)
+const covers = (raw: string, path: string, rule: "allow" | "deny"): boolean => {
+  const pattern = expandHome(raw);
+  return /[*?[\]]/.test(pattern)
     ? new RegExp(rule === "deny" ? `${globRegex(pattern).slice(0, -1)}(/.*)?$` : globRegex(pattern)).test(
         path,
       )
-    : path === pattern || path.startsWith(`${pattern}/`);
+    : path === pattern || path.startsWith(`${pattern.replace(/\/$/, "")}/`);
+};
 const coveredBy = (patterns: string[], path: string, rule: "allow" | "deny" = "allow") =>
   patterns.filter((p) => covers(p, path, rule));
 /** The prober's sibling names (F7), chosen to collide with the own `wm-jrf-404` by prefix; the own name in the list is skipped. */
@@ -134,6 +142,7 @@ describe("settings", () => {
     expect(s.sandbox.filesystem.allowRead).toEqual([
       "/wt/wm-jrf-404",
       "~/.local/share/wingmate/bin/**",
+      "/home/.local/share/wingmate/kit/JRF-404/**",
       "/repo/.git/**",
     ]);
     const t = claudeSettings({ ...input, childWorktrees: ["/wt/wm-jrf-404-worker-ab12"] }) as Settings;
@@ -143,18 +152,47 @@ describe("settings", () => {
       "/usr/bin",
       "/opt/homebrew",
       "~/.local/share/wingmate/bin/**",
+      "/home/.local/share/wingmate/kit/JRF-404/**",
       "/repo/.git/**",
     ]);
     expect(t.sandbox.filesystem.allowWrite).toContain("/wt/wm-jrf-404-worker-ab12");
   });
-  test("§13.3(a): the compiled binary is readable (so `wingmate issue …` runs); the rest of the state dir is not, and none of it is writable", () => {
+  test("§13.3(a): the compiled binary and this issue's kit dir are readable; the rest of the state dir is not, and none of it is writable", () => {
     const fs = (claudeSettings(input) as Settings).sandbox.filesystem;
     expect(fs.allowRead).toContain("~/.local/share/wingmate/bin/**");
     expect(fs.allowRead.filter((p) => p.includes(".local/share/wingmate"))).toEqual([
       "~/.local/share/wingmate/bin/**",
+      "/home/.local/share/wingmate/kit/JRF-404/**",
     ]);
     expect(fs.denyWrite).toContain("~/.local/share/wingmate/**");
     expect(fs.allowWrite.filter((p) => p.includes(".local/share/wingmate"))).toEqual([]);
+  });
+  test("F8: the issue's kit dir is readable (GIT_CONFIG_GLOBAL, GH_CONFIG_DIR and core.hooksPath point into it) and not writable", () => {
+    const fs = (claudeSettings(input) as Settings).sandbox.filesystem;
+    const env = agentEnv(input.kitDir);
+    const used = [
+      env.GIT_CONFIG_GLOBAL,
+      `${env.GH_CONFIG_DIR}/config.yml`,
+      `${input.kitDir}/no-hooks/pre-commit`,
+    ];
+    for (const p of [
+      ...used,
+      `${input.kitDir}/claude-settings.json`,
+      `${input.kitDir}/claude-settings.worker.json`,
+    ]) {
+      if (p === undefined) throw new Error("agentEnv lost a kit path");
+      expect(coveredBy(fs.denyRead, p, "deny")).toEqual(["~/"]); // inside the deny region …
+      expect(coveredBy(fs.allowRead, p)).toEqual(["/home/.local/share/wingmate/kit/JRF-404/**"]); // … carved out for reading
+      expect(coveredBy(fs.denyWrite, p, "deny")).toEqual(["~/.local/share/wingmate/**"]);
+      expect(coveredBy(fs.allowWrite, p)).toEqual([]);
+    }
+    // only this issue's kit: another issue's kit, the records and the credentials stay unreadable
+    for (const p of [
+      "/home/.local/share/wingmate/kit/JRF-405/gitconfig",
+      "/home/.local/share/wingmate/records/JRF-404.json",
+      "/home/.config/wingmate/credentials.json",
+    ])
+      expect(coveredBy(fs.allowRead, p)).toEqual([]);
   });
   test("git in the own linked worktree can commit: no denyWrite rule covers what a commit writes in the common dir", () => {
     const fs = (claudeSettings({ ...input, siblingGitdirs: [...SIBLINGS, "wm-jrf-404"] }) as Settings).sandbox
@@ -231,6 +269,86 @@ describe("settings", () => {
       `${common}/worktrees/wm-jrf-999`,
     ]);
     expect(siblingDenyWrite(join(root, "nope", ".git"), "wm-jrf-404")).toEqual([]);
+  });
+  test("F10: every other worktree's branch ref and its lock are denied by name; the own branch never is", () => {
+    const fs = (
+      claudeSettings({
+        ...input,
+        siblingGitdirs: [...SIBLINGS, "wm-jrf-404"],
+        siblingBranches: [
+          "main",
+          "furoyce/wm-jrf-999",
+          "furoyce/wm-jrf-40",
+          "owner/feature",
+          "furoyce/wm-jrf-404",
+          "furoyce",
+          "furoyce/wm-jrf-404/x",
+        ],
+      }) as Settings
+    ).sandbox.filesystem;
+    for (const b of ["main", "furoyce/wm-jrf-999", "furoyce/wm-jrf-40", "owner/feature"]) {
+      expect(fs.denyWrite).toContain(`/repo/.git/refs/heads/${b}`);
+      expect(fs.denyWrite).toContain(`/repo/.git/refs/heads/${b}.lock`);
+    }
+    expect(coveredBy(fs.denyWrite, "/repo/.git/refs/heads/owner/feature", "deny").length).toBeGreaterThan(0);
+    // the own branch, and a branch that is a path prefix or extension of it: a plain deny covers its subtree, and the sandbox
+    // denies creating or unlinking each deny's ancestors, so either would break the own ref update
+    for (const b of ["furoyce/wm-jrf-404", "furoyce", "furoyce/wm-jrf-404/x"]) {
+      expect(fs.denyWrite).not.toContain(`/repo/.git/refs/heads/${b}`);
+      expect(fs.denyWrite).not.toContain(`/repo/.git/refs/heads/${b}.lock`);
+    }
+    for (const p of COMMIT_WRITES) expect(coveredBy(fs.denyWrite, `/repo/.git/${p}`, "deny")).toEqual([]);
+    // a name the sandbox would read as a pattern cannot be denied exactly
+    for (const b of ["wip/[1]", "a{b}", "x/*", "a//b", "../x"])
+      expect(() => claudeSettings({ ...input, siblingBranches: [b] })).toThrow(/cannot be denied exactly/);
+    for (const b of ["", "*", "a//b", "../x"])
+      expect(() => claudeSettings({ ...input, branch: b })).toThrow(/branch/);
+  });
+  test("F10: the main checkout's MERGE_HEAD/ORIG_HEAD/FETCH_HEAD, submodule hooks and config, and legacy remotes/branches are denied", () => {
+    const fs = (claudeSettings(input) as Settings).sandbox.filesystem;
+    for (const t of ["MERGE_HEAD", "ORIG_HEAD", "FETCH_HEAD"]) {
+      expect(coveredBy(fs.denyWrite, `/repo/.git/${t}`, "deny")).toEqual([`/repo/.git/${t}`]);
+      // a merge, rebase or fetch in the own linked worktree writes these in its own gitdir (`git rev-parse --git-path`, git 2.53)
+      expect(coveredBy(fs.denyWrite, `/repo/.git/worktrees/wm-jrf-404/${t}`, "deny")).toEqual([]);
+    }
+    for (const p of [
+      "modules/sub/hooks/post-checkout",
+      "modules/a/modules/b/hooks/pre-commit",
+      "modules/sub/config",
+      "modules/a/modules/b/config",
+      "remotes/origin",
+      "branches/origin",
+    ])
+      expect(coveredBy(fs.denyWrite, `/repo/.git/${p}`, "deny").length).toBeGreaterThan(0);
+    // the own worktree's submodule gitdirs live in its own gitdir (`--git-path modules`), so they stay writable
+    for (const p of ["modules/sub/index", "modules/sub/HEAD", "modules/sub/config"])
+      expect(coveredBy(fs.denyWrite, `/repo/.git/worktrees/wm-jrf-404/${p}`, "deny")).toEqual([]);
+  });
+  test("F10: sibling branches are read from the main checkout's and every other worktree's HEAD; detached and own HEADs add none", async () => {
+    const root = mkdtempSync(join(tmpdir(), "wm-br-"));
+    const main = join(root, "main");
+    await run(["git", "init", "-q", "-b", "main", main]);
+    await run(["git", "-C", main, ...GIT_ID, "commit", "-q", "--allow-empty", "-m", "init"]);
+    const common = join(main, ".git");
+    for (const n of ["wm-jrf-404", "wm-jrf-405"])
+      expect(
+        (await run(["git", "-C", main, "worktree", "add", "-q", "-b", `furoyce/${n}`, join(root, n)])).code,
+      ).toBe(0);
+    expect((await run(["git", "-C", main, "worktree", "add", "-q", "--detach", join(root, "dt")])).code).toBe(
+      0,
+    );
+    expect(siblingBranches(common, "wm-jrf-404")).toEqual(["furoyce/wm-jrf-405", "main"]);
+    const fs = (claudeSettings({ ...input, commonDir: common }) as Settings).sandbox.filesystem;
+    expect(fs.denyWrite.filter((p) => p.startsWith(`${common}/refs/heads/`) && !p.includes("*"))).toEqual([
+      `${common}/refs/heads/furoyce/wm-jrf-405`,
+      `${common}/refs/heads/furoyce/wm-jrf-405.lock`,
+      `${common}/refs/heads/main`,
+      `${common}/refs/heads/main.lock`,
+    ]);
+    expect(fs.denyWrite.filter((p) => p.startsWith(`${common}/worktrees/`))).toEqual([
+      `${common}/worktrees/dt`,
+      `${common}/worktrees/wm-jrf-405`,
+    ]);
   });
   test("a gitdirName that is not one literal path component is refused: it would widen the own-gitdir grant", () => {
     for (const g of ["", ".", "..", "a/b", "*", "wm-[1]", "{a,b}"])
@@ -354,6 +472,9 @@ describe("settings", () => {
     ).toEqual(codexArgv({ model: "m", effort: "xhigh", worktreePath: "/wt", role: "coordinator" }));
     expect(agentEnv(input.kitDir)).toEqual({
       GH_TOKEN: "",
+      GITHUB_TOKEN: "",
+      GH_ENTERPRISE_TOKEN: "",
+      GITHUB_ENTERPRISE_TOKEN: "",
       GH_CONFIG_DIR: "/home/.local/share/wingmate/kit/JRF-404/gh-empty",
       GIT_CONFIG_NOSYSTEM: "1",
       GIT_CONFIG_GLOBAL: "/home/.local/share/wingmate/kit/JRF-404/gitconfig",
@@ -363,5 +484,157 @@ describe("settings", () => {
     expect(launchCommand(["claude", "--model", "a[1m]"], { GH_TOKEN: "", A: "b c" })).toBe(
       "GH_TOKEN='' A='b c' exec claude --model 'a[1m]'",
     );
+  });
+  test("F9: every token variable gh falls back to after GH_TOKEN is blanked", () => {
+    const env = agentEnv(input.kitDir);
+    for (const k of ["GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"])
+      expect(env[k]).toBe("");
+    expect(launchCommand(["claude"], env)).toStartWith(
+      "GH_TOKEN='' GITHUB_TOKEN='' GH_ENTERPRISE_TOKEN='' GITHUB_ENTERPRISE_TOKEN='' ",
+    );
+  });
+  test("F1: roleArgv — Claude runs with its role's kit settings file; tier standard has no --model/--effort; Codex via codexArgv", () => {
+    const base = { sessionId: "u1", worktreePath: "/wt" };
+    expect(roleSettingsFile(input.kitDir, "code-reviewer")).toBe(
+      "/home/.local/share/wingmate/kit/JRF-404/claude-settings.code-reviewer.json",
+    );
+    expect(
+      roleArgv({
+        ...base,
+        provider: "claude",
+        role: "code-reviewer",
+        tier: { model: "claude-fable-5-1[1m]", effort: "max" },
+        settingsFile: roleSettingsFile(input.kitDir, "code-reviewer"),
+      }),
+    ).toEqual([
+      "claude",
+      "--model",
+      "claude-fable-5-1[1m]",
+      "--effort",
+      "max",
+      "--session-id",
+      "u1",
+      "--permission-mode",
+      "bypassPermissions",
+      "--settings",
+      "/home/.local/share/wingmate/kit/JRF-404/claude-settings.code-reviewer.json",
+      "--strict-mcp-config",
+    ]);
+    // §9.2 tier standard (workers): the provider's own default model and effort
+    expect(
+      roleArgv({
+        ...base,
+        provider: "claude",
+        role: "worker",
+        tier: null,
+        settingsFile: roleSettingsFile(input.kitDir, "worker"),
+      }),
+    ).toEqual([
+      "claude",
+      "--session-id",
+      "u1",
+      "--permission-mode",
+      "bypassPermissions",
+      "--settings",
+      "/home/.local/share/wingmate/kit/JRF-404/claude-settings.worker.json",
+      "--strict-mcp-config",
+    ]);
+    const codex = { ...base, provider: "codex" as const, settingsFile: "unused" };
+    expect(roleArgv({ ...codex, role: "plan-verifier", tier: { model: "gpt-x", effort: "xhigh" } })).toEqual(
+      codexArgv({ model: "gpt-x", effort: "xhigh", worktreePath: "/wt", role: "plan-verifier" }),
+    );
+    expect(roleArgv({ ...codex, role: "security-reviewer", tier: { model: "g", effort: "e" } })).toContain(
+      "read-only",
+    );
+    expect(roleArgv({ ...codex, role: "worker", tier: null })).toEqual([
+      "codex",
+      "-C",
+      "/wt",
+      "-c",
+      "approval_policy=never",
+      "-c",
+      "project_doc_max_bytes=0",
+      "--sandbox",
+      "workspace-write",
+      "-c",
+      "sandbox_workspace_write.network_access=false",
+    ]);
+  });
+});
+
+describe("F13: shell quoting survives the login shell", () => {
+  const shells = ["/bin/zsh", "/bin/bash", "/bin/sh"].filter((s) => existsSync(s));
+  const shellArgv = (sh: string, line: string) => [sh, ...(sh.endsWith("zsh") ? ["-f"] : []), "-c", line];
+  /** mulberry32: a seeded PRNG, so the fuzz corpus is the same on every run. */
+  const prng = (seed: number) => {
+    let s = seed;
+    return () => {
+      s = (s + 0x6d2b79f5) | 0;
+      let t = Math.imul(s ^ (s >>> 15), 1 | s);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  };
+  const fuzz = (n: number): string[] => {
+    const rnd = prng(20261006);
+    const alphabet = "aZ09_./:,-= ~'\"[]1m$`*?!\\;|&(){}<>#%^@+\t\né";
+    const out: string[] = [];
+    for (let i = 0; i < n; i++) {
+      let w = "";
+      for (let k = Math.floor(rnd() * 12); k > 0; k--) w += alphabet[Math.floor(rnd() * alphabet.length)];
+      const r = rnd();
+      if (r < 0.25) w = `=${w}`;
+      else if (r < 0.5) w = `~${w}`;
+      if (rnd() < 0.3) w = `${w}[1m]`;
+      out.push(w);
+    }
+    return out;
+  };
+  test("leading = (zsh EQUALS) and ~ (tilde) are quoted; the safe charset stays bare", () => {
+    expect(shellQuote(["=ls", "=", "~", "~/x", "=claude-fable-5-1[1m]"])).toBe(
+      "'=ls' '=' '~' '~/x' '=claude-fable-5-1[1m]'",
+    );
+    expect(shellQuote(["--model=x", "a=b", "model_reasoning_effort=xhigh", "/k/x.json", "a,b:c"])).toBe(
+      "--model=x a=b model_reasoning_effort=xhigh /k/x.json a,b:c",
+    );
+  });
+  test("fuzz: = and ~ prefixes, spaces, quotes, globs and [1m] suffixes come back verbatim from zsh, bash and sh", async () => {
+    expect(shells.length).toBeGreaterThan(0);
+    const home = mkdtempSync(join(tmpdir(), "wm-home-")); // a tilde that leaks would expand to this, never the real home
+    const fixed = [
+      "=ls",
+      "=",
+      "~",
+      "~/x",
+      "~root",
+      "a=~/b",
+      "=claude-fable-5-1[1m]",
+      "~[1m]",
+      "it's",
+      "x y",
+      "",
+    ];
+    const words = [...fixed, ...fuzz(300)];
+    for (const sh of shells) {
+      const r = await run(shellArgv(sh, `printf '%s\\0' ${shellQuote(words)}`), { env: { HOME: home } });
+      expect({ sh, code: r.code, stderr: r.stderr }).toEqual({ sh, code: 0, stderr: "" });
+      expect(r.stdout.split("\0").slice(0, -1)).toEqual(words);
+    }
+  });
+  test("launchCommand: env values with = and ~ prefixes arrive verbatim; the owner's exported tokens arrive blank (F9)", async () => {
+    const home = mkdtempSync(join(tmpdir(), "wm-home-"));
+    const cmd = launchCommand(["/usr/bin/env"], { ...agentEnv("/k"), WM_A: "=x ~y", WM_B: "~/z" });
+    for (const sh of shells) {
+      const r = await run(shellArgv(sh, cmd), {
+        env: { HOME: home, GITHUB_TOKEN: "owner-token", GH_ENTERPRISE_TOKEN: "owner-token" },
+      });
+      expect(r.code).toBe(0);
+      const env = new Map(
+        r.stdout.split("\n").map((l) => [l.slice(0, l.indexOf("=")), l.slice(l.indexOf("=") + 1)]),
+      );
+      expect([env.get("WM_A"), env.get("WM_B")]).toEqual(["=x ~y", "~/z"]);
+      for (const k of ["GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"])
+        expect(env.get(k)).toBe("");
+    }
   });
 });

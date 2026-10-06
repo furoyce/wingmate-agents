@@ -1,15 +1,19 @@
-// src/kit/settings.ts — the dispatcher-owned Claude settings file, the explicit agent argv and the agent environment (§4.4, §13.3 b/c).
-import { readdirSync } from "node:fs";
+// src/kit/settings.ts — the dispatcher-owned Claude settings files, the explicit agent argv and the agent environment (§4.4, §8.1,
+// §13.3 b/c).
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { WingmateError } from "../shared/errors";
 
-export type Role =
-  | "coordinator"
-  | "plan-verifier"
-  | "code-reviewer"
-  | "security-reviewer"
-  | "ui-reviewer"
-  | "worker";
+/** The roles `wingmate issue spawn` launches (§8.1); each gets its own settings file in the kit dir. */
+export const SPAWN_ROLES = [
+  "plan-verifier",
+  "code-reviewer",
+  "security-reviewer",
+  "ui-reviewer",
+  "worker",
+] as const;
+export type SpawnRole = (typeof SPAWN_ROLES)[number];
+export type Role = "coordinator" | SpawnRole;
 export interface SettingsInput {
   worktreePath: string;
   childWorktrees: string[];
@@ -22,7 +26,9 @@ export interface SettingsInput {
   allowedDomains: string[];
   role: Role;
   /** Gitdir names under `<common>/worktrees/` to deny (the own one is skipped); omitted → listed from disk now (`siblingDenyWrite`). */
-  siblingGitdirs?: string[];
+  siblingGitdirs?: string[] | undefined;
+  /** Branches the other worktrees have checked out (the own one is skipped); omitted → read from their HEADs now (`siblingBranches`). */
+  siblingBranches?: string[] | undefined;
 }
 
 /** §13.3(b) browser verbs, plus the Orca 1.4.220 browser verbs the spec list predates; denied for every role but ui-reviewer. */
@@ -123,11 +129,29 @@ const WINGMATE_BIN_READ = "~/.local/share/wingmate/bin/**";
  * restricts (F7). Its own denies there cover `hooks`, `config(.lock)`, `config.worktree(.lock)`, `commondir`,
  * `objects/info/(http-)alternates` and each worktree's `config.worktree(.lock)` and `commondir` — nothing else.
  *
- * At the top level that leaves the main checkout's `HEAD` and `index` and the repo-wide `shallow` and `gc.pid`, denied here with
- * their locks: a commit in the own linked worktree writes none of them (its HEAD and index live in its gitdir). `packed-refs.lock`
- * stays writable because a commit takes it, so there is no `<common>/*.lock` deny.
+ * At the top level that leaves the main checkout's `HEAD`, `index`, `MERGE_HEAD`, `ORIG_HEAD` and `FETCH_HEAD` (a planted MERGE_HEAD
+ * turns the owner's next commit into a merge) and the repo-wide `shallow` and `gc.pid`, denied here (F7, F10): a commit, merge,
+ * rebase or fetch in the own linked worktree writes none of them — `git rev-parse --git-path` puts those in its gitdir (git 2.53).
+ * `packed-refs.lock` stays writable because a commit takes it, so there is no `<common>/*.lock` deny.
  */
-const COMMON_TOP_DENY = ["HEAD", "HEAD.lock", "index", "index.lock", "shallow", "shallow.lock", "gc.pid"];
+const COMMON_TOP_DENY = [
+  "HEAD",
+  "HEAD.lock",
+  "index",
+  "index.lock",
+  "shallow",
+  "shallow.lock",
+  "gc.pid",
+  "MERGE_HEAD",
+  "ORIG_HEAD",
+  "FETCH_HEAD",
+];
+/**
+ * Repo-wide state under `<common>` the grant leaves writable (F10): the main checkout's submodule gitdirs (`modules/`; their hooks
+ * and config run as the owner outside the sandbox — the own worktree's submodules live in its own gitdir) and the legacy remote
+ * definitions (`remotes/`, `branches/`).
+ */
+const COMMON_GLOB_DENY = ["modules/**/hooks/**", "modules/**/config", "remotes/**", "branches/**"];
 /**
  * One literal path component. The own gitdir's grant and every other worktree's deny are spelled from such names: a glob or brace
  * character would widen the grant (`""` gives `worktrees//**`) or turn a deny into a pattern that covers the own gitdir.
@@ -183,6 +207,106 @@ export function siblingDenyWrite(commonDir: string, gitdirName: string, names?: 
   return out;
 }
 
+/** A branch name the sandbox matches exactly: literal components (no glob or brace characters), none empty, `.` or `..`. */
+const isLiteralBranch = (b: string): boolean =>
+  b.length > 0 && b.split("/").every((p) => GITDIR_NAME.test(p));
+
+function assertBranch(branch: string): void {
+  if (!isLiteralBranch(branch))
+    throw new WingmateError(
+      "settings_invalid",
+      `branch ${JSON.stringify(branch)} is not a literal ref name`,
+      "record the worktree's branch before writing agent settings",
+    );
+}
+
+/** The branch a HEAD file names (`ref: refs/heads/<b>`); null when it is detached, absent or names no branch. */
+function headBranch(headFile: string): string | null {
+  let text: string;
+  try {
+    text = readFileSync(headFile, "utf8");
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") return null;
+    throw new WingmateError(
+      "settings_invalid",
+      `cannot read ${headFile}: ${(e as Error).message}`,
+      "check the repository's git common dir, then re-install the kit",
+    );
+  }
+  return /^ref: refs\/heads\/(.+?)\s*$/.exec(text)?.[1] ?? null;
+}
+
+/**
+ * The branches the main checkout (`<common>/HEAD`) and every other linked worktree (`<common>/worktrees/<n>/HEAD`) have checked out
+ * (F10). The own worktree's HEAD is never read: the agent can write it, so the own branch comes from the record.
+ */
+export function siblingBranches(commonDir: string, gitdirName: string, names?: readonly string[]): string[] {
+  const heads = [join(commonDir, "HEAD")];
+  for (const n of new Set(names ?? listWorktreeDirs(commonDir)))
+    if (n !== gitdirName && GITDIR_NAME.test(n)) heads.push(join(commonDir, "worktrees", n, "HEAD"));
+  return [...new Set(heads.map(headBranch).filter((b): b is string => b !== null))].sort();
+}
+
+/**
+ * F10: Claude's common-dir grant leaves `refs/heads/**` writable apart from the base branch, so each other worktree's branch ref is
+ * denied by name, with its lock (a planted lock blocks that worktree's commits). The own branch is never denied, nor a branch that is
+ * a path prefix or extension of it: a plain deny covers its subtree, and the sandbox denies creating or unlinking every deny's
+ * ancestors — either would break the own ref update.
+ */
+export function siblingBranchDenyWrite(
+  commonDir: string,
+  branch: string,
+  branches: readonly string[],
+): string[] {
+  assertBranch(branch);
+  const out: string[] = [];
+  for (const b of [...new Set(branches)].sort()) {
+    if (b === branch || branch.startsWith(`${b}/`) || b.startsWith(`${branch}/`)) continue;
+    if (!isLiteralBranch(b))
+      throw new WingmateError(
+        "settings_invalid",
+        `branch ${JSON.stringify(b)} checked out in another worktree of ${commonDir} is not a literal ref name, so it cannot be denied exactly`,
+        "rename that branch or remove its worktree, then re-install the kit",
+      );
+    out.push(`${commonDir}/refs/heads/${b}`, `${commonDir}/refs/heads/${b}.lock`);
+  }
+  return out;
+}
+
+/** The other worktrees' gitdir names and checked-out branches, read from disk once (so several settings files agree). */
+export function otherWorktrees(
+  commonDir: string,
+  gitdirName: string,
+): { gitdirs: string[]; branches: string[] } {
+  const gitdirs = listWorktreeDirs(commonDir).filter((n) => n !== gitdirName);
+  return { gitdirs, branches: siblingBranches(commonDir, gitdirName, gitdirs) };
+}
+
+/**
+ * The per-repo denies written last in `denyWrite` — the other worktrees' gitdirs, then their branches — which `installKit` lists at
+ * claim and `refreshSiblingDenies` re-lists before each launch. Omitted lists are read from disk now.
+ */
+export function siblingDenies(
+  commonDir: string,
+  gitdirName: string,
+  branch: string,
+  known: { gitdirs?: readonly string[] | undefined; branches?: readonly string[] | undefined } = {},
+): string[] {
+  return [
+    ...siblingDenyWrite(commonDir, gitdirName, known.gitdirs),
+    ...siblingBranchDenyWrite(
+      commonDir,
+      branch,
+      known.branches ?? siblingBranches(commonDir, gitdirName, known.gitdirs),
+    ),
+  ];
+}
+
+/** Whether a `denyWrite` entry is one of `siblingDenies` (what a refresh replaces): the static entries under `refs/heads/` are globs. */
+export const isSiblingDeny = (commonDir: string, p: string): boolean =>
+  p.startsWith(`${commonDir}/worktrees/`) || (p.startsWith(`${commonDir}/refs/heads/`) && !/[*?[\]]/.test(p));
+
 const covers = (pattern: string, host: string): boolean =>
   pattern.startsWith("*.") ? host === pattern || host.endsWith(pattern.slice(1)) : host === pattern;
 /** Case-insensitive: a blocked host, a host under a blocked `*.` wildcard, or an allowed wildcard that would cover a blocked host. */
@@ -195,7 +319,11 @@ export function claudeSettings(i: SettingsInput): object {
   const c = i.commonDir;
   const base = i.baseBranch.replace(/^origin\//, "");
   assertGitdirName(i.gitdirName);
-  const siblings = siblingDenyWrite(c, i.gitdirName, i.siblingGitdirs);
+  assertBranch(i.branch);
+  const siblings = siblingDenies(c, i.gitdirName, i.branch, {
+    gitdirs: i.siblingGitdirs,
+    branches: i.siblingBranches,
+  });
   const deny = [
     "Read(~/.config/wingmate/**)",
     "Read(~/.ssh/**)",
@@ -259,6 +387,9 @@ export function claudeSettings(i: SettingsInput): object {
           ...i.childWorktrees,
           ...i.toolchainPaths,
           WINGMATE_BIN_READ,
+          // F8: agentEnv points git and gh into this issue's kit (gitconfig, gh-empty, no-hooks); an unreadable
+          // GIT_CONFIG_GLOBAL kills git (EPERM, spike §3.4). Read only — `~/.local/share/wingmate/**` stays in denyWrite.
+          join(i.kitDir, "**"),
           join(c, "**"),
         ],
         // §13.3(b)'s grants in the common dir, each glob covering its own `.lock`. Claude grants a linked worktree's whole common
@@ -282,13 +413,14 @@ export function claudeSettings(i: SettingsInput): object {
           `${c}/refs/heads/${base}*`,
           `${c}/refs/remotes/**`,
           ...COMMON_TOP_DENY.map((n) => `${c}/${n}`),
+          ...COMMON_GLOB_DENY.map((g) => `${c}/${g}`),
           "~/.local/share/wingmate/**",
           "~/.config/wingmate/**",
           "~/.claude/**",
           "~/.codex/**",
           "~/.gitconfig",
           "~/.ssh/**",
-          // last, so `refreshSiblingDenies` re-lists them in place
+          // last, so `refreshSiblingDenies` re-lists them in place (`isSiblingDeny`)
           ...siblings,
         ],
       },
@@ -336,10 +468,13 @@ export const coordinatorArgv = (a: {
         role: "coordinator",
       });
 
-/** R8: `-c approval_policy=never` is accepted by both `codex` and `codex exec`; `--ask-for-approval` is rejected by `exec` (spike §3.5). */
+/**
+ * R8: `-c approval_policy=never` is accepted by both `codex` and `codex exec`; `--ask-for-approval` is rejected by `exec` (spike §3.5).
+ * A null model/effort (tier standard, §9.2) leaves the provider's own default in place.
+ */
 export const codexArgv = (a: {
-  model: string;
-  effort: string;
+  model: string | null;
+  effort: string | null;
   worktreePath: string;
   role: Role;
 }): string[] => {
@@ -352,10 +487,8 @@ export const codexArgv = (a: {
     "codex",
     "-C",
     a.worktreePath,
-    "--model",
-    a.model,
-    "-c",
-    `model_reasoning_effort=${a.effort}`,
+    ...(a.model ? ["--model", a.model] : []),
+    ...(a.effort ? ["-c", `model_reasoning_effort=${a.effort}`] : []),
     "-c",
     "approval_policy=never",
     "-c",
@@ -366,17 +499,70 @@ export const codexArgv = (a: {
   ];
 };
 
+/** The dispatcher-written settings file of a spawned role (§8.1): `<kit>/claude-settings.<role>.json`. */
+export const roleSettingsFile = (kitDir: string, role: SpawnRole): string =>
+  join(kitDir, `claude-settings.${role}.json`);
+
+/** Every spawned role's settings file, as `launch.json` records them for `spawn`. */
+export const roleSettingsFiles = (kitDir: string): Record<SpawnRole, string> => ({
+  "plan-verifier": roleSettingsFile(kitDir, "plan-verifier"),
+  "code-reviewer": roleSettingsFile(kitDir, "code-reviewer"),
+  "security-reviewer": roleSettingsFile(kitDir, "security-reviewer"),
+  "ui-reviewer": roleSettingsFile(kitDir, "ui-reviewer"),
+  worker: roleSettingsFile(kitDir, "worker"),
+});
+
+/**
+ * The argv `spawn` launches a role agent with (§8.1 amended 2026-10-06), so the §13.3(b)/(c) controls apply: Claude with the role's
+ * dispatcher-written settings file, Codex through `codexArgv` (`--sandbox read-only` for verifier and reviewer roles). `tier` null is
+ * tier standard (§9.2, workers): no `--model`/`--effort`, the provider's default.
+ */
+export const roleArgv = (a: {
+  provider: "claude" | "codex";
+  role: SpawnRole;
+  tier: { model: string; effort: string } | null;
+  sessionId: string;
+  settingsFile: string;
+  worktreePath: string;
+}): string[] =>
+  a.provider === "claude"
+    ? [
+        "claude",
+        ...(a.tier ? ["--model", a.tier.model, "--effort", a.tier.effort] : []),
+        "--session-id",
+        a.sessionId,
+        "--permission-mode",
+        "bypassPermissions",
+        "--settings",
+        a.settingsFile,
+        "--strict-mcp-config",
+      ]
+    : codexArgv({
+        model: a.tier?.model ?? null,
+        effort: a.tier?.effort ?? null,
+        worktreePath: a.worktreePath,
+        role: a.role,
+      });
+
 export const agentEnv = (kitDir: string): Record<string, string> => ({
   GH_TOKEN: "",
+  // gh falls back to these when GH_TOKEN is empty, so an owner shell exporting one would hand it to the agent (F9, §13.3 a)
+  GITHUB_TOKEN: "",
+  GH_ENTERPRISE_TOKEN: "",
+  GITHUB_ENTERPRISE_TOKEN: "",
   GH_CONFIG_DIR: join(kitDir, "gh-empty"),
   GIT_CONFIG_NOSYSTEM: "1",
   GIT_CONFIG_GLOBAL: join(kitDir, "gitconfig"),
   GIT_TERMINAL_PROMPT: "0",
 });
 
-/** POSIX single-quoting; `[`/`]` (as in `claude-fable-5-1[1m]`) must be quoted or zsh globs them. */
+const SHELL_SAFE = /^[A-Za-z0-9_./:=,-]+$/;
+/**
+ * POSIX single-quoting. `[`/`]` (as in `claude-fable-5-1[1m]`) must be quoted or zsh globs them; a word starting with `=` (zsh
+ * EQUALS expansion: `=cmd` becomes its path) or `~` (tilde expansion) is quoted although its characters are otherwise safe.
+ */
 export const shellQuote = (argv: string[]): string =>
-  argv.map((a) => (/^[A-Za-z0-9_./:=,-]+$/.test(a) ? a : `'${a.replace(/'/g, `'\\''`)}'`)).join(" ");
+  argv.map((a) => (SHELL_SAFE.test(a) && !/^[=~]/.test(a) ? a : `'${a.replace(/'/g, `'\\''`)}'`)).join(" ");
 
 /** The one line typed into the login shell Orca spawns: env assignments, then `exec` so the PTY ends with the agent (§4.4). */
 export const launchCommand = (argv: string[], env: Record<string, string>): string =>
