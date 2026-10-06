@@ -1,10 +1,9 @@
 // src/machine/outbox.ts — executes the intents the `issue` verbs wrote into the worktree (§6.3 step 2, §8.1), each re-validated
 // against the dispatcher's own record and Orca (§13.3 a), in order, with quarantine for files that can never execute.
-import { constants } from "node:fs";
 import { mkdir, open, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { type Intent, consumeIntent, quarantineIntent, readIntentFiles } from "../kit/intents";
-import { worktreeFile } from "../kit/local";
+import { type Intent, consumeIntent, outboxDirs, quarantineIntent, readIntentFiles } from "../kit/intents";
+import { O_READ_NOFOLLOW, worktreeFile } from "../kit/local";
 import { MARK } from "../linear/markers";
 import { renderQuestion } from "../linear/templates";
 import { OrcaError } from "../orca/cli";
@@ -18,7 +17,7 @@ import { LinearWrites } from "./linearWrites";
 import { syncMirror } from "./mirror";
 import type { Reconciled } from "./reconcile";
 import { coordinatorMarker } from "./resume";
-import { addAttention, enterPipelineStage, transition } from "./states";
+import { addAttention, dropAttention, enterPipelineStage, transition } from "./states";
 import { addNote, syncStatus } from "./status";
 
 type Of<K extends Intent["kind"]> = Extract<Intent, { kind: K }>;
@@ -56,9 +55,12 @@ const PASSED = new Set(["PASS", "NA"]);
 const isInfra = (e: unknown) =>
   e instanceof OrcaError || (e instanceof WingmateError && /^(linear|git|gh)_/.test(e.code));
 
-/** Reads an agent-named file that `worktreeFile` accepted, refusing a symlink swapped in since (O_NOFOLLOW), up to `max` bytes. */
+/**
+ * Reads an agent-named file that `worktreeFile` accepted, refusing a symlink swapped in since — as the file (O_NOFOLLOW) or, on
+ * macOS, as any directory of its path (O_NOFOLLOW_ANY, F7) — up to `max` bytes.
+ */
 async function readNoFollow(abs: string, max: number): Promise<Buffer> {
-  const fh = await open(abs, constants.O_RDONLY | constants.O_NOFOLLOW);
+  const fh = await open(abs, O_READ_NOFOLLOW);
   try {
     const buf = Buffer.alloc(max);
     const { bytesRead } = await fh.read(buf, 0, max, 0);
@@ -320,6 +322,44 @@ async function runIntent(x: Run, i: Intent): Promise<boolean> {
   return true;
 }
 
+async function drain(x: Run, opts: OutboxOptions): Promise<void> {
+  // F7: every directory a move lands in is checked first, so an intent that could not be consumed never executes
+  for (const sub of ["done", "invalid", "failed"] as const) await outboxDirs(x.wt, sub);
+  dropAttention(x.r, "outbox_unsafe");
+  const { intents, invalid } = await readIntentFiles(x.wt);
+  for (const bad of invalid) await quarantine(x, bad.file, "invalid", { error: bad.error.slice(0, 200) });
+  for (const i of intents) {
+    if (i.issue !== x.r.identifier) {
+      await quarantine(x, `${i.id}.json`, "invalid", { error: `an intent for ${i.issue}` });
+      continue;
+    }
+    if (i.kind === "handoff" && !opts.canHandoff) break; // stays pending for a later tick
+    if (!(await runIntent(x, i))) break;
+    if (x.res.parked || x.res.handoff || x.res.finished) break;
+  }
+}
+
+/** F7: an outbox (or one of its subdirectories) that is a symlink or not a directory is never read or moved into: surfaced only. */
+async function unsafeOutbox(x: Run, e: unknown): Promise<void> {
+  addAttention(x.r, "outbox_unsafe");
+  await x.ctx.ledger.append({
+    at: x.ctx.now(),
+    issue: x.r.identifier,
+    type: "outbox_unsafe",
+    data: { error: errorText(e).slice(0, 200) },
+  });
+  x.ctx.log.warn({ issue: x.r.identifier, code: "outbox_unsafe" }, "outbox refused");
+}
+
+async function pendingCount(x: Run): Promise<number> {
+  try {
+    return (await readIntentFiles(x.wt)).intents.length;
+  } catch (e) {
+    if (errorCode(e) !== "outbox_unsafe") throw e;
+    return x.r.outbox.pending;
+  }
+}
+
 export async function executeOutbox(
   ctx: Ctx,
   r: WRecord,
@@ -337,18 +377,13 @@ export async function executeOutbox(
   };
   if (!r.worktree) return res;
   const x: Run = { ctx, r, issue, rec, wt: r.worktree.path, res, w: new LinearWrites(ctx) };
-  const { intents, invalid } = await readIntentFiles(x.wt);
-  for (const bad of invalid) await quarantine(x, bad.file, "invalid", { error: bad.error.slice(0, 200) });
-  for (const i of intents) {
-    if (i.issue !== r.identifier) {
-      await quarantine(x, `${i.id}.json`, "invalid", { error: `an intent for ${i.issue}` });
-      continue;
-    }
-    if (i.kind === "handoff" && !opts.canHandoff) break; // stays pending for a later tick
-    if (!(await runIntent(x, i))) break;
-    if (res.parked || res.handoff || res.finished) break;
+  try {
+    await drain(x, opts);
+  } catch (e) {
+    if (errorCode(e) !== "outbox_unsafe") throw e;
+    await unsafeOutbox(x, e);
   }
-  r.outbox = { pending: (await readIntentFiles(x.wt)).intents.length, lastDrainedAt: ctx.now() };
+  r.outbox = { pending: await pendingCount(x), lastDrainedAt: ctx.now() };
   await syncMirror(r);
   await writeRecord(ctx.dirs, r);
   if (res.executed + res.failed > 0) await syncStatus(ctx, r, issue); // Ruling R1: only when an intent ran

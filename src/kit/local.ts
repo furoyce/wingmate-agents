@@ -1,7 +1,8 @@
 // src/kit/local.ts — the agent-side mirror under <worktree>/.wingmate/: advisory for the dispatcher, authoritative for the
 // verbs' local checks (§8.0). Every file is Zod-parsed; a parse failure names the file instead of defaulting.
-import { lstat, realpath } from "node:fs/promises";
-import { isAbsolute, join, normalize, sep } from "node:path";
+import { constants } from "node:fs";
+import { lstat, mkdir, realpath, rename } from "node:fs/promises";
+import { isAbsolute, join, normalize, relative, sep } from "node:path";
 import { z } from "zod";
 import { WingmateError } from "../shared/errors";
 import { readText, writeAtomic } from "../state/fs";
@@ -223,5 +224,80 @@ export async function worktreeFile(
   const resolved = await Promise.all([realpath(wt), realpath(abs)]).catch(() => null);
   if (!resolved || !resolved[1].startsWith(`${resolved[0]}${sep}`))
     return { ok: false, error: `${rel} resolves outside the worktree` };
-  return { ok: true, rel, abs };
+  // the real path: an `O_NOFOLLOW_ANY` read of it then refuses any symlink swapped into the path after this check (F7)
+  return { ok: true, rel, abs: resolved[1] };
+}
+
+/**
+ * open(2) flags for reading an agent-named file without following a symlink. On macOS `O_NOFOLLOW_ANY` (sys/fcntl.h, 0x20000000)
+ * refuses a symlink anywhere in the path (ELOOP), so a directory swapped for a symlink after a check cannot redirect the read; it
+ * covers the last component too and must not be combined with `O_NOFOLLOW` (EINVAL). Elsewhere `O_NOFOLLOW` guards the file only.
+ */
+export const O_READ_NOFOLLOW =
+  process.platform === "darwin" ? constants.O_RDONLY | 0x20000000 : constants.O_RDONLY | constants.O_NOFOLLOW;
+const RENAME_NOFOLLOW_ANY = 0x10; // macOS sys/stdio.h, for renamex_np
+
+const unsafe = (msg: string) =>
+  new WingmateError("outbox_unsafe", msg, "the outbox and its subdirectories must be plain directories");
+
+/**
+ * F7: a directory under the worktree that the dispatcher reads or moves files into (`.wingmate/outbox` and its `invalid/`,
+ * `failed/`, `done/`). Every component below the worktree must be a real directory, never a symlink, and the result must resolve
+ * inside the worktree (realpath containment, as `worktreeFile` does for files). Missing components are created when `create`.
+ * Returns the real absolute path; anything else is `outbox_unsafe`.
+ */
+export async function worktreeDir(wt: string, rel: string, create = false): Promise<string> {
+  const root = await realpath(wt);
+  let cur = root;
+  for (const part of rel.split("/")) {
+    cur = join(cur, part);
+    let st = await lstat(cur).catch(() => null);
+    if (!st && create) {
+      await mkdir(cur).catch((e: NodeJS.ErrnoException) => {
+        if (e.code !== "EEXIST") throw e;
+      });
+      st = await lstat(cur).catch(() => null);
+    }
+    const what = !st
+      ? "missing"
+      : st.isSymbolicLink()
+        ? "a symlink"
+        : st.isDirectory()
+          ? null
+          : "not a directory";
+    if (what) throw unsafe(`${rel}: ${relative(root, cur)} is ${what}`);
+  }
+  if ((await realpath(cur)) !== cur) throw unsafe(`${rel} resolves outside the worktree`);
+  return cur;
+}
+
+type RenameNoFollow = (from: string, to: string) => number;
+let renamer: Promise<RenameNoFollow | null> | null = null;
+
+/** macOS renamex_np(RENAME_NOFOLLOW_ANY) through Bun's built-in FFI, loaded on first use; null on other platforms. */
+function noFollowRenamer(): Promise<RenameNoFollow | null> {
+  renamer ??= (async () => {
+    if (process.platform !== "darwin") return null;
+    const { dlopen, FFIType } = await import("bun:ffi");
+    const lib = dlopen("/usr/lib/libSystem.B.dylib", {
+      renamex_np: { args: [FFIType.ptr, FFIType.ptr, FFIType.u32], returns: FFIType.i32 },
+    });
+    const c = (s: string) => Buffer.from(`${s}\0`, "utf8");
+    return (from: string, to: string) => lib.symbols.renamex_np(c(from), c(to), RENAME_NOFOLLOW_ANY);
+  })();
+  return renamer;
+}
+
+/**
+ * F7: moves `name` between two directories `worktreeDir` checked. On macOS the rename itself refuses a symlink anywhere in
+ * either path (RENAME_NOFOLLOW_ANY), so a directory the agent swaps for a symlink between the check and the move still cannot
+ * send an agent-written file outside the worktree; a symlink named `name` is moved as the link, never followed.
+ */
+export async function renameInWorktree(fromDir: string, toDir: string, name: string): Promise<void> {
+  const from = join(fromDir, name);
+  const to = join(toDir, name);
+  await lstat(from); // a file already gone keeps its ENOENT
+  const rx = await noFollowRenamer();
+  if (!rx) return rename(from, to);
+  if (rx(from, to) !== 0) throw unsafe(`${name} was not moved: a symlink in its path, or the file is gone`);
 }

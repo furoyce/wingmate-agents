@@ -1,8 +1,35 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  rmSync,
+  rmdirSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { consumeIntent, listIntents, writeIntent } from "../../../src/kit/intents";
+import {
+  consumeIntent,
+  listIntents,
+  quarantineIntent,
+  readIntentFiles,
+  writeIntent,
+} from "../../../src/kit/intents";
+import { renameInWorktree, worktreeDir } from "../../../src/kit/local";
+
+/** A worktree and a directory outside it (the kit dir an agent would aim a planted symlink at). */
+function sandbox() {
+  const root = mkdtempSync(join(tmpdir(), "wm-f7-"));
+  const wt = join(root, "wt");
+  const outside = join(root, "kit");
+  mkdirSync(join(wt, ".wingmate", "outbox"), { recursive: true });
+  mkdirSync(outside, { recursive: true });
+  return { wt, outside, box: join(wt, ".wingmate", "outbox") };
+}
+const PERMISSIVE = JSON.stringify({ sandbox: { enabled: false, filesystem: { denyWrite: [] } } });
 
 describe("intents", () => {
   test("write → list (ordered) → consume moves to done/", async () => {
@@ -61,4 +88,99 @@ describe("intents", () => {
     await expect(consumeIntent(wt, "../../etc/passwd")).rejects.toThrow(/intent_invalid/);
     expect(existsSync(join(wt, ".wingmate", "outbox", "done"))).toBe(false);
   });
+});
+
+describe("F7: outbox moves never follow an agent-planted symlink", () => {
+  test("a symlinked outbox/invalid refuses the quarantine (outbox_unsafe); nothing lands in the directory it points at", async () => {
+    const { wt, outside, box } = sandbox();
+    symlinkSync(outside, join(box, "invalid"));
+    writeFileSync(join(box, "claude-settings.json"), PERMISSIVE);
+    await expect(quarantineIntent(wt, "claude-settings.json", "invalid")).rejects.toMatchObject({
+      code: "outbox_unsafe",
+    });
+    expect(readdirSync(outside)).toEqual([]);
+    expect(existsSync(join(box, "claude-settings.json"))).toBe(true);
+  });
+
+  test("a symlinked outbox/done refuses the consume; a symlinked outbox/failed refuses the quarantine", async () => {
+    const { wt, outside, box } = sandbox();
+    const i = await writeIntent(wt, { issue: "JRF-1", kind: "note", payload: { text: "a" } });
+    symlinkSync(outside, join(box, "done"));
+    await expect(consumeIntent(wt, i.id)).rejects.toMatchObject({ code: "outbox_unsafe" });
+    symlinkSync(outside, join(box, "failed"));
+    await expect(quarantineIntent(wt, `${i.id}.json`, "failed")).rejects.toMatchObject({
+      code: "outbox_unsafe",
+    });
+    expect(readdirSync(outside)).toEqual([]);
+    expect(existsSync(join(box, `${i.id}.json`))).toBe(true);
+  });
+
+  test("a symlinked outbox (or .wingmate) is never read, listed into, or written", async () => {
+    const { wt, outside } = sandbox();
+    const good = await writeIntent(join(outside, ".."), {
+      issue: "JRF-1",
+      kind: "note",
+      payload: { text: "x" },
+    });
+    const target = join(outside, "..", ".wingmate", "outbox");
+    const box = join(wt, ".wingmate", "outbox");
+    rmSync(box, { recursive: true });
+    symlinkSync(target, box);
+    await expect(readIntentFiles(wt)).rejects.toMatchObject({ code: "outbox_unsafe" });
+    await expect(consumeIntent(wt, good.id)).rejects.toMatchObject({ code: "outbox_unsafe" });
+    expect(existsSync(join(target, `${good.id}.json`))).toBe(true);
+    const wt2 = mkdtempSync(join(tmpdir(), "wm-f7b-"));
+    symlinkSync(outside, join(wt2, ".wingmate"));
+    await expect(readIntentFiles(wt2)).rejects.toMatchObject({ code: "outbox_unsafe" });
+    expect(readdirSync(outside)).toEqual([]);
+  });
+
+  test("an intent file that is a symlink is reported invalid and never followed", async () => {
+    const { wt, outside, box } = sandbox();
+    const real = await writeIntent(join(outside, ".."), {
+      issue: "JRF-1",
+      kind: "note",
+      payload: { text: "x" },
+    });
+    const src = join(outside, "..", ".wingmate", "outbox", `${real.id}.json`);
+    symlinkSync(src, join(box, `${real.id}.json`));
+    const { intents, invalid } = await readIntentFiles(wt);
+    expect(intents).toEqual([]);
+    expect(invalid.map((x) => x.file)).toEqual([`${real.id}.json`]);
+    expect(invalid[0]?.error).toMatch(/symlink/);
+    await quarantineIntent(wt, `${real.id}.json`, "invalid"); // moves the link itself, never its target
+    expect(existsSync(src)).toBe(true);
+  });
+
+  test("worktreeDir creates missing components and refuses one that is a symlink or a file", async () => {
+    const { wt, outside, box } = sandbox();
+    const made = await worktreeDir(wt, ".wingmate/outbox/done", true);
+    expect(made.endsWith(join(".wingmate", "outbox", "done"))).toBe(true);
+    symlinkSync(outside, join(box, "invalid"));
+    await expect(worktreeDir(wt, ".wingmate/outbox/invalid", true)).rejects.toMatchObject({
+      code: "outbox_unsafe",
+      message: expect.stringContaining("symlink"),
+    });
+    writeFileSync(join(box, "failed"), "x");
+    await expect(worktreeDir(wt, ".wingmate/outbox/failed", true)).rejects.toMatchObject({
+      code: "outbox_unsafe",
+    });
+  });
+
+  test.if(process.platform === "darwin")(
+    "the rename itself refuses a directory swapped for a symlink after the check (macOS RENAME_NOFOLLOW_ANY)",
+    async () => {
+      const { wt, outside, box } = sandbox();
+      const from = await worktreeDir(wt, ".wingmate/outbox");
+      const to = await worktreeDir(wt, ".wingmate/outbox/invalid", true);
+      rmdirSync(to);
+      symlinkSync(outside, to); // the agent wins the race: the checked directory is now a symlink
+      writeFileSync(join(box, "settings.json"), PERMISSIVE);
+      await expect(renameInWorktree(from, to, "settings.json")).rejects.toMatchObject({
+        code: "outbox_unsafe",
+      });
+      expect(readdirSync(outside)).toEqual([]);
+      expect(existsSync(join(box, "settings.json"))).toBe(true);
+    },
+  );
 });

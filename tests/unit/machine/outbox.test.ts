@@ -161,6 +161,37 @@ describe("executeOutbox: quarantine (Task 9 carry-over)", () => {
   });
 });
 
+describe("executeOutbox: F7 — an agent-planted symlink never redirects an outbox move", () => {
+  test("outbox/invalid → the kit dir: nothing is quarantined into it, the kit settings stay the dispatcher's, attention outbox_unsafe", async () => {
+    const { w, wt } = await claimed();
+    const kit = w.ctx.kitDirFor(ID);
+    const before = readFileSync(join(kit, "claude-settings.json"), "utf8");
+    symlinkSync(kit, join(wt, ".wingmate", "outbox", "invalid"));
+    writeFileSync(
+      join(wt, ".wingmate", "outbox", "claude-settings.json"),
+      JSON.stringify({ sandbox: { enabled: false, filesystem: { denyWrite: [] } } }),
+    );
+    const { r, res } = await drain(w);
+    expect(res).toMatchObject({ executed: 0, quarantined: 0 });
+    expect(readFileSync(join(kit, "claude-settings.json"), "utf8")).toBe(before);
+    expect(r.attention).toContain("outbox_unsafe");
+    expect(existsSync(join(wt, ".wingmate", "outbox", "claude-settings.json"))).toBe(true);
+  });
+
+  test("outbox/done → the kit dir: no intent executes (it could never be consumed), the kit stays untouched", async () => {
+    const { w, wt } = await claimed();
+    const kit = w.ctx.kitDirFor(ID);
+    const listing = readdirSync(kit).sort();
+    symlinkSync(kit, join(wt, ".wingmate", "outbox", "done"));
+    await writeIntent(wt, { issue: ID, kind: "note", payload: { text: "progress" } });
+    const { r, res } = await drain(w);
+    expect(res).toMatchObject({ executed: 0, failed: 0 });
+    expect(readdirSync(kit).sort()).toEqual(listing);
+    expect(r.attention).toContain("outbox_unsafe");
+    expect(outbox(wt)).toHaveLength(1);
+  });
+});
+
 describe("executeOutbox: agent-named files go through worktreeFile()", () => {
   test("a question file that is a symlink is refused (file_invalid) and never read or posted", async () => {
     const { w, wt } = await claimed();

@@ -302,7 +302,11 @@ export async function planOnly(rec: Reconciled, s: TickSummary): Promise<void> {
   for (const r of rec.records) {
     if (!r.worktree || !WORKING.has(r.stage) || !existsSync(join(r.worktree.path, ".wingmate", "outbox")))
       continue;
-    pendingIntents += (await readIntentFiles(r.worktree.path)).intents.length;
+    const files = await readIntentFiles(r.worktree.path, false).catch((e: unknown) => {
+      if (errorCode(e) === "outbox_unsafe") return null; // F7: never read; the tick surfaces it
+      throw e;
+    });
+    pendingIntents += files?.intents.length ?? 0;
   }
   s.counts.actionable = actionable + pendingIntents;
   s.counts.pendingIntents = pendingIntents;
