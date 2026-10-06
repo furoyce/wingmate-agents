@@ -18,4 +18,15 @@ describe("parseArgv", () => {
     expect(parseArgv(["x", "--a", "--b", "v"]).flags).toEqual({ a: true, b: "v" });
     expect(parseArgv(["x", "--note=-1"]).flags).toEqual({ note: "-1" });
   });
+  test("F16: a repeated flag accumulates its values in order instead of keeping only the last", () => {
+    expect(parseArgv(["finish", "--repo", "a", "--repo", "b,c", "--repo=d", "--draft"]).flags).toEqual({
+      repo: ["a", "b,c", "d"],
+      draft: true,
+    });
+    expect(parseArgv(["x", "--repo", "a"]).flags).toEqual({ repo: "a" }); // a single value stays a string
+    expect(parseArgv(["x", "--draft", "--draft"]).flags).toEqual({ draft: true });
+    // a valueless occurrence of a valued flag is malformed: the flag becomes `true`, which the verbs refuse
+    expect(parseArgv(["x", "--repo", "a", "--repo"]).flags).toEqual({ repo: true });
+    expect(parseArgv(["x", "--repo", "--repo", "a"]).flags).toEqual({ repo: true });
+  });
 });

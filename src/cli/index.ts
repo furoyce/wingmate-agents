@@ -1,12 +1,21 @@
 // src/cli/index.ts — hand-rolled argv parsing and command dispatch (Appendix A of the spec).
 import { WingmateError } from "../shared/errors";
+/** A flag given once is its value (or `true` without one); given again, its values accumulate in order (`--repo a --repo b`). */
+export type FlagValue = string | boolean | string[];
 export interface Argv {
   cmd: string[];
-  flags: Record<string, string | boolean>;
+  flags: Record<string, FlagValue>;
+}
+/** A repeated flag's values accumulate; a valueless occurrence among them makes the flag `true` (malformed, so callers refuse it). */
+function addFlag(flags: Record<string, FlagValue>, k: string, v: string | true): void {
+  const cur = flags[k];
+  if (cur === undefined) flags[k] = v;
+  else if (typeof cur === "boolean" || v === true) flags[k] = true;
+  else flags[k] = [...(Array.isArray(cur) ? cur : [cur]), v];
 }
 export function parseArgv(args: string[]): Argv {
   const cmd: string[] = [];
-  const flags: Record<string, string | boolean> = {};
+  const flags: Record<string, FlagValue> = {};
   for (let i = 0; i < args.length; i++) {
     const a = args[i] as string;
     if (a.startsWith("--")) {
@@ -15,11 +24,11 @@ export function parseArgv(args: string[]): Argv {
       const k = eq >= 0 ? body.slice(0, eq) : body;
       const v = eq >= 0 ? body.slice(eq + 1) : undefined; // everything after the first '=' (values may contain '=')
       const next = args[i + 1];
-      if (v !== undefined) flags[k] = v;
+      if (v !== undefined) addFlag(flags, k, v);
       else if (next !== undefined && !next.startsWith("--")) {
-        flags[k] = next;
+        addFlag(flags, k, next);
         i++;
-      } else flags[k] = true;
+      } else addFlag(flags, k, true);
     } else cmd.push(a);
   }
   return { cmd, flags };

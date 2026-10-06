@@ -23,8 +23,9 @@ export interface IssueDeps {
   cwd?: string;
   /**
    * Orca access. Absent → the real Orca. Injected (tests) → exactly what is given, never the real binary: `workerList` backs the
-   * `workers_live` check of `ask`/`finish`; `exec` runs the Orca verbs of `spawn` (`account list`, `run-create`, `worker-start`)
-   * and `ui-smoke` (browser verbs); `agentContext` reads `orca agent-context --json`. A missing member refuses `orca_unavailable`.
+   * `workers_live` check of `ask`/`finish`; `exec` runs the Orca verbs of `spawn` (`account list`, `run-create`, `terminal
+   * create|wait|send|close`, `worker-start`) and `ui-smoke` (browser verbs); `agentContext` reads `orca agent-context --json`. A
+   * missing member refuses `orca_unavailable`.
    */
   orca?: {
     workerList(runId: string): Promise<WorkerRow[]>;
@@ -46,6 +47,8 @@ const refuse: Refuse = (code, message, nextStep) => {
 const flag = (a: Argv, k: string): string | null =>
   typeof a.flags[k] === "string" ? (a.flags[k] as string) : null;
 const FINISH_GATES = ["intake", "plan", "planVerify", "implement", "validate", "ui", "security"];
+/** Flags a verb accepts more than once (§8.1: `finish … [--repo <name>]…`); any other repeated flag is refused. */
+const REPEATABLE: Record<string, string[]> = { finish: ["repo"] };
 const END_TURN = "END YOUR TURN NOW";
 const USAGE = "issue [<id>] gate|ask|note|spawn|run|finish|handoff|followup|ui-smoke|show|log …";
 
@@ -98,15 +101,18 @@ async function askVerb(c: Ctx): Promise<number> {
   const known = target ? c.local.questions.find((q) => q.id === target) : undefined;
   if (target && !known)
     return refuse("unknown_question", `no question ${target} in .wingmate/questions.json`);
+  // the hints are the exact commands `ask` accepts: it needs --question-file with --append/--reask too (F12)
+  const hint = (mode: "append" | "reask", qid: string) =>
+    `wingmate issue ${c.id} ask --${mode} ${qid} --question-file <path>`;
   if (append && known?.status !== "open")
     return refuse(
       "question_not_open",
       `question ${append} is ${known?.status ?? "unknown"}`,
-      `use --reask ${append}`,
+      hint("reask", append),
     );
   const open = c.local.questions.find((q) => q.status === "open");
   if (open && open.id !== target)
-    return refuse("question_open", `question ${open.id} is unanswered`, `use ask --append ${open.id}`);
+    return refuse("question_open", `question ${open.id} is unanswered`, hint("append", open.id));
   const options = (flag(c.argv, "options") ?? "")
     .split(",")
     .map((s) => s.trim())
@@ -163,10 +169,25 @@ async function nothingToPublish(cwd: string): Promise<boolean> {
   return r.code === 0 && r.stdout.trim() === "0";
 }
 
+/** Every `--repo` value, repeated or comma-separated (§8.1 `[--repo <name>]…`), de-duplicated in order; null when malformed. */
+function repoList(v: Argv["flags"][string] | undefined): string[] | null {
+  if (typeof v === "boolean") return null;
+  const values = v === undefined ? [] : Array.isArray(v) ? v : [v];
+  return [
+    ...new Set(
+      values
+        .flatMap((x) => x.split(","))
+        .map((s) => s.trim())
+        .filter(Boolean),
+    ),
+  ];
+}
+
 async function finishVerb(c: Ctx): Promise<number> {
   const sf = flag(c.argv, "summary-file");
-  if (!sf || c.argv.flags.repo === true)
-    return refuse("usage", "finish --summary-file <path> [--title …] [--draft] [--repo <name>[,<name>…]]");
+  const repos = repoList(c.argv.flags.repo);
+  if (!sf || repos === null)
+    return refuse("usage", "finish --summary-file <path> [--title …] [--draft] [--repo <name>[,<name>…]]…");
   const live = await workersLive(c);
   if (live.length)
     return refuse("workers_live", live.join(","), "orca orchestration check --wait … or worker-stop");
@@ -187,10 +208,6 @@ async function finishVerb(c: Ctx): Promise<number> {
       "the branch has no commits beyond its base SHA",
       "commit the work, re-gate, finish",
     );
-  const repos = (flag(c.argv, "repo") ?? "")
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
   await writeIntent(c.cwd, {
     issue: c.id,
     kind: "finish",
@@ -294,8 +311,19 @@ async function dispatch(argv: Argv, deps: IssueDeps): Promise<number> {
     );
   // `<id>` defaults to the worktree's issue (§8.1); normalize to `issue <id> <verb> …` so positionals sit at fixed offsets.
   const a: Argv = hasId ? argv : { ...argv, cmd: [top ?? "issue", id, ...argv.cmd.slice(1)] };
-  const verb = VERBS.get(a.cmd[2] ?? "");
+  const name = a.cmd[2] ?? "";
+  const verb = VERBS.get(name);
   if (!verb) return refuse("usage", USAGE);
+  // F16: a single-valued flag given twice is ambiguous — refused rather than resolved to one of its values
+  const repeated = Object.keys(a.flags).filter(
+    (k) => Array.isArray(a.flags[k]) && !(REPEATABLE[name] ?? []).includes(k),
+  );
+  if (repeated.length)
+    return refuse(
+      "usage",
+      `--${repeated.join(", --")} may be given only once`,
+      `wingmate issue ${id} ${name} …`,
+    );
   return verb({ argv: a, cwd, local, id, orca: deps.orca ?? realOrca() });
 }
 
@@ -306,6 +334,12 @@ export async function issueCommand(argv: Argv, deps: IssueDeps = {}): Promise<nu
     if (e instanceof WingmateError) return refuse(e.code, e.message, e.nextStep);
     if (e instanceof OrcaError)
       return refuse(e.code, `orca: ${e.message}`, "retry once; if Orca stays unreachable, ask");
-    throw e;
+    // F11: anything else is a defect, still reported through the refusal contract (exit 2, no stack trace on stdout)
+    const message = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+    return refuse(
+      "internal_error",
+      message.slice(0, 500),
+      "retry once; if it fails again, ask the owner, quoting this code and message",
+    );
   }
 }

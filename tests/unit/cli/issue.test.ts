@@ -533,6 +533,81 @@ describe("wingmate issue", () => {
     expect(touched.length).toBeGreaterThan(0);
     expect(touched.filter((k) => !k.startsWith(".wingmate/"))).toEqual([]);
   });
+
+  test("F11: an unexpected error is still the JSON refusal contract (internal_error, exit 2), never a stack trace", async () => {
+    const wt = await worktree();
+    writeFileSync(join(wt, ".wingmate", "q.md"), "Which unit?");
+    expect((await runVerb(wt, ["run", "--id", "run_1"])).code).toBe(0); // a child Run → ask consults workerList
+    const failing = (thrown: unknown) => ({
+      workerList: async (): Promise<WorkerRow[]> => {
+        throw thrown;
+      },
+    });
+    for (const [thrown, message] of [
+      [new TypeError("Cannot read properties of undefined (reading 'verdict')"), "TypeError: Cannot read"],
+      ["a bare string", "a bare string"],
+    ] as const) {
+      const r = await runVerb(wt, ["ask", "--question-file", ".wingmate/q.md"], { orca: failing(thrown) });
+      const o = refusal(r); // exit 2, exactly { ok, code, message, nextStep }
+      expect(o.code).toBe("internal_error");
+      expect(o.message).toStartWith(message);
+      expect(o.nextStep).toContain("ask the owner");
+      expect(r.out.trim().split("\n")).toHaveLength(1); // one JSON line on stdout …
+      expect(r.out).not.toMatch(/\n\s+at /); // … with no stack frames
+    }
+  });
+
+  test("F12: the question_open and question_not_open hints are commands ask accepts as printed", async () => {
+    const wt = await worktree();
+    writeFileSync(join(wt, ".wingmate", "q.md"), "Which unit?");
+    writeFileSync(join(wt, ".wingmate", "q2.md"), "And which scale?");
+    const { questionId } = JSON.parse(
+      (await runVerb(wt, ["ask", "--question-file", ".wingmate/q.md"])).out,
+    ) as {
+      questionId: string;
+    };
+    /** Runs a printed `wingmate issue <id> …` hint verbatim, with `<path>` filled in. */
+    const follow = (hint: string | null) => {
+      const words = (hint ?? "").replace("<path>", ".wingmate/q2.md").split(" ");
+      expect(words.slice(0, 3)).toEqual(["wingmate", "issue", "JRF-404"]);
+      return runVerb(wt, words.slice(3));
+    };
+    const open = refusal(await runVerb(wt, ["ask", "--question-file", ".wingmate/q2.md"]));
+    expect(open.code).toBe("question_open");
+    expect(open.nextStep).toBe(`wingmate issue JRF-404 ask --append ${questionId} --question-file <path>`);
+    expect(JSON.parse((await follow(open.nextStep)).out)).toMatchObject({ ok: true, questionId });
+    const local = await readLocal(wt);
+    for (const q of local.questions) q.status = "answered";
+    await writeLocal(wt, local);
+    const closed = refusal(
+      await runVerb(wt, ["ask", "--append", questionId, "--question-file", ".wingmate/q2.md"]),
+    );
+    expect(closed.code).toBe("question_not_open");
+    expect(closed.nextStep).toBe(`wingmate issue JRF-404 ask --reask ${questionId} --question-file <path>`);
+    expect(JSON.parse((await follow(closed.nextStep)).out)).toMatchObject({ ok: true, questionId });
+    expect((await listIntents(wt)).at(-1)).toMatchObject({ payload: { reask: questionId } });
+  });
+
+  test("F16: finish publishes every --repo given (repeated or comma-separated); other verbs refuse a repeated flag", async () => {
+    const wt = await worktree({ git: true });
+    writeLaunch(wt, { baseSha: await headOf(wt) });
+    const h = await commit(wt, { "src/a.ts": "1\n" });
+    await passGates(wt, h);
+    writeFileSync(join(wt, ".wingmate", "s.md"), "done");
+    const fin = (extra: string[]) => runVerb(wt, ["finish", "--summary-file", ".wingmate/s.md", ...extra]);
+    expect((await fin(["--repo", "api", "--repo", "web,mobile", "--repo=api"])).code).toBe(0);
+    expect((await listIntents(wt)).at(-1)).toMatchObject({
+      kind: "finish",
+      payload: { repos: ["api", "web", "mobile"] },
+    });
+    // a flag given twice where one value is expected is ambiguous: refused, never last-wins
+    expect(refusal(await fin(["--title", "A", "--title", "B"])).code).toBe("usage");
+    expect(refusal(await fin(["--repo", "api", "--repo"])).code).toBe("usage");
+    expect(refusal(await runVerb(wt, ["handoff", "--reason", "r", "--repo", "a", "--repo", "b"])).code).toBe(
+      "usage",
+    );
+    expect((await listIntents(wt)).filter((i) => i.kind !== "gate")).toHaveLength(1);
+  });
 });
 
 describe("wingmate issue spawn", () => {

@@ -3,6 +3,10 @@ import { loadConfig } from "../../config/load";
 import type { Argv } from "../index";
 export async function configCommand(argv: Argv): Promise<number> {
   const sub = argv.cmd[1];
+  if (Array.isArray(argv.flags.file)) {
+    process.stderr.write("usage: --file may be given only once\n");
+    return 2;
+  }
   const cfg = await loadConfig(typeof argv.flags.file === "string" ? argv.flags.file : undefined);
   if (sub === "show") {
     process.stdout.write(`${JSON.stringify(cfg, null, 2)}\n`);
