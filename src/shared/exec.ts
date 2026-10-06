@@ -10,6 +10,44 @@ export interface RunOptions {
   env?: Record<string, string>;
   stdin?: string;
 }
+
+const MAX_CAPTURE = 8 * 1024 * 1024;
+function collect(stream: ReadableStream<Uint8Array> | null) {
+  const chunks: Uint8Array[] = [];
+  let bytes = 0;
+  const reader = stream?.getReader() ?? null;
+  const done = (async () => {
+    if (!reader) return;
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        if (value && bytes < MAX_CAPTURE) {
+          chunks.push(value);
+          bytes += value.byteLength;
+        }
+      }
+    } catch {
+      // cancelled or closed
+    }
+  })();
+  const text = () => {
+    const all = new Uint8Array(chunks.reduce((n, c) => n + c.byteLength, 0));
+    let o = 0;
+    for (const c of chunks) {
+      all.set(c, o);
+      o += c.byteLength;
+    }
+    return new TextDecoder().decode(all);
+  };
+  return {
+    done,
+    text,
+    cancel: () => {
+      void reader?.cancel().catch(() => undefined);
+    },
+  };
+}
 export async function run(argv: string[], opts: RunOptions = {}): Promise<RunResult> {
   // detached: true creates a process group so timeout can kill the entire tree, not just the direct child.
   // Detached children do not receive the terminal's Ctrl-C (acceptable: run() is used by the dispatcher
@@ -44,22 +82,16 @@ export async function run(argv: string[], opts: RunOptions = {}): Promise<RunRes
       }, opts.timeoutMs)
     : null;
   try {
-    const drainPromise = Promise.all([
-      new Response(proc.stdout as unknown as ReadableStream<Uint8Array>).text(),
-      new Response(proc.stderr as unknown as ReadableStream<Uint8Array>).text(),
-    ]);
-    const resultPromise = opts.timeoutMs ? Promise.race([drainPromise, gracePromise]) : drainPromise;
-    drainPromise.then(
-      (result) => {
-        if (graceSettled) graceSettled(result);
-      },
-      () => {
-        if (graceSettled) graceSettled(["", ""]);
-      },
-    );
-    const [stdout, stderr] = await resultPromise;
-    const code = await proc.exited;
-    return { code: timedOut ? 124 : code, stdout, stderr, timedOut };
+    const out = collect(proc.stdout as unknown as ReadableStream<Uint8Array>);
+    const err = collect(proc.stderr as unknown as ReadableStream<Uint8Array>);
+    const drain = Promise.all([out.done, err.done]);
+    const resultPromise = opts.timeoutMs ? Promise.race([drain, gracePromise]) : drain;
+    const code = await Promise.race([resultPromise.then(() => proc.exited), proc.exited]);
+    if (timedOut) {
+      out.cancel();
+      err.cancel();
+    }
+    return { code: timedOut ? 124 : code, stdout: out.text(), stderr: err.text(), timedOut };
   } finally {
     if (timer) clearTimeout(timer);
     if (graceTimer) clearTimeout(graceTimer);
