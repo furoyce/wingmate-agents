@@ -7,6 +7,7 @@ import type { Dirs } from "../shared/paths";
 import type { Clock } from "../shared/time";
 import { iso } from "../shared/time";
 import { readText, writeAtomic } from "../state/fs";
+import { FetchTimeout, fetchWithTimeout } from "./graphql";
 
 const Creds = z.object({
   clientId: z.string().min(1),
@@ -14,11 +15,15 @@ const Creds = z.object({
   token: z.object({ accessToken: z.string(), expiresAt: z.string() }).nullable().default(null),
 });
 export type Credentials = z.infer<typeof Creds>;
+const TokenResponse = z
+  .object({ access_token: z.string().min(1), expires_in: z.number().positive() })
+  .passthrough();
 
 const SCOPES = "read,write,comments:create,issues:create";
 const TOKEN_URL = "https://api.linear.app/oauth/token";
 /** Re-mint when fewer than this many milliseconds remain before expiry. */
 const REFRESH_MARGIN_MS = 24 * 3600 * 1000;
+const DEFAULT_MINT_TIMEOUT_MS = 20_000;
 
 const path = (dirs: Dirs) => join(dirs.config, "credentials.json");
 
@@ -31,14 +36,34 @@ export async function writeCredentials(
 }
 
 export async function readCredentials(dirs: Dirs): Promise<Credentials> {
-  const t = await readText(path(dirs));
+  const file = path(dirs);
+  const t = await readText(file);
   if (!t)
     throw new WingmateError(
       "linear_credentials_missing",
-      `no ${path(dirs)}`,
+      `no ${file}`,
       "run `wingmate install` with the Linear OAuth client id/secret (docs/linear-app-setup.md)",
     );
-  return Creds.parse(JSON.parse(t));
+  let raw: unknown;
+  try {
+    raw = JSON.parse(t);
+  } catch (e) {
+    throw new WingmateError(
+      "linear_credentials_invalid",
+      `${file}: not JSON (${e instanceof Error ? e.message : String(e)})`,
+      "re-run `wingmate install` with the client id/secret",
+    );
+  }
+  const parsed = Creds.safeParse(raw);
+  if (!parsed.success) {
+    const i = parsed.error.issues[0];
+    throw new WingmateError(
+      "linear_credentials_invalid",
+      `${file}: ${i?.path.join(".") || "(root)"} ${i?.message ?? "invalid"}`,
+      "re-run `wingmate install` with the client id/secret",
+    );
+  }
+  return parsed.data;
 }
 
 export interface Tokens {
@@ -51,6 +76,7 @@ export class TokenStore implements Tokens {
     private dirs: Dirs,
     private clock: Clock,
     private fetchImpl: typeof fetch = fetch,
+    private opts: { timeoutMs?: number } = {},
   ) {}
 
   async getToken(): Promise<string> {
@@ -63,19 +89,49 @@ export class TokenStore implements Tokens {
       client_secret: c.clientSecret,
       scope: SCOPES,
     });
-    const res = await this.fetchImpl(TOKEN_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body,
-    });
+    const timeoutMs = this.opts.timeoutMs ?? DEFAULT_MINT_TIMEOUT_MS;
+    let res: Response;
+    try {
+      res = await fetchWithTimeout(
+        this.fetchImpl,
+        TOKEN_URL,
+        { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body },
+        timeoutMs,
+      );
+    } catch (e) {
+      throw new WingmateError(
+        "linear_token_mint_failed",
+        e instanceof FetchTimeout
+          ? `token endpoint timed out after ${timeoutMs} ms`
+          : `token endpoint unreachable: ${e instanceof Error ? e.message : String(e)}`,
+        "check network access to api.linear.app and retry",
+      );
+    }
     if (!res.ok)
       throw new WingmateError(
         "linear_token_mint_failed",
         `token endpoint returned ${res.status}`,
         "check the OAuth app client id/secret and that the app is installed in the workspace",
       );
-    const j = z.object({ access_token: z.string(), expires_in: z.number() }).parse(await res.json());
-    const token = { accessToken: j.access_token, expiresAt: iso(new Date(now + j.expires_in * 1000)) };
+    let raw: unknown;
+    try {
+      raw = await res.json();
+    } catch {
+      throw new WingmateError("linear_token_mint_failed", "token endpoint returned a non-JSON body");
+    }
+    const j = TokenResponse.safeParse(raw);
+    if (!j.success) {
+      const i = j.error.issues[0];
+      throw new WingmateError(
+        "linear_token_mint_failed",
+        `token endpoint returned an unexpected body: ${i?.path.join(".") || "(root)"} ${i?.message ?? "invalid"}`,
+        "check the OAuth app's grant type (client credentials) and scopes",
+      );
+    }
+    const token = {
+      accessToken: j.data.access_token,
+      expiresAt: iso(new Date(now + j.data.expires_in * 1000)),
+    };
     await writeCredentials(this.dirs, { clientId: c.clientId, clientSecret: c.clientSecret, token });
     return token.accessToken;
   }

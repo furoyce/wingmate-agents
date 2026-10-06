@@ -1,5 +1,8 @@
-// src/linear/client.ts — LinearPort over GraphQL: exact queries/mutations, pagination, DTO mapping.
+// src/linear/client.ts — LinearPort over GraphQL: exact queries/mutations, cursor pagination, Zod-validated
+// response shapes (identity fields required, everything else tolerant), DTO mapping.
+import { z } from "zod";
 import type { LinearComment, LinearHistoryEntry, LinearIssue, LinearPort, LinearTeamMeta } from "../ports";
+import { WingmateError } from "../shared/errors";
 import type { Dirs } from "../shared/paths";
 import type { Clock } from "../shared/time";
 import { TokenStore } from "./auth";
@@ -11,84 +14,182 @@ const ISSUE_FIELDS = `fragment IssueFields on Issue { id identifier title descri
   children { nodes { id identifier state { type } } } inverseRelations { nodes { type issue { id identifier state { type } } } }
   attachments { nodes { id url title } } }`;
 
-type Node = Record<string, unknown>;
-type Page<K extends string, N> = {
-  [P in K]: { nodes: N[]; pageInfo: { hasNextPage: boolean; endCursor: string | null } };
+// ---- response shapes: identity fields are required, the rest is nullish/passthrough ----------------------------
+const Id = z.string().min(1);
+const IdRef = z.object({ id: Id }).passthrough();
+const Nodes = <S extends z.ZodTypeAny>(node: S) => z.object({ nodes: z.array(node) }).passthrough();
+const PageInfo = z.object({ hasNextPage: z.boolean(), endCursor: z.string().nullable() }).passthrough();
+const Connection = <S extends z.ZodTypeAny>(node: S) =>
+  z.object({ nodes: z.array(node), pageInfo: PageInfo }).passthrough();
+
+const LabelNode = z
+  .object({
+    id: Id,
+    name: z.string(),
+    parent: z.object({ id: Id, name: z.string() }).passthrough().nullish(),
+  })
+  .passthrough();
+const StateNode = z.object({ id: Id, name: z.string(), type: z.string() }).passthrough();
+const IssueNode = z
+  .object({
+    id: Id,
+    identifier: Id,
+    title: z.string(),
+    description: z.string().nullish(),
+    url: z.string(),
+    createdAt: Id,
+    updatedAt: Id,
+    archivedAt: z.string().nullish(),
+    trashed: z.boolean().nullish(),
+    priority: z.number().nullish(),
+    branchName: z.string().nullish(),
+    state: StateNode,
+    project: IdRef.nullish(),
+    team: IdRef,
+    assignee: IdRef.nullish(),
+    delegate: IdRef.nullish(),
+    labels: Nodes(LabelNode).nullish(),
+    subscribers: Nodes(IdRef).nullish(),
+    parent: z.object({ id: Id, identifier: Id }).passthrough().nullish(),
+    children: Nodes(
+      z
+        .object({ id: Id, identifier: Id, state: z.object({ type: z.string() }).passthrough().nullish() })
+        .passthrough(),
+    ).nullish(),
+    inverseRelations: Nodes(
+      z
+        .object({
+          type: z.string(),
+          issue: z
+            .object({ id: Id, identifier: Id, state: z.object({ type: z.string() }).passthrough().nullish() })
+            .passthrough(),
+        })
+        .passthrough(),
+    ).nullish(),
+    attachments: Nodes(
+      z.object({ id: Id, url: z.string(), title: z.string().nullish() }).passthrough(),
+    ).nullish(),
+  })
+  .passthrough();
+const CommentNode = z
+  .object({
+    id: Id,
+    body: z.string(),
+    createdAt: Id,
+    parent: IdRef.nullish(),
+    issue: IdRef,
+    user: IdRef.nullish(),
+    botActor: IdRef.nullish(),
+    externalUser: IdRef.nullish(),
+  })
+  .passthrough();
+const HistoryNode = z
+  .object({
+    id: Id,
+    createdAt: Id,
+    actor: IdRef.nullish(),
+    botActor: z.object({ id: Id, type: z.string().nullish() }).passthrough().nullish(),
+    addedLabelIds: z.array(z.string()).nullish(),
+    removedLabelIds: z.array(z.string()).nullish(),
+    fromStateId: z.string().nullish(),
+    toStateId: z.string().nullish(),
+  })
+  .passthrough();
+const IssuesPage = z.object({ issues: Connection(IssueNode) }).passthrough();
+const CommentsPage = z.object({ comments: Connection(CommentNode) }).passthrough();
+const HistoryPage = z
+  .object({ issue: z.object({ history: Connection(HistoryNode) }).passthrough() })
+  .passthrough();
+const TeamMetaShape = z
+  .object({
+    teams: Nodes(z.object({ states: Nodes(StateNode), labels: Nodes(LabelNode) }).passthrough()),
+    issueLabels: Nodes(LabelNode),
+  })
+  .passthrough();
+const CommentCreated = z.object({ commentCreate: z.object({ comment: IdRef }).passthrough() }).passthrough();
+const IssueCreated = z
+  .object({
+    issueCreate: z.object({ issue: z.object({ id: Id, identifier: Id }).passthrough() }).passthrough(),
+  })
+  .passthrough();
+
+type IssueNodeT = z.infer<typeof IssueNode>;
+type CommentNodeT = z.infer<typeof CommentNode>;
+type HistoryNodeT = z.infer<typeof HistoryNode>;
+type LabelNodeT = z.infer<typeof LabelNode>;
+
+/** Validate a GraphQL `data` object; a missing identity field is `linear_shape` with the query and path, never "". */
+const shaped = <S extends z.ZodTypeAny>(schema: S, value: unknown, query: string): z.infer<S> => {
+  const r = schema.safeParse(value);
+  if (r.success) return r.data as z.infer<S>;
+  const i = r.error.issues[0];
+  throw new WingmateError(
+    "linear_shape",
+    `${query}: ${i?.path.join(".") || "(root)"} ${i?.message ?? "invalid"}`,
+  );
 };
 
-const str = (v: unknown): string => (typeof v === "string" ? v : "");
-const strOrNull = (v: unknown): string | null => (typeof v === "string" ? v : null);
-const obj = (v: unknown): Node => (v && typeof v === "object" ? (v as Node) : {});
-const idOf = (v: unknown): string | null => (v && typeof v === "object" ? str(obj(v).id) : null);
-const nodesOf = (n: Node, k: string): Node[] => (obj(n[k]).nodes as Node[] | undefined) ?? [];
-const toLabel = (l: Node) => ({
-  id: str(l.id),
-  name: str(l.name),
-  parentId: idOf(l.parent),
-  parentName: l.parent ? str(obj(l.parent).name) : null,
+// ---- DTO mapping -------------------------------------------------------------------------------------------------
+const toLabel = (l: LabelNodeT) => ({
+  id: l.id,
+  name: l.name,
+  parentId: l.parent?.id ?? null,
+  parentName: l.parent?.name ?? null,
 });
 
-const toIssue = (n: Node): LinearIssue => ({
-  id: str(n.id),
-  identifier: str(n.identifier),
-  title: str(n.title),
-  description: strOrNull(n.description),
-  url: str(n.url),
-  createdAt: str(n.createdAt),
-  updatedAt: str(n.updatedAt),
-  archivedAt: strOrNull(n.archivedAt),
+const toIssue = (n: IssueNodeT): LinearIssue => ({
+  id: n.id,
+  identifier: n.identifier,
+  title: n.title,
+  description: n.description ?? null,
+  url: n.url,
+  createdAt: n.createdAt,
+  updatedAt: n.updatedAt,
+  archivedAt: n.archivedAt ?? null,
   trashed: n.trashed === true,
-  priority: typeof n.priority === "number" ? n.priority : 0,
-  branchName: str(n.branchName),
-  state: { id: str(obj(n.state).id), name: str(obj(n.state).name), type: str(obj(n.state).type) },
-  projectId: idOf(n.project),
-  teamId: str(obj(n.team).id),
-  assigneeId: idOf(n.assignee),
-  delegateId: idOf(n.delegate),
-  labels: nodesOf(n, "labels").map(toLabel),
-  subscriberIds: nodesOf(n, "subscribers").map((s) => str(s.id)),
-  parent: n.parent ? { id: str(obj(n.parent).id), identifier: str(obj(n.parent).identifier) } : null,
-  children: nodesOf(n, "children").map((c) => ({
-    id: str(c.id),
-    identifier: str(c.identifier),
-    stateType: str(obj(c.state).type),
+  priority: n.priority ?? 0,
+  branchName: n.branchName ?? "",
+  state: { id: n.state.id, name: n.state.name, type: n.state.type },
+  projectId: n.project?.id ?? null,
+  teamId: n.team.id,
+  assigneeId: n.assignee?.id ?? null,
+  delegateId: n.delegate?.id ?? null,
+  labels: (n.labels?.nodes ?? []).map(toLabel),
+  subscriberIds: (n.subscribers?.nodes ?? []).map((s) => s.id),
+  parent: n.parent ? { id: n.parent.id, identifier: n.parent.identifier } : null,
+  children: (n.children?.nodes ?? []).map((c) => ({
+    id: c.id,
+    identifier: c.identifier,
+    stateType: c.state?.type ?? "",
   })),
   // Only `blocks` relations are prerequisites (§5.3); `related`/`duplicate` never gate a claim.
-  prerequisites: nodesOf(n, "inverseRelations")
+  prerequisites: (n.inverseRelations?.nodes ?? [])
     .filter((r) => r.type === "blocks")
-    .map((r) => ({
-      id: str(obj(r.issue).id),
-      identifier: str(obj(r.issue).identifier),
-      stateType: str(obj(obj(r.issue).state).type),
-    })),
-  attachments: nodesOf(n, "attachments").map((a) => ({
-    id: str(a.id),
-    url: str(a.url),
-    title: str(a.title),
-  })),
+    .map((r) => ({ id: r.issue.id, identifier: r.issue.identifier, stateType: r.issue.state?.type ?? "" })),
+  attachments: (n.attachments?.nodes ?? []).map((a) => ({ id: a.id, url: a.url, title: a.title ?? "" })),
 });
 
-const toComment = (c: Node): LinearComment => ({
-  id: str(c.id),
-  issueId: str(obj(c.issue).id),
-  body: str(c.body),
-  createdAt: str(c.createdAt),
-  parentId: idOf(c.parent),
-  userId: idOf(c.user),
-  botActorId: idOf(c.botActor),
-  externalUserId: idOf(c.externalUser),
+const toComment = (c: CommentNodeT): LinearComment => ({
+  id: c.id,
+  issueId: c.issue.id,
+  body: c.body,
+  createdAt: c.createdAt,
+  parentId: c.parent?.id ?? null,
+  userId: c.user?.id ?? null,
+  botActorId: c.botActor?.id ?? null,
+  externalUserId: c.externalUser?.id ?? null,
 });
 
-const toHistory = (h: Node): LinearHistoryEntry => ({
-  id: str(h.id),
-  createdAt: str(h.createdAt),
-  actorId: idOf(h.actor),
-  botActorId: idOf(h.botActor),
-  botActorType: h.botActor ? str(obj(h.botActor).type) : null,
-  addedLabelIds: (h.addedLabelIds as string[] | null | undefined) ?? [],
-  removedLabelIds: (h.removedLabelIds as string[] | null | undefined) ?? [],
-  fromStateId: strOrNull(h.fromStateId),
-  toStateId: strOrNull(h.toStateId),
+const toHistory = (h: HistoryNodeT): LinearHistoryEntry => ({
+  id: h.id,
+  createdAt: h.createdAt,
+  actorId: h.actor?.id ?? null,
+  botActorId: h.botActor?.id ?? null,
+  botActorType: h.botActor ? (h.botActor.type ?? null) : null,
+  addedLabelIds: h.addedLabelIds ?? [],
+  removedLabelIds: h.removedLabelIds ?? [],
+  fromStateId: h.fromStateId ?? null,
+  toStateId: h.toStateId ?? null,
 });
 
 export class LinearClient implements LinearPort {
@@ -103,9 +204,13 @@ export class LinearClient implements LinearPort {
     const out: LinearIssue[] = [];
     let after: string | null = null;
     do {
-      const d: Page<"issues", Node> = await this.g.query(
-        `${ISSUE_FIELDS} query Issues($filter: IssueFilter!, $after: String) { issues(first: 50, after: $after, filter: $filter) { nodes { ...IssueFields } pageInfo { hasNextPage endCursor } } }`,
-        { filter, after },
+      const d: z.infer<typeof IssuesPage> = shaped(
+        IssuesPage,
+        await this.g.query(
+          `${ISSUE_FIELDS} query Issues($filter: IssueFilter!, $after: String) { issues(first: 50, after: $after, filter: $filter) { nodes { ...IssueFields } pageInfo { hasNextPage endCursor } } }`,
+          { filter, after },
+        ),
+        "issues",
       );
       out.push(...d.issues.nodes.map(toIssue));
       after = d.issues.pageInfo.hasNextPage ? d.issues.pageInfo.endCursor : null;
@@ -134,9 +239,13 @@ export class LinearClient implements LinearPort {
     const out: LinearComment[] = [];
     let after: string | null = null;
     do {
-      const d: Page<"comments", Node> = await this.g.query(
-        "query Comments($filter: CommentFilter!, $after: String) { comments(first: 100, after: $after, filter: $filter) { nodes { id body createdAt parent { id } issue { id } user { id } botActor { id } externalUser { id } } pageInfo { hasNextPage endCursor } } }",
-        { filter: { issue: { id: { in: issueIds } }, createdAt: { gt: sinceIso } }, after },
+      const d: z.infer<typeof CommentsPage> = shaped(
+        CommentsPage,
+        await this.g.query(
+          "query Comments($filter: CommentFilter!, $after: String) { comments(first: 100, after: $after, filter: $filter) { nodes { id body createdAt parent { id } issue { id } user { id } botActor { id } externalUser { id } } pageInfo { hasNextPage endCursor } } }",
+          { filter: { issue: { id: { in: issueIds } }, createdAt: { gt: sinceIso } }, after },
+        ),
+        "comments",
       );
       out.push(...d.comments.nodes.map(toComment));
       after = d.comments.pageInfo.hasNextPage ? d.comments.pageInfo.endCursor : null;
@@ -144,25 +253,37 @@ export class LinearClient implements LinearPort {
     return out;
   }
 
+  /** Whole history, oldest first, paged 50 at a time (per-issue history is small); filtered by `createdAt > since`. */
   async issueHistory(issueId: string, sinceIso: string): Promise<LinearHistoryEntry[]> {
-    const d: { issue: { history: { nodes: Node[] } } } = await this.g.query(
-      "query History($id: String!) { issue(id: $id) { history(first: 50) { nodes { id createdAt actor { id } botActor { id type } addedLabelIds removedLabelIds fromStateId toStateId } } } }",
-      { id: issueId },
-    );
-    return d.issue.history.nodes.filter((h) => str(h.createdAt) > sinceIso).map(toHistory);
+    const out: LinearHistoryEntry[] = [];
+    let after: string | null = null;
+    do {
+      const d: z.infer<typeof HistoryPage> = shaped(
+        HistoryPage,
+        await this.g.query(
+          "query History($id: String!, $after: String) { issue(id: $id) { history(first: 50, after: $after, orderBy: createdAt) { nodes { id createdAt actor { id } botActor { id type } addedLabelIds removedLabelIds fromStateId toStateId } pageInfo { hasNextPage endCursor } } } }",
+          { id: issueId, after },
+        ),
+        "history",
+      );
+      out.push(...d.issue.history.nodes.filter((h) => h.createdAt > sinceIso).map(toHistory));
+      after = d.issue.history.pageInfo.hasNextPage ? d.issue.history.pageInfo.endCursor : null;
+    } while (after);
+    return out;
   }
 
   async teamMeta(teamKey: string): Promise<LinearTeamMeta> {
-    const d: {
-      teams: { nodes: { states: { nodes: Node[] }; labels: { nodes: Node[] } }[] };
-      issueLabels: { nodes: Node[] };
-    } = await this.g.query(
-      "query Meta($key: String!) { teams(filter: { key: { eq: $key } }) { nodes { states { nodes { id name type } } labels { nodes { id name parent { id name } } } } } issueLabels(first: 250, filter: { team: { null: true } }) { nodes { id name parent { id name } } } }",
-      { key: teamKey },
+    const d = shaped(
+      TeamMetaShape,
+      await this.g.query(
+        "query Meta($key: String!) { teams(filter: { key: { eq: $key } }) { nodes { states { nodes { id name type } } labels { nodes { id name parent { id name } } } } } issueLabels(first: 250, filter: { team: { null: true } }) { nodes { id name parent { id name } } } }",
+        { key: teamKey },
+      ),
+      "teamMeta",
     );
     const t = d.teams.nodes[0];
     return {
-      states: (t?.states.nodes ?? []).map((s) => ({ id: str(s.id), name: str(s.name), type: str(s.type) })),
+      states: (t?.states.nodes ?? []).map((s) => ({ id: s.id, name: s.name, type: s.type })),
       labels: [...(t?.labels.nodes ?? []), ...d.issueLabels.nodes].map(toLabel),
     };
   }
@@ -182,9 +303,13 @@ export class LinearClient implements LinearPort {
     body: string,
     opts: { id: string; parentId?: string },
   ): Promise<{ id: string }> {
-    const d: { commentCreate: { comment: { id: string } } } = await this.g.query(
-      "mutation C($input: CommentCreateInput!) { commentCreate(input: $input) { success comment { id } } }",
-      { input: { id: opts.id, issueId, body, ...(opts.parentId ? { parentId: opts.parentId } : {}) } },
+    const d = shaped(
+      CommentCreated,
+      await this.g.query(
+        "mutation C($input: CommentCreateInput!) { commentCreate(input: $input) { success comment { id } } }",
+        { input: { id: opts.id, issueId, body, ...(opts.parentId ? { parentId: opts.parentId } : {}) } },
+      ),
+      "commentCreate",
     );
     return { id: d.commentCreate.comment.id };
   }
@@ -213,11 +338,15 @@ export class LinearClient implements LinearPort {
     stateId: string;
   }): Promise<{ id: string; identifier: string }> {
     const { projectId, ...rest } = input;
-    const d: { issueCreate: { issue: { id: string; identifier: string } } } = await this.g.query(
-      "mutation I($input: IssueCreateInput!) { issueCreate(input: $input) { success issue { id identifier } } }",
-      { input: { ...rest, ...(projectId ? { projectId } : {}) } },
+    const d = shaped(
+      IssueCreated,
+      await this.g.query(
+        "mutation I($input: IssueCreateInput!) { issueCreate(input: $input) { success issue { id identifier } } }",
+        { input: { ...rest, ...(projectId ? { projectId } : {}) } },
+      ),
+      "issueCreate",
     );
-    return d.issueCreate.issue;
+    return { id: d.issueCreate.issue.id, identifier: d.issueCreate.issue.identifier };
   }
 
   async subscribe(issueId: string, userId: string): Promise<void> {

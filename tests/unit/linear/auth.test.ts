@@ -58,3 +58,35 @@ describe("TokenStore", () => {
     expect(statSync(join(root, "credentials.json")).mode & 0o777).toBe(0o600);
   });
 });
+
+describe("TokenStore — fix round 1", () => {
+  test("a corrupt credentials.json is linear_credentials_invalid, not a raw parse error", async () => {
+    await Bun.write(join(root, "credentials.json"), "{ not json");
+    const ts = new TokenStore(dirs, clock, fakeFetch([]));
+    await expect(ts.getToken()).rejects.toMatchObject({ code: "linear_credentials_invalid" });
+    await Bun.write(join(root, "credentials.json"), JSON.stringify({ clientId: "", clientSecret: "s" }));
+    await expect(ts.getToken()).rejects.toMatchObject({ code: "linear_credentials_invalid" });
+  });
+  test("a malformed token response is linear_token_mint_failed", async () => {
+    const ts = new TokenStore(
+      dirs,
+      clock,
+      (async () =>
+        new Response(JSON.stringify({ token_type: "Bearer" }), { status: 200 })) as unknown as typeof fetch,
+    );
+    await expect(ts.getToken()).rejects.toMatchObject({ code: "linear_token_mint_failed" });
+  });
+  test("a hung token endpoint times out as linear_token_mint_failed", async () => {
+    const ts = new TokenStore(
+      dirs,
+      clock,
+      (async () => new Promise<Response>(() => undefined)) as unknown as typeof fetch,
+      {
+        timeoutMs: 50,
+      },
+    );
+    const started = Date.now();
+    await expect(ts.getToken()).rejects.toMatchObject({ code: "linear_token_mint_failed" });
+    expect(Date.now() - started).toBeLessThan(1500);
+  });
+});

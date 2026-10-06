@@ -61,3 +61,41 @@ describe("GraphQL", () => {
     await expect(g.query("q", {})).rejects.toMatchObject({ code: "linear_graphql" });
   });
 });
+
+describe("GraphQL — fix round 1", () => {
+  test("a hung request is bounded by timeoutMs, retried like a 5xx, then fails with linear_timeout", async () => {
+    let n = 0;
+    const g = new GraphQL(
+      tokens,
+      (async (_u: string | URL | Request, init?: RequestInit) => {
+        n++;
+        // Never resolves unless the signal aborts (a well-behaved fetch rejects on abort).
+        return new Promise<Response>((_, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+        });
+      }) as unknown as typeof fetch,
+      { baseDelayMs: 1, maxRetries: 1, timeoutMs: 50 },
+    );
+    const started = Date.now();
+    await expect(g.query("q", {})).rejects.toMatchObject({ code: "linear_timeout" });
+    expect(n).toBe(2);
+    expect(Date.now() - started).toBeLessThan(1500);
+  });
+  test("a fetch that ignores the abort signal is still bounded", async () => {
+    const g = new GraphQL(
+      tokens,
+      (async () => new Promise<Response>(() => undefined)) as unknown as typeof fetch,
+      { baseDelayMs: 1, maxRetries: 0, timeoutMs: 50 },
+    );
+    await expect(g.query("q", {})).rejects.toMatchObject({ code: "linear_timeout" });
+  });
+  test("a non-JSON body and a non-envelope body are errors with context, never data", async () => {
+    const bad = new GraphQL(tokens, (async () => new Response("<html>")) as unknown as typeof fetch);
+    await expect(bad.query("q", {})).rejects.toMatchObject({ code: "linear_graphql" });
+    const shape = new GraphQL(
+      tokens,
+      (async () => new Response(JSON.stringify({ errors: "nope" }))) as unknown as typeof fetch,
+    );
+    await expect(shape.query("q", {})).rejects.toMatchObject({ code: "linear_shape" });
+  });
+});

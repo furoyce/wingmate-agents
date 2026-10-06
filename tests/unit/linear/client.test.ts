@@ -51,3 +51,126 @@ describe("LinearClient", () => {
     expect(seen).toEqual({ id: "i1", input: { labelIds: ["l1"] } });
   });
 });
+
+const respond = (body: unknown) => new Response(JSON.stringify(body));
+const page = (key: string, nodes: unknown[], hasNextPage = false, endCursor: string | null = null) => ({
+  data: { [key]: { nodes, pageInfo: { hasNextPage, endCursor } } },
+});
+
+describe("LinearClient — fix round 1", () => {
+  test("issueHistory pages with a cursor until hasNextPage is false and filters by since", async () => {
+    const seen: (string | null)[] = [];
+    const h = (id: string, createdAt: string) => ({
+      id,
+      createdAt,
+      actor: { id: "u" },
+      botActor: null,
+      addedLabelIds: [],
+      removedLabelIds: [],
+      fromStateId: null,
+      toStateId: null,
+    });
+    const g = new GraphQL(tokens, (async (_u: string | URL | Request, init?: RequestInit) => {
+      const vars = JSON.parse(String(init?.body)).variables as { after: string | null };
+      seen.push(vars.after);
+      const nodes = vars.after
+        ? [h("h3", "2026-10-06T12:00:00.000Z")]
+        : [h("h1", "2026-10-01T00:00:00.000Z"), h("h2", "2026-10-05T00:00:00.000Z")];
+      return respond({
+        data: {
+          issue: {
+            history: {
+              nodes,
+              pageInfo: { hasNextPage: !vars.after, endCursor: vars.after ? null : "h-cur" },
+            },
+          },
+        },
+      });
+    }) as unknown as typeof fetch);
+    const out = await new LinearClient(g).issueHistory("i1", "2026-10-02T00:00:00.000Z");
+    expect(seen).toEqual([null, "h-cur"]);
+    expect(out.map((e) => e.id)).toEqual(["h2", "h3"]);
+  });
+  test("missing identity fields raise linear_shape naming the query and path", async () => {
+    const issueNode = JSON.parse(readFileSync("tests/fixtures/linear/graphql-issues-page.json", "utf8")).data
+      .issues.nodes[0] as Record<string, unknown>;
+    const { identifier: _dropped, ...noIdentifier } = issueNode;
+    const cases: [string, unknown, () => Promise<unknown>][] = [
+      [
+        "issues",
+        page("issues", [noIdentifier]),
+        () => client(page("issues", [noIdentifier])).getIssues(["i-404"]),
+      ],
+      [
+        "comments",
+        null,
+        () =>
+          client(
+            page("comments", [{ id: "c1", body: "x", createdAt: "2026-10-06T00:00:00.000Z", issue: {} }]),
+          ).listComments(["i1"], "2026-01-01T00:00:00.000Z"),
+      ],
+      [
+        "history",
+        null,
+        () =>
+          client({
+            data: {
+              issue: {
+                history: {
+                  nodes: [{ createdAt: "2026-10-06T00:00:00.000Z" }],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+            },
+          }).issueHistory("i1", "2026-01-01T00:00:00.000Z"),
+      ],
+      [
+        "teamMeta",
+        null,
+        () =>
+          client({
+            data: {
+              teams: {
+                nodes: [{ states: { nodes: [{ name: "Todo", type: "unstarted" }] }, labels: { nodes: [] } }],
+              },
+              issueLabels: { nodes: [] },
+            },
+          }).teamMeta("JRF"),
+      ],
+      [
+        "commentCreate",
+        null,
+        () =>
+          client({ data: { commentCreate: { success: true, comment: {} } } }).createComment("i1", "b", {
+            id: "x",
+          }),
+      ],
+      [
+        "issueCreate",
+        null,
+        () =>
+          client({ data: { issueCreate: { success: true, issue: { id: "n1" } } } }).createIssue({
+            id: "n1",
+            teamId: "t",
+            projectId: null,
+            parentId: "p",
+            title: "t",
+            description: "d",
+            stateId: "s",
+          }),
+      ],
+    ];
+    for (const [name, , run] of cases) {
+      const err = await run().then(
+        () => null,
+        (e: unknown) => e as { code: string; message: string },
+      );
+      expect(err?.code, name).toBe("linear_shape");
+      expect(err?.message, name).toContain(name);
+    }
+  });
+});
+
+function client(body: unknown): LinearClient {
+  return new LinearClient(new GraphQL(tokens, (async () => respond(body)) as unknown as typeof fetch));
+}
