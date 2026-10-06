@@ -1878,7 +1878,7 @@ export const renderHandoff = (h: { from: string; to: string | null; trigger: str
   - `evaluateCandidate(issue, ctx: EligibilityCtx): Verdict` where `Verdict = { status: "eligible"; provider: "claude"|"codex"|"agent-ready"; project: ProjectConfig } | { status: "skipped"; reason: SkipReason; detail: string | null }` and `EligibilityCtx = { cfg: Config; agentLabelIds: Map<string,string> /* name→id */; lifecycleGroupId: string; agentGroupId: string; history: LinearHistoryEntry[] | null; fleet: FleetSnapshot; records: WRecord[]; pausedScopes: string[]; liveCoordinator: (r: WRecord) => boolean }`.
   - `orderCandidates(issues): LinearIssue[]`.
   - `route(project, title, description): { repo: string; basis: "rule"|"default"|"ambiguous"; candidates: string[] }`.
-  - `providerFromLabels(issue, cfg): "claude"|"codex"|"agent-ready"|null`; `resolveTier(provider, opts?): Promise<{ model: string; effort: string } | null>`; `nextInCascade(cascade, tried, isAvailable): "claude"|"codex"|null`.
+  - `resolveTier(provider, opts?): Promise<{ model: string; effort: string } | null>`; `nextInCascade(cascade, tried, isAvailable): "claude"|"codex"|null`.
   - `availability(rl, provider, quotaCfg, nowMs): { available: true; attention: string[] } | { available: false; reason: "quota_unknown"|"quota"; detail: string }`.
   - `slots(records, liveWorktrees, cfg): { canClaim(projectKey, provider): { reason: SkipReason; detail: string } | null }`.
   - `capMinFor(stage, timers): number`; `timerState(record, nowIso, timers): "none"|"cap_passed"|"grace_running"|"grace_expired"`.
