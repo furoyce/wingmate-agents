@@ -1,6 +1,7 @@
 // tests/unit/config/schema.test.ts
 import { describe, expect, test } from "bun:test";
 import { ConfigSchema, withDefaults } from "../../../src/config/schema";
+import { WingmateError } from "../../../src/shared/errors";
 const minimal = {
   workspace: {
     linearWorkspace: "dfcf61c2-72c0-4d39-9485-96576cabb555",
@@ -56,6 +57,24 @@ describe("ConfigSchema", () => {
     const bad = structuredClone(minimal);
     bad.projects.bouncr.routing.default = "web";
     expect(() => withDefaults(ConfigSchema.parse(bad))).toThrow(/routing.default/);
+  });
+  test("routing-target errors are WingmateError config_invalid (default and rules)", () => {
+    const badDefault = structuredClone(minimal);
+    badDefault.projects.bouncr.routing.default = "web";
+    const badRule = structuredClone(minimal) as unknown as {
+      projects: { bouncr: { routing: { default: string; rules: { match: string[]; repo: string }[] } } };
+    };
+    badRule.projects.bouncr.routing.rules = [{ match: ["web"], repo: "web" }];
+    for (const bad of [badDefault, badRule]) {
+      let caught: unknown = null;
+      try {
+        withDefaults(ConfigSchema.parse(bad));
+      } catch (e) {
+        caught = e;
+      }
+      expect(caught).toBeInstanceOf(WingmateError);
+      expect((caught as WingmateError).code).toBe("config_invalid");
+    }
   });
   test("per-project overrides merge over defaults", () => {
     const over = structuredClone(minimal) as unknown as { projects: { bouncr: Record<string, unknown> } };

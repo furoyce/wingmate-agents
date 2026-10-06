@@ -1,5 +1,6 @@
 // src/config/schema.ts — Zod schema for config/projects.yaml (spec §10.1) and the defaults merge.
 import { z } from "zod";
+import { WingmateError } from "../shared/errors";
 const Argv = z.array(z.string().min(1)).min(1);
 const Provider = z.enum(["claude", "codex", "cursor", "antigravity"]);
 export const RepoSchema = z.object({
@@ -207,11 +208,19 @@ export function withDefaults(raw: RawConfig): Config {
   const projects: Record<string, ProjectConfig> = {};
   for (const [key, p] of Object.entries(raw.projects)) {
     if (!p.repos[p.routing.default]) {
-      throw new Error(`projects.${key}.routing.default "${p.routing.default}" is not a repo of that project`);
+      throw new WingmateError(
+        "config_invalid",
+        `projects.${key}.routing.default "${p.routing.default}" is not a repo of that project`,
+        "fix config/projects.yaml",
+      );
     }
     for (const rule of p.routing.rules) {
       if (!p.repos[rule.repo])
-        throw new Error(`projects.${key}.routing.rules → "${rule.repo}" is not a repo of that project`);
+        throw new WingmateError(
+          "config_invalid",
+          `projects.${key}.routing.rules → "${rule.repo}" is not a repo of that project`,
+          "fix config/projects.yaml",
+        );
     }
     const { autonomy, done, budgets, concurrency, timers, ...rest } = p;
     projects[key] = {

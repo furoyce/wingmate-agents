@@ -10,13 +10,16 @@ export function parseArgv(args: string[]): Argv {
   for (let i = 0; i < args.length; i++) {
     const a = args[i] as string;
     if (a.startsWith("--")) {
-      const [k, v] = a.slice(2).split("=", 2);
+      const body = a.slice(2);
+      const eq = body.indexOf("=");
+      const k = eq >= 0 ? body.slice(0, eq) : body;
+      const v = eq >= 0 ? body.slice(eq + 1) : undefined; // everything after the first '=' (values may contain '=')
       const next = args[i + 1];
-      if (v !== undefined) flags[k as string] = v;
+      if (v !== undefined) flags[k] = v;
       else if (next !== undefined && !next.startsWith("--")) {
-        flags[k as string] = next;
+        flags[k] = next;
         i++;
-      } else flags[k as string] = true;
+      } else flags[k] = true;
     } else cmd.push(a);
   }
   return { cmd, flags };
@@ -24,6 +27,7 @@ export function parseArgv(args: string[]): Argv {
 type Handler = (argv: Argv) => Promise<number>;
 const registry: Record<string, () => Promise<Handler>> = {
   config: async () => (await import("./commands/config")).configCommand,
+  issue: async () => (await import("./commands/issue")).issueCommand,
 };
 export async function main(args: string[]): Promise<number> {
   const argv = parseArgv(args);
