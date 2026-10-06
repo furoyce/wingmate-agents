@@ -1,4 +1,5 @@
 // src/kit/settings.ts — the dispatcher-owned Claude settings file, the explicit agent argv and the agent environment (§4.4, §13.3 b/c).
+import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import { WingmateError } from "../shared/errors";
 
@@ -20,6 +21,8 @@ export interface SettingsInput {
   toolchainPaths: string[];
   allowedDomains: string[];
   role: Role;
+  /** Gitdir names under `<common>/worktrees/` to deny (the own one is skipped); omitted → listed from disk now (`siblingDenyWrite`). */
+  siblingGitdirs?: string[];
 }
 
 /** §13.3(b) browser verbs, plus the Orca 1.4.220 browser verbs the spec list predates; denied for every role but ui-reviewer. */
@@ -115,11 +118,70 @@ const ORCA_EXTRA_DENY = [
  */
 const WINGMATE_BIN_READ = "~/.local/share/wingmate/bin/**";
 /**
- * The only grant into `<common>/worktrees/` is the agent's own `worktrees/<gitdirName>/**`; every other worktree's gitdir is
- * unwritable through the sandbox's default write deny (§13.3(b) "every other"; a blanket `worktrees/*` deny would also cover
- * the own gitdir, and deny wins). A name that is not one literal path component (`""` gives `worktrees//**`) could widen it.
+ * Claude Code grants a linked worktree's git common dir as a whole: its sandbox config builder adds the detected common dir to
+ * `allowWrite` (read from the 2.1.291 and 2.1.292 binaries), so inside `<common>` the allowWrite entries are inert and only denyWrite
+ * restricts (F7). Its own denies there cover `hooks`, `config(.lock)`, `config.worktree(.lock)`, `commondir`,
+ * `objects/info/(http-)alternates` and each worktree's `config.worktree(.lock)` and `commondir` — nothing else.
+ *
+ * At the top level that leaves the main checkout's `HEAD` and `index` and the repo-wide `shallow` and `gc.pid`, denied here with
+ * their locks: a commit in the own linked worktree writes none of them (its HEAD and index live in its gitdir). `packed-refs.lock`
+ * stays writable because a commit takes it, so there is no `<common>/*.lock` deny.
+ */
+const COMMON_TOP_DENY = ["HEAD", "HEAD.lock", "index", "index.lock", "shallow", "shallow.lock", "gc.pid"];
+/**
+ * One literal path component. The own gitdir's grant and every other worktree's deny are spelled from such names: a glob or brace
+ * character would widen the grant (`""` gives `worktrees//**`) or turn a deny into a pattern that covers the own gitdir.
  */
 const GITDIR_NAME = /^(?!\.\.?$)[^/\\*?[\]{}]+$/;
+
+function assertGitdirName(name: string): void {
+  if (!GITDIR_NAME.test(name))
+    throw new WingmateError(
+      "settings_invalid",
+      `gitdirName ${JSON.stringify(name)} is not one literal path component`,
+      "record the worktree's gitdir name before writing agent settings",
+    );
+}
+
+/** The real directories under `<common>/worktrees/` (gitdirs git made); a missing directory means there are none. */
+function listWorktreeDirs(commonDir: string): string[] {
+  const dir = join(commonDir, "worktrees");
+  try {
+    return readdirSync(dir, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => d.name);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw new WingmateError(
+      "settings_invalid",
+      `cannot list ${dir}: ${(e as Error).message}`,
+      "check the repository's git common dir, then re-install the kit",
+    );
+  }
+}
+
+/**
+ * §13.3(b) denies every other worktree's gitdir under `<common>/worktrees/`, one deny per name (F7). The sandbox's globs have no
+ * negation (`^` is escaped, `[!…]` is a positive class) and a blanket `worktrees/*` deny would cover the own gitdir too (deny wins), so
+ * the names are listed — by `installKit` at claim and by `refreshSiblingDenies` before each (re)launch. Each is a plain path, which the
+ * sandbox applies as a subpath rule: the directory itself as well as everything in it. Symlinks are never listed: Claude resolves a
+ * deny path through one, so a planted link could aim the deny at the own gitdir, and a write through one is checked at its target.
+ */
+export function siblingDenyWrite(commonDir: string, gitdirName: string, names?: readonly string[]): string[] {
+  assertGitdirName(gitdirName);
+  const out: string[] = [];
+  for (const n of [...new Set(names ?? listWorktreeDirs(commonDir))].sort()) {
+    if (n === gitdirName) continue;
+    if (!GITDIR_NAME.test(n))
+      throw new WingmateError(
+        "settings_invalid",
+        `worktree gitdir ${JSON.stringify(n)} under ${commonDir}/worktrees is not one literal path component, so it cannot be denied exactly`,
+        "rename or remove that worktree (`git worktree move` or `git worktree remove`), then re-install the kit",
+      );
+    out.push(`${commonDir}/worktrees/${n}`);
+  }
+  return out;
+}
 
 const covers = (pattern: string, host: string): boolean =>
   pattern.startsWith("*.") ? host === pattern || host.endsWith(pattern.slice(1)) : host === pattern;
@@ -132,12 +194,8 @@ const isBlocked = (domain: string): boolean => {
 export function claudeSettings(i: SettingsInput): object {
   const c = i.commonDir;
   const base = i.baseBranch.replace(/^origin\//, "");
-  if (!GITDIR_NAME.test(i.gitdirName))
-    throw new WingmateError(
-      "settings_invalid",
-      `gitdirName ${JSON.stringify(i.gitdirName)} is not one literal path component`,
-      "record the worktree's gitdir name before writing agent settings",
-    );
+  assertGitdirName(i.gitdirName);
+  const siblings = siblingDenyWrite(c, i.gitdirName, i.siblingGitdirs);
   const deny = [
     "Read(~/.config/wingmate/**)",
     "Read(~/.ssh/**)",
@@ -203,8 +261,9 @@ export function claudeSettings(i: SettingsInput): object {
           WINGMATE_BIN_READ,
           join(c, "**"),
         ],
-        // Lock files only under these paths (§13.3(b)): each glob covers its own `.lock`; no top-level `<common>/*.lock`, so
-        // an agent cannot plant `config.lock`/`HEAD.lock`/the main checkout's `index.lock` (spike §3.4: commits need none).
+        // §13.3(b)'s grants in the common dir, each glob covering its own `.lock`. Claude grants a linked worktree's whole common
+        // dir by itself, which makes them inert there (F7); they are the allowlist should that grant go away. What keeps an agent
+        // from planting the main checkout's `HEAD.lock`/`index.lock` or writing another worktree's gitdir is denyWrite below.
         allowWrite: [
           i.worktreePath,
           ...i.childWorktrees,
@@ -222,12 +281,15 @@ export function claudeSettings(i: SettingsInput): object {
           `${c}/info/**`,
           `${c}/refs/heads/${base}*`,
           `${c}/refs/remotes/**`,
+          ...COMMON_TOP_DENY.map((n) => `${c}/${n}`),
           "~/.local/share/wingmate/**",
           "~/.config/wingmate/**",
           "~/.claude/**",
           "~/.codex/**",
           "~/.gitconfig",
           "~/.ssh/**",
+          // last, so `refreshSiblingDenies` re-lists them in place
+          ...siblings,
         ],
       },
       // Verified 2026-10-06 (spike §3.4a): `allowedDomains` alone is advisory under bypassPermissions; `strictAllowlist: true`

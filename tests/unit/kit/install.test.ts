@@ -12,7 +12,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig } from "../../../src/config/load";
 import type { Config, ProjectConfig } from "../../../src/config/schema";
-import { canonicalGitConfig, installKit, verifyIntegrity } from "../../../src/kit/install";
+import {
+  canonicalGitConfig,
+  installKit,
+  refreshSiblingDenies,
+  verifyIntegrity,
+} from "../../../src/kit/install";
 import { writeIntent } from "../../../src/kit/intents";
 import { LaunchSchema, readLocal, writeLocal } from "../../../src/kit/local";
 import { agentEnv } from "../../../src/kit/settings";
@@ -290,6 +295,97 @@ describe("installKit", () => {
     const exclude = readFileSync(join(repo, ".git", "info", "exclude"), "utf8").split("\n");
     expect(exclude).not.toContain("/api/.npmrc"); // it existed before the kit
     expect(exclude).toContain("/mobile/.npmrc");
+  });
+
+  test("F7: claude-settings.json denies the other worktrees' gitdirs listed at install; refreshSiblingDenies re-lists them when the set changes", async () => {
+    const root = mkdtempSync(join(tmpdir(), "wm-sibs-"));
+    const main = join(root, "main");
+    await run(["git", "init", "-q", main]);
+    await run(["git", "-C", main, ...GIT_ID, "commit", "-q", "--allow-empty", "-m", "init"]);
+    const common = join(main, ".git");
+    const addWorktree = async (n: string) =>
+      expect(
+        (await run(["git", "-C", main, "worktree", "add", "-q", "-b", `furoyce/${n}`, join(root, n)])).code,
+      ).toBe(0);
+    for (const n of ["wm-jrf-404", "wm-jrf-405"]) await addWorktree(n);
+    const kitDir = mkdtempSync(join(tmpdir(), "wm-kit-"));
+    const { cfg, project } = await bouncr();
+    const record = newRecord({
+      identifier: "JRF-404",
+      linearId: "l",
+      project: "bouncr",
+      repo: "api",
+      provider: "claude",
+      autonomy: "ask-first",
+      now: "2026-10-06T10:00:00.000Z",
+    });
+    const wt = join(root, "wm-jrf-404");
+    record.worktree = {
+      id: `r::${wt}`,
+      path: wt,
+      branch: "furoyce/wm-jrf-404",
+      baseSha: "abc",
+      gitCommonDir: common,
+      gitdirName: "wm-jrf-404",
+    };
+    await installKit({
+      worktreePath: wt,
+      kitDir,
+      record,
+      cfg,
+      project,
+      issue: {
+        identifier: "JRF-404",
+        title: "t",
+        description: null,
+        url: "u",
+        comments: [],
+        parent: null,
+        children: [],
+      },
+      nonce: "n",
+      launch: { model: "m", effort: "max" },
+      toolchainPaths: [],
+    });
+    const file = join(kitDir, "claude-settings.json");
+    type KitSettings = {
+      sandbox: {
+        filesystem: { denyWrite: string[]; allowWrite: string[] };
+        network: { strictAllowlist: boolean };
+      };
+      permissions: { deny: string[] };
+    };
+    const read = () => JSON.parse(readFileSync(file, "utf8")) as KitSettings;
+    const siblings = () =>
+      read().sandbox.filesystem.denyWrite.filter((p) => p.startsWith(`${common}/worktrees/`));
+    expect(siblings()).toEqual([`${common}/worktrees/wm-jrf-405`]);
+    expect(read().sandbox.filesystem.allowWrite).toContain(`${common}/worktrees/wm-jrf-404/**`);
+    // unchanged set → the file is left byte-identical
+    const before = readFileSync(file, "utf8");
+    expect(await refreshSiblingDenies(kitDir, common, "wm-jrf-404")).toEqual([
+      `${common}/worktrees/wm-jrf-405`,
+    ]);
+    expect(readFileSync(file, "utf8")).toBe(before);
+    // a worktree claimed after install is added; a removed one is dropped; nothing else in the file moves
+    await addWorktree("wm-jrf-406");
+    expect((await run(["git", "-C", main, "worktree", "remove", join(root, "wm-jrf-405")])).code).toBe(0);
+    expect(await refreshSiblingDenies(kitDir, common, "wm-jrf-404")).toEqual([
+      `${common}/worktrees/wm-jrf-406`,
+    ]);
+    expect(siblings()).toEqual([`${common}/worktrees/wm-jrf-406`]);
+    const after = read();
+    const { denyWrite: d0, ...fs0 } = (JSON.parse(before) as KitSettings).sandbox.filesystem;
+    const { denyWrite: d1, ...fs1 } = after.sandbox.filesystem;
+    expect(fs1).toEqual(fs0);
+    expect(d1.filter((p) => !p.startsWith(`${common}/worktrees/`))).toEqual(
+      d0.filter((p) => !p.startsWith(`${common}/worktrees/`)),
+    );
+    expect(after.sandbox.network.strictAllowlist).toBe(true);
+    expect(after.permissions.deny).toEqual((JSON.parse(before) as KitSettings).permissions.deny);
+    // a kit that was never installed is refused with context, never silently skipped
+    await expect(refreshSiblingDenies(join(root, "no-kit"), common, "wm-jrf-404")).rejects.toThrow(
+      /claude-settings\.json/,
+    );
   });
 
   test("an unreadable courtesy settings file fails the install with context; integrity outside git is unverifiable", async () => {

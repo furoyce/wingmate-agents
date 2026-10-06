@@ -13,7 +13,7 @@ import { type BriefTicket, renderBrief } from "./brief";
 import { type Launch, writeLocal } from "./local";
 import { PROMPTS } from "./prompts";
 import { PROTOCOL_MD } from "./protocol";
-import { agentEnv, claudeSettings } from "./settings";
+import { agentEnv, claudeSettings, siblingDenyWrite } from "./settings";
 
 export interface InstallInput {
   worktreePath: string;
@@ -245,6 +245,60 @@ async function appendExclude(common: string, lines: string[]): Promise<void> {
     await writeAtomic(excl, `${cur}${cur === "" || cur.endsWith("\n") ? "" : "\n"}${add.join("\n")}\n`);
 }
 
+const KitSettingsZ = z
+  .object({
+    sandbox: z
+      .object({ filesystem: z.object({ denyWrite: z.array(z.string()) }).passthrough() })
+      .passthrough(),
+  })
+  .passthrough();
+
+/**
+ * Re-lists the other worktrees' gitdirs into the kit's `claude-settings.json` and returns the denied paths (F7). `installKit` lists
+ * them at claim; the tick calls this before every (re)launch and after a claim or cleanup in the same repo, with the record's
+ * `gitCommonDir` and `gitdirName`. Claude Code pins a `--settings` file's content at launch (2.1.292), so a running session keeps
+ * the list it started with until it is relaunched.
+ */
+export async function refreshSiblingDenies(
+  kitDir: string,
+  commonDir: string,
+  gitdirName: string,
+): Promise<string[]> {
+  const file = join(kitDir, "claude-settings.json");
+  const again = "re-queue the issue so the kit is installed again";
+  const text = await readText(file);
+  if (text === null) throw new WingmateError("kit_install_failed", `${file} is missing`, again);
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch (e) {
+    throw new WingmateError(
+      "kit_install_failed",
+      `${file} is not valid JSON: ${(e as Error).message}`,
+      again,
+    );
+  }
+  const parsed = KitSettingsZ.safeParse(raw);
+  if (!parsed.success)
+    throw new WingmateError(
+      "kit_install_failed",
+      `${file}: ${parsed.error.issues[0]?.path.join(".") ?? ""} ${parsed.error.issues[0]?.message ?? ""}`,
+      again,
+    );
+  const siblings = siblingDenyWrite(commonDir, gitdirName);
+  // Spread the validated input rather than Zod's output, which reorders keys: an unchanged list leaves the file byte-identical.
+  const s = raw as z.infer<typeof KitSettingsZ>;
+  const prefix = `${commonDir}/worktrees/`;
+  const denyWrite = [...s.sandbox.filesystem.denyWrite.filter((p) => !p.startsWith(prefix)), ...siblings];
+  const next = JSON.stringify(
+    { ...s, sandbox: { ...s.sandbox, filesystem: { ...s.sandbox.filesystem, denyWrite } } },
+    null,
+    2,
+  );
+  if (next !== text) await writeAtomic(file, next, 0o644);
+  return siblings;
+}
+
 async function writeKitDir(i: InstallInput, settings: object): Promise<void> {
   await mkdir(join(i.kitDir, "gh-empty"), { recursive: true });
   await mkdir(join(i.kitDir, "no-hooks"), { recursive: true });
@@ -331,6 +385,7 @@ export async function installKit(i: InstallInput): Promise<{ hashes: Record<stri
     questions: [],
     run: null,
   });
+  // lists the other worktrees' gitdirs now (F7); `refreshSiblingDenies` re-lists them before each (re)launch
   const settings = claudeSettings({
     worktreePath: wt,
     childWorktrees: [],
