@@ -578,7 +578,7 @@ describe("ConfigSchema", () => {
     expect(cfg.defaults.concurrency.maxWorking.global).toBe(3);
     expect(cfg.defaults.quota.maxSnapshotAgeMin).toBe(360);
     expect(cfg.defaults.timers.graceMin).toBe(30);
-    expect(cfg.defaults.providers.coordinatorCascade).toEqual(["claude", "codex"]);
+    expect(cfg.defaults.providers.coordinatorCascade).toEqual(["claude"]);   // D14 extension (spike 2026-10-06): Codex reads outside the worktree; widen only when the owner says so
     expect(cfg.projects.bouncr?.autonomy).toBe("ask-first");
   });
   test("rejects a repo with empty gates", () => {
@@ -717,7 +717,9 @@ labels:
   allowDeps: allow-deps
 defaults:
   timezone: America/New_York
-  providers: { default: claude, coordinatorCascade: [claude, codex], workers: [claude, codex, cursor, antigravity], verifyCross: true }
+  # D14 extension (spike 2026-10-06 §3.5): Codex sandboxes do not block reads outside the worktree, so Codex runs only as a
+  # read-only verifier/reviewer in the pilot; set coordinatorCascade: [claude, codex] only after the owner accepts the extension.
+  providers: { default: claude, coordinatorCascade: [claude], workers: [claude, codex, cursor, antigravity], verifyCross: true }
   autonomy: ask-first
   done: review
 projects:
@@ -1316,7 +1318,9 @@ export interface OrcaPort {
   worktreeSet(id: string, a: { workspaceStatus?: string; comment?: string; linearIssue?: string | null }): Promise<void>;
   worktreeRm(id: string): Promise<void>;
   terminalCreate(worktreeId: string, title: string, command: string): Promise<{ handle: string; tabId: string; leafId: string }>;
-  terminalWait(handle: string, forWhat: "tui-idle" | "exit", timeoutMs: number): Promise<{ satisfied: boolean }>;
+  terminalWait(handle: string, forWhat: "tui-idle" | "exit", timeoutMs: number): Promise<{ satisfied: boolean; blockedReason?: string }>;
+  /** Raw keystrokes without --wait-submit; used only to answer Claude's folder-trust dialog (spike 2026-10-06 §3.2). */
+  terminalKeys(handle: string, keys: { text?: string; enter?: boolean }): Promise<void>;
   terminalSend(handle: string, text: string, waitSubmitSec: number, retryRequest?: string): Promise<SendReceipt>;
   terminalClose(worktreeId: string): Promise<{ ok: boolean }>;
   terminalShowPreview(handle: string): Promise<string>;
@@ -1511,14 +1515,15 @@ export class OrcaClient implements OrcaPort {
   async terminalList(wt: string): Promise<TerminalRow[]> { return parseTerminals({ ok: true, result: await this.call(["terminal", "list", "--worktree", `id:${wt}`], 15_000) }); }
   async accountList(): Promise<RateLimits> { return parseRateLimits({ ok: true, result: await this.call(["account", "list"], 15_000) }); }
   async worktreeCreate(a: Parameters<OrcaClient["argvFor"]["worktreeCreate"]>[0]) { const r = await this.call(this.argvFor.worktreeCreate(a), 120_000); const w = r.worktree as R; return { id: String(w.id), path: String(w.path ?? "") }; }
-  async worktreeShow(id: string) { const r = await this.call(["worktree", "show", "--worktree", `id:${id}`]); return { id, path: String(r.path), branch: String(r.branch ?? "").replace(/^refs\/heads\//, ""), head: String(r.head ?? "") }; }
+  async worktreeShow(id: string) { const r = await this.call(["worktree", "show", "--worktree", `id:${id}`]); const w = (r.worktree as R | undefined) ?? r; return { id, path: String(w.path), branch: String(w.branch ?? "").replace(/^refs\/heads\//, ""), head: String(w.head ?? "") }; }
   async worktreeSet(id: string, a: { workspaceStatus?: string; comment?: string; linearIssue?: string | null }) { const args = ["worktree", "set", "--worktree", `id:${id}`]; if (a.workspaceStatus) args.push("--workspace-status", a.workspaceStatus); if (a.comment !== undefined) args.push("--comment", a.comment); if (a.linearIssue !== undefined) args.push("--linear-issue", a.linearIssue ?? "null"); await this.call(args); }
   async worktreeRm(id: string) { await this.call(["worktree", "rm", "--worktree", `id:${id}`], 120_000); }
-  async terminalCreate(wt: string, title: string, command: string) { const r = await this.call(this.argvFor.terminalCreate(wt, title, command), 60_000); return { handle: String(r.handle), tabId: String(r.tabId ?? ""), leafId: String(r.leafId ?? "") }; }
-  async terminalWait(h: string, f: "tui-idle" | "exit", ms: number) { const r = await this.call(this.argvFor.terminalWait(h, f, ms), ms + 10_000); const w = (r.wait as R | undefined) ?? r; return { satisfied: Boolean(w.satisfied) }; }
-  async terminalSend(h: string, text: string, waitSubmit: number, retry?: string): Promise<SendReceipt> { const r = await this.call(this.argvFor.terminalSend(h, text, waitSubmit, retry), (waitSubmit + 20) * 1000); const stages = (r.stages as string[] | undefined) ?? []; const stage = stages.includes("turn_started") || r.turnStarted === true ? "turn_started" : "input_accepted"; return { stage, requestId: typeof r.requestId === "string" ? r.requestId : null }; }
+  async terminalCreate(wt: string, title: string, command: string) { const r = await this.call(this.argvFor.terminalCreate(wt, title, command), 60_000); const t = (r.terminal as R | undefined) ?? r; const pane = String(t.paneKey ?? "").split(":"); return { handle: String(t.handle), tabId: String(t.tabId ?? pane[0] ?? ""), leafId: String(t.leafId ?? pane[1] ?? "") }; }   // create returns result.terminal.{handle,tabId,paneKey}; no leafId field
+  async terminalWait(h: string, f: "tui-idle" | "exit", ms: number) { const r = await this.call(this.argvFor.terminalWait(h, f, ms), ms + 10_000); const w = (r.wait as R | undefined) ?? r; return { satisfied: Boolean(w.satisfied), ...(typeof w.blockedReason === "string" ? { blockedReason: w.blockedReason } : {}) }; }
+  async terminalKeys(h: string, k: { text?: string; enter?: boolean }) { await this.call(["terminal", "send", "--terminal", h, ...(k.text !== undefined ? ["--text", k.text] : []), ...(k.enter ? ["--enter"] : [])], 15_000); }
+  async terminalSend(h: string, text: string, waitSubmit: number, retry?: string): Promise<SendReceipt> { const r = await this.call(this.argvFor.terminalSend(h, text, waitSubmit, retry), (waitSubmit + 20) * 1000); const pr = (((r.send as R | undefined)?.prompt as R | undefined) ?? r); const stages = (pr.stages as string[] | undefined) ?? []; const stage = stages.includes("turn_started") ? "turn_started" : "input_accepted"; return { stage, requestId: typeof pr.requestId === "string" ? pr.requestId : null }; }   // receipt lives at result.send.prompt.{stages,requestId}
   async terminalClose(wt: string) { try { await this.call(["terminal", "close", "--worktree", `id:${wt}`, "--all"], 60_000); return { ok: true }; } catch { return { ok: false }; } }
-  async terminalShowPreview(h: string) { const r = await this.call(["terminal", "show", "--terminal", h]); return String(r.preview ?? ""); }
+  async terminalShowPreview(h: string) { const r = await this.call(["terminal", "show", "--terminal", h]); const t = (r.terminal as R | undefined) ?? r; return String(t.preview ?? ""); }
   async workerList(runId: string): Promise<WorkerRow[]> { const r = await this.call(["orchestration", "worker-list", "--run", runId], 30_000); const rows = (r.workers as R[] | undefined) ?? []; return rows.map((w) => ({ dispatchId: String(w.dispatchId), taskId: String(w.taskId), runId: String(w.runId ?? runId), workerState: String(w.workerState ?? ""), dispatchStatus: String(w.dispatchStatus ?? ""), agentTerminalHandle: typeof w.agentTerminalHandle === "string" ? w.agentTerminalHandle : null, verdict: ((w.projection as R | undefined)?.liveness as R | undefined)?.verdict as WorkerRow["verdict"] ?? null })); }
   async workerStop(d: string, retry: string) { const r = await this.call(["orchestration", "worker-stop", "--dispatch", d, "--retry-request", retry], 60_000); return { verdict: String(((r.liveness as R | undefined)?.verdict as string | undefined) ?? r.verdict ?? "unverifiable") }; }
   async workerAbandon(d: string) { await this.call(["orchestration", "worker-abandon", "--dispatch", d]); }
@@ -1530,7 +1535,7 @@ export class OrcaClient implements OrcaPort {
   async automationsEdit(id: string, args: string[]) { await this.call(["automations", "edit", id, ...args]); }
 }
 ```
-Field names inside receipts (`stages`, `requestId`, `wait.satisfied`, `worker.liveness.verdict`) come from the Task 0 spike captures; where a capture shows a different name, change the accessor here and add the capture to `tests/fixtures/orca/` with a parsing test.
+Field names come from the Task 0 spike captures — the authoritative accessor map is `docs/superpowers/plans/spike-results-2026-10-06.md` §4 (nested `result.worktree.*`, `result.terminal.*`, `result.wait.*`, `result.send.prompt.*`; `agents[].stateStartedAt/updatedAt` and row `lastOutputAt` are epoch **milliseconds** → normalize with `fromEpochMs`; row `branch` is `refs/heads/<name>` → strip the prefix; `agentIdentity` is optional on `terminal list` rows). The contract tests parse the committed `tests/fixtures/orca/*.json` captures; where the live CLI and a fixture disagree, the fixture is re-captured, never hand-edited.
 
 - [ ] **Step 7: Run tests and type check** — `chmod +x tests/fakes/orcaBin.sh && bun test tests/unit/orca tests/contract/orca && bunx tsc --noEmit`. Expected: pass.
 
@@ -2306,7 +2311,7 @@ import type { FleetRow, FleetSnapshot, OrcaPort, RateLimits, SendReceipt, Termin
 export class FakeOrca implements OrcaPort {
   rows = new Map<string, FleetRow>(); terminals = new Map<string, TerminalRow[]>(); workers = new Map<string, WorkerRow[]>();
   rateLimits: RateLimits = { claude: { status: "ok", error: null, updatedAt: Date.now(), windows: { session: { usedPercent: 5, windowMinutes: 300, resetsAt: null }, weekly: { usedPercent: 20, windowMinutes: 10080, resetsAt: null } }, buckets: [] }, codex: { status: "ok", error: null, updatedAt: Date.now(), windows: { weekly: { usedPercent: 10, windowMinutes: 10080, resetsAt: null } }, buckets: [] } };
-  calls: { verb: string; args: unknown }[] = []; partial = false; nextSendStage: SendReceipt["stage"] = "turn_started"; nextWaitSatisfied = true; private seq = 0; closed: string[] = []; removed: string[] = []; previews = new Map<string, string>();
+  calls: { verb: string; args: unknown }[] = []; partial = false; nextSendStage: SendReceipt["stage"] = "turn_started"; nextWaitSatisfied = true; nextBlockedReason: string | null = null; private seq = 0; closed: string[] = []; removed: string[] = []; previews = new Map<string, string>();
   private rec(verb: string, args: unknown) { this.calls.push({ verb, args }); }
   async worktreePs(): Promise<FleetSnapshot> { this.rec("worktreePs", null); return { worktrees: [...this.rows.values()].map((r) => structuredClone(r)), truncated: false, omittedHostIds: this.partial ? ["ssh-1"] : [] }; }
   async terminalList(wt: string) { this.rec("terminalList", wt); return structuredClone(this.terminals.get(wt) ?? []); }
@@ -2316,7 +2321,8 @@ export class FakeOrca implements OrcaPort {
   async worktreeSet(id: string, a: unknown) { this.rec("worktreeSet", { id, a }); }
   async worktreeRm(id: string) { this.rec("worktreeRm", id); this.removed.push(id); this.rows.delete(id); this.terminals.delete(id); }
   async terminalCreate(wt: string, title: string, command: string) { this.rec("terminalCreate", { wt, title, command }); const n = ++this.seq; const t = { handle: `term_${n}`, tabId: `tab${n}`, leafId: `leaf${n}`, worktreeId: wt, title, lastOutputAt: null }; this.terminals.set(wt, [...(this.terminals.get(wt) ?? []), t]); const row = this.rows.get(wt); if (row) { row.liveTerminalCount++; row.agents.push({ paneKey: `tab${n}:leaf${n}`, state: "working", agentType: command.includes("codex") ? "codex" : "claude", stateStartedAt: new Date().toISOString(), updatedAt: null }); } return { handle: t.handle, tabId: t.tabId, leafId: t.leafId }; }
-  async terminalWait(h: string, f: string, ms: number) { this.rec("terminalWait", { h, f, ms }); return { satisfied: this.nextWaitSatisfied }; }
+  async terminalWait(h: string, f: string, ms: number) { this.rec("terminalWait", { h, f, ms }); return { satisfied: this.nextWaitSatisfied, ...(this.nextBlockedReason ? { blockedReason: this.nextBlockedReason } : {}) }; }
+  async terminalKeys(h: string, k: { text?: string; enter?: boolean }) { this.rec("terminalKeys", { h, k }); if (k.enter && this.nextBlockedReason === "agent-trust-workspace") { this.nextBlockedReason = null; this.nextWaitSatisfied = true; } }
   async terminalSend(h: string, text: string, w: number, retry?: string): Promise<SendReceipt> { this.rec("terminalSend", { h, text, w, retry }); return { stage: this.nextSendStage, requestId: `req_${++this.seq}` }; }
   async terminalClose(wt: string) { this.rec("terminalClose", wt); this.closed.push(wt); this.terminals.set(wt, []); const row = this.rows.get(wt); if (row) { row.liveTerminalCount = 0; } return { ok: true }; }
   async terminalShowPreview(h: string) { return this.previews.get(h) ?? ""; }
@@ -2369,7 +2375,7 @@ export async function makeWorld(startIso = "2026-10-06T10:00:00Z") {
   const root = mkdtempSync(join(tmpdir(), "wm-world-")); const clock = new FixedClock(new Date(startIso));
   const dirs = homeDirs({ WINGMATE_HOME: root, WINGMATE_CONFIG_HOME: root, HOME: root });
   const linear = new FakeLinear(); linear.now = () => clock.now().toISOString(); const orca = new FakeOrca(); const git = new FakeGit(); const gh = new FakeGh();
-  const cfg = await loadConfig("config/projects.yaml");
+  const cfg = await loadConfig("config/projects.yaml"); cfg.defaults.providers.coordinatorCascade = ["claude", "codex"];   // the pilot yaml pins [claude]; tests cover the handoff path
   const ctx: Ctx = await buildCtx({ cfg, dirs, clock, linear, orca, git, gh, home: root });
   return { root, clock, dirs, linear, orca, git, gh, cfg, ctx };
 }
@@ -2646,7 +2652,7 @@ describe("settings", () => {
   });
   test("argv and env", () => {
     expect(coordinatorArgv({ provider: "claude", model: "claude-fable-5-1[1m]", effort: "max", sessionId: "u1", kitDir: input.kitDir })).toEqual(["claude", "--model", "claude-fable-5-1[1m]", "--effort", "max", "--session-id", "u1", "--permission-mode", "bypassPermissions", "--settings", "/home/.local/share/wingmate/kit/JRF-404/claude-settings.json", "--strict-mcp-config"]);
-    expect(codexArgv({ model: "gpt-6.1-sol", effort: "xhigh", worktreePath: "/wt", role: "worker" })).toEqual(["codex", "-C", "/wt", "--model", "gpt-6.1-sol", "-c", "model_reasoning_effort=xhigh", "--ask-for-approval", "never", "-c", "project_doc_max_bytes=0", "--sandbox", "workspace-write", "-c", "sandbox_workspace_write.network_access=false"]);
+    expect(codexArgv({ model: "gpt-6.1-sol", effort: "xhigh", worktreePath: "/wt", role: "worker" })).toEqual(["codex", "-C", "/wt", "--model", "gpt-6.1-sol", "-c", "model_reasoning_effort=xhigh", "-c", "approval_policy=never", "-c", "project_doc_max_bytes=0", "--sandbox", "workspace-write", "-c", "sandbox_workspace_write.network_access=false"]);
     expect(codexArgv({ model: "m", effort: "xhigh", worktreePath: "/wt", role: "plan-verifier" })).toContain("read-only");
     expect(agentEnv(input.kitDir)).toMatchObject({ GH_TOKEN: "", GIT_CONFIG_NOSYSTEM: "1", GIT_TERMINAL_PROMPT: "0" });
     expect(shellQuote(["claude", "--model", "a[1m]", "x y"])).toBe("claude --model 'a[1m]' 'x y'");
@@ -2873,7 +2879,7 @@ export function claudeSettings(i: SettingsInput): object {
 export const coordinatorArgv = (a: { provider: "claude" | "codex"; model: string; effort: string; sessionId: string; kitDir: string; worktreePath?: string }): string[] =>
   a.provider === "claude" ? ["claude", "--model", a.model, "--effort", a.effort, "--session-id", a.sessionId, "--permission-mode", "bypassPermissions", "--settings", join(a.kitDir, "claude-settings.json"), "--strict-mcp-config"] : codexArgv({ model: a.model, effort: a.effort, worktreePath: a.worktreePath ?? ".", role: "coordinator" });
 export const codexArgv = (a: { model: string; effort: string; worktreePath: string; role: Role }): string[] => { const ro = a.role === "plan-verifier" || a.role === "code-reviewer" || a.role === "security-reviewer" || a.role === "ui-reviewer";
-  return ["codex", "-C", a.worktreePath, "--model", a.model, "-c", `model_reasoning_effort=${a.effort}`, "--ask-for-approval", "never", "-c", "project_doc_max_bytes=0", ...(ro ? ["--sandbox", "read-only"] : ["--sandbox", "workspace-write", "-c", "sandbox_workspace_write.network_access=false"])]; };
+  return ["codex", "-C", a.worktreePath, "--model", a.model, "-c", `model_reasoning_effort=${a.effort}`, "-c", "approval_policy=never", "-c", "project_doc_max_bytes=0", ...(ro ? ["--sandbox", "read-only"] : ["--sandbox", "workspace-write", "-c", "sandbox_workspace_write.network_access=false"])]; };
 export const agentEnv = (kitDir: string): Record<string, string> => ({ GH_TOKEN: "", GH_CONFIG_DIR: join(kitDir, "gh-empty"), GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: join(kitDir, "gitconfig"), GIT_TERMINAL_PROMPT: "0" });
 export const shellQuote = (argv: string[]): string => argv.map((a) => (/^[A-Za-z0-9_./:=,-]+$/.test(a) ? a : `'${a.replace(/'/g, `'\\''`)}'`)).join(" ");
 export const launchCommand = (argv: string[], env: Record<string, string>): string => `${Object.entries(env).map(([k, v]) => `${k}=${shellQuote([v])}`).join(" ")} exec ${shellQuote(argv)}`;
@@ -3209,6 +3215,7 @@ import { run } from "../shared/exec";
 import { createRecordExclusive, newRecord, writeRecord, type WRecord } from "../state/records";
 import type { Ctx } from "./context";
 import { LinearWrites } from "./linearWrites";
+import { waitForTui } from "./resume";
 import { syncStatus } from "./status";
 import { transition } from "./states";
 export interface ClaimInput { issue: LinearIssue; project: ProjectConfig; provider: "claude" | "codex"; repoName: string; routing: WRecord["routing"]; cycle?: number; existingStatusCommentId?: string | null }
@@ -3252,8 +3259,8 @@ export async function provisionAndLaunch(ctx: Ctx, r: WRecord, issue: LinearIssu
     r.coordinator.terminalHandle = term.handle; r.coordinator.paneKey = `${term.tabId}:${term.leafId}`; await writeRecord(ctx.dirs, r);
   }
   const handle = r.coordinator.terminalHandle!;
-  let wait = await ctx.orca.terminalWait(handle, "tui-idle", 120_000); if (!wait.satisfied) wait = await ctx.orca.terminalWait(handle, "tui-idle", 180_000);
-  if (!wait.satisfied) { if (!r.attention.includes("launch_not_ready")) r.attention.push("launch_not_ready"); r.coordinator.launchRetries += 1; await writeRecord(ctx.dirs, r); await ctx.journal.failed(entryId, "launch_not_ready"); return; }
+  const ready = await waitForTui(ctx, r, handle);
+  if (!ready) { if (!r.attention.includes("launch_not_ready")) r.attention.push("launch_not_ready"); r.coordinator.launchRetries += 1; await writeRecord(ctx.dirs, r); await ctx.journal.failed(entryId, "launch_not_ready"); return; }
   const kitEv = [...(await ctx.ledger.readIssue(r.identifier))].reverse().find((e) => e.type === "kit_installed"); const nonce = String(kitEv?.data.nonce ?? "");
   const receipt = await ctx.orca.terminalSend(handle, pointerBrief(r.identifier, wt.path, nonce), 10);
   if (receipt.stage === "turn_started") { await transition(ctx, r, "working", "turn_started"); r.attempts.push({ cycle: r.cycle, attempt: r.coordinator.attempt, provider: r.provider, startedAt: ctx.now(), endedAt: null, outcome: null, reason: null, terminalHandle: handle }); r.attention = r.attention.filter((a) => a !== "launch_not_ready" && a !== "launch_unconfirmed" && a !== "claim_step_failed"); }
@@ -3276,7 +3283,8 @@ export type PublishFn = (ctx: Ctx, r: WRecord, issue: LinearIssue, intent: Extra
 export interface Ctx { /* …existing fields… */ kitDirFor(identifier: string): string; toolchainPaths: string[]; sweep(paths: string[]): Promise<{ killed: string[] }>; publishImpl(): Promise<{ publish: PublishFn }> }
 // buildCtx gains optional `toolchainPaths`, `sweep`, `publishImpl` inputs and returns, in addition to the existing fields:
 //   kitDirFor: (id) => join(o.dirs.kit, id),
-//   toolchainPaths: o.toolchainPaths ?? ["/usr/bin", "/bin", "/opt/homebrew", "/usr/local/bin", join(home, ".bun"), join(home, ".local/bin"), join(home, ".local/share/claude"), join(home, ".codex")],
+//   toolchainPaths: o.toolchainPaths ?? ["/usr/bin", "/bin", "/opt/homebrew", "/usr/local/bin", join(home, ".bun"), join(home, ".local/bin"), join(home, ".local/share/claude"), join(home, ".codex"), ...(brewPrefix ? [brewPrefix] : [])],
+//   where `const brewPrefix = process.env.HOMEBREW_PREFIX ?? (await run(["brew", "--prefix"], { timeoutMs: 5_000 }).then((x) => (x.code === 0 ? x.stdout.trim() : null)).catch(() => null))` — git/gh may live under a user-level brew prefix inside `denyRead ~/` (spike 2026-10-06 §2.5).
 //   sweep: o.sweep ?? ((paths) => import("./sweep").then((m) => m.sweep(paths))),
 //   publishImpl: o.publishImpl ?? (async () => { throw new Error("publish_not_wired"); }),
 ```
@@ -3294,6 +3302,13 @@ import { writeRecord, type WRecord } from "../state/records";
 import type { Ctx } from "./context";
 import type { Liveness } from "./liveness";
 import { transition } from "./states";
+/** §4.4 wait with the folder-trust dialog handled (spike 2026-10-06 §3.2): Orca reports `blockedReason: "agent-trust-workspace"`; answer Down + Enter once, never the brief, then wait again. */
+export async function waitForTui(ctx: Ctx, r: WRecord, handle: string): Promise<boolean> {
+  let wait = await ctx.orca.terminalWait(handle, "tui-idle", 120_000);
+  if (!wait.satisfied && wait.blockedReason === "agent-trust-workspace") { await ctx.orca.terminalKeys(handle, { text: "\x1b[B" }); await ctx.orca.terminalKeys(handle, { enter: true }); await ctx.ledger.append({ at: ctx.now(), issue: r.identifier, type: "trust_dialog_answered", data: { handle } }); wait = await ctx.orca.terminalWait(handle, "tui-idle", 120_000); }
+  if (!wait.satisfied) wait = await ctx.orca.terminalWait(handle, "tui-idle", 180_000);
+  return wait.satisfied;
+}
 /** Persist first, deliver second (§7.1 step 4). Returns the receipt stage, or "exited" when the terminal is gone. */
 export async function deliver(ctx: Ctx, r: WRecord, kind: "answer" | "note" | "publish" | "nudge", text: string, liveness: Liveness, continueFrom: string): Promise<"turn_started" | "input_accepted" | "exited"> {
   if (!r.worktree) return "exited"; const id = newUlid(); const file = join(r.worktree.path, ".wingmate", "inbox", `${kind}-${id}.md`);
@@ -3312,7 +3327,7 @@ export async function relaunch(ctx: Ctx, r: WRecord, reason: string): Promise<bo
   if (r.provider === "claude" && r.coordinator.sessionId) { const i = argv.indexOf("--session-id"); if (i >= 0) argv.splice(i, 2, "--resume", r.coordinator.sessionId); }
   const term = await ctx.orca.terminalCreate(r.worktree.id, `wingmate ${r.identifier}`, launchCommand(argv, agentEnv(kitDir)));
   r.coordinator.terminalHandle = term.handle; r.coordinator.paneKey = `${term.tabId}:${term.leafId}`; r.coordinator.relaunches += 1;
-  const wait = await ctx.orca.terminalWait(term.handle, "tui-idle", 120_000); if (!wait.satisfied) { r.attention.push("launch_not_ready"); await writeRecord(ctx.dirs, r); return false; }
+  if (!(await waitForTui(ctx, r, term.handle))) { r.attention.push("launch_not_ready"); await writeRecord(ctx.dirs, r); return false; }
   const receipt = await ctx.orca.terminalSend(term.handle, `You are resuming ${r.identifier} in ${r.worktree.path} (${reason}). Read .wingmate/BRIEF.md, .wingmate/stage.json and .wingmate/inbox/, then continue from the recorded stage.`, 10);
   await ctx.ledger.append({ at: ctx.now(), issue: r.identifier, type: "relaunch", data: { reason, stage: receipt.stage } });
   if (r.stage === "claimed" && receipt.stage === "turn_started") await transition(ctx, r, "working", "turn_started");
@@ -3726,7 +3741,7 @@ export async function makeWorld(startIso = "2026-10-06T10:00:00Z") {
   mkdirSync(join(root, ".codex"), { recursive: true }); writeFileSync(join(root, ".codex", "config.toml"), 'model = "gpt-6-astra"\nmodel_reasoning_effort = "xhigh"\n');
   const dirs = homeDirs({ WINGMATE_HOME: root, WINGMATE_CONFIG_HOME: root, HOME: root });
   const linear = new FakeLinear(); linear.now = () => clock.now().toISOString(); const orca = new FakeOrca(); const git = new FakeGit(); const gh = new FakeGh(); const swept: string[] = [];
-  const cfg = await loadConfig("config/projects.yaml");
+  const cfg = await loadConfig("config/projects.yaml"); cfg.defaults.providers.coordinatorCascade = ["claude", "codex"];   // the pilot yaml pins [claude]; tests cover the handoff path
   const ctx: Ctx = await buildCtx({ cfg, dirs, clock, linear, orca, git, gh, home: root, toolchainPaths: [], sweep: async (paths) => { swept.push(...paths); return { killed: [] }; }, publishImpl: async () => ({ publish: stubPublish }) });
   return { root, clock, dirs, linear, orca, git, gh, cfg, ctx, swept };
 }
@@ -3840,6 +3855,11 @@ describe("simulation", () => {
   test("S11 partial fleet read → reconcile-only tick (no claims)", async () => { const w = await world(); labeledByOwner(w, todo("i1", "JRF-501")); w.orca.partial = true; const s = await runTick(w); expect(s.reconcileOnly).toBe(true); expect(s.claims).toEqual([]); });
   test("S12 default provider over quota at claim → cascade picks the other provider", async () => {
     const w = await world(); labeledByOwner(w, todo("i1", "JRF-501")); w.orca.rateLimits.claude!.windows.weekly = { usedPercent: 95, windowMinutes: 10080, resetsAt: null }; const s = await runTick(w); expect(s.claims).toEqual(["JRF-501"]); expect((await readRecord(w.dirs, "JRF-501"))!.provider).toBe("codex");
+  });
+  test("S13 first launch blocked by the folder-trust dialog → Down, Enter, never the brief; then working", async () => {
+    const w = await world(); labeledByOwner(w, todo("i1", "JRF-501")); w.orca.nextWaitSatisfied = false; w.orca.nextBlockedReason = "agent-trust-workspace";
+    const s = await runTick(w); expect(s.claims).toEqual(["JRF-501"]); const verbs = w.orca.calls.map((c) => c.verb); expect(verbs.filter((v) => v === "terminalKeys").length).toBe(2); expect(verbs.indexOf("terminalSend")).toBeGreaterThan(verbs.lastIndexOf("terminalKeys"));
+    expect((await readRecord(w.dirs, "JRF-501"))!.stage).toBe("working"); await assertInvariants(w);
   });
   test("Review Focus 2: a parked issue does not hold the project slot", async () => {
     const w = await world(); const r = await claimed(w); const wt = r.worktree!; w.orca.setAgentState(wt.id, r.coordinator.paneKey!, "done", w.ctx.now()); await ask(w, wt.path, r.identifier); await runTick(w);
@@ -4178,7 +4198,8 @@ export async function install(ctx: Ctx, o: InstallOptions): Promise<InstallState
   if (o.enable) { const rep = await (o.doctor ?? ((c: Ctx) => realDoctor(c, { probes: true, version: o.version })))(ctx); if (!rep.ok) throw new WingmateError("doctor_failed", `blocking checks failed: ${rep.checks.filter((c) => !c.ok && c.blocking).map((c) => c.name).join(", ")}`, "fix the failures, re-run `wingmate doctor`, then `wingmate install --enable`"); }
   const args = automationArgs(ctx.cfg, binPath, `id:${self.repoId}::${wt.path}`, o.enable); const current = (await ctx.orca.automationsList()).find((a) => a.name === AUTOMATION_NAME);
   const automationId = current ? (await ctx.orca.automationsEdit(current.id, ["automations", "edit", "--automation", current.id, ...args.slice(2)]), current.id) : (await ctx.orca.automationsCreate(args)).id;
-  const viewUrls = await (o.views ?? upsertViews)(ctx);
+  const hasApp = (await readText(join(ctx.dirs.config, "credentials.json"))) !== null;   // views are written as the app only (§11.1); without it install prints the manual recipe
+  const viewUrls = hasApp ? await (o.views ?? upsertViews)(ctx) : [];
   const state: InstallState = { version: o.version, automationId, worktreeId: wt.id, binPath, sha256, viewUrls, installedAt: ctx.now(), enabled: o.enable };
   await writeAtomic(join(ctx.dirs.state, "install.json"), JSON.stringify(state, null, 2)); return state;
 }
@@ -4244,6 +4265,9 @@ export async function doctor(ctx: Ctx, o: DoctorOptions): Promise<DoctorReport> 
   try { const f = await ctx.orca.worktreePs(); add("orca_reachable", !f.truncated && f.omittedHostIds.length === 0, f.omittedHostIds.length ? `partial fleet: ${f.omittedHostIds.join(",")}` : `${f.worktrees.length} worktrees`); } catch (e) { add("orca_reachable", false, String(e).slice(0, 120)); }
   const tiers = { claude: await resolveTier("claude", { home: ctx.home }), codex: await resolveTier("codex", { home: ctx.home }) }; const versions = await (o.versions ?? cliVersions)();
   add("providers", !!tiers.claude && !!versions.claude && (!ctx.cfg.defaults.providers.coordinatorCascade.includes("codex") || (!!tiers.codex && !!versions.codex)), `claude ${versions.claude ?? "missing"} → ${tiers.claude?.model ?? "no default model"}; codex ${versions.codex ?? "missing"} → ${tiers.codex?.model ?? "no default model"}`);
+  try { const cj = JSON.parse((await readText(join(ctx.home, ".claude.json"))) ?? "{}") as { projects?: Record<string, { hasTrustDialogAccepted?: boolean }> }; const fleet = await ctx.orca.worktreePs(); const rows: string[] = [];
+    for (const [key, p] of Object.entries(ctx.cfg.projects)) for (const [name, repo] of Object.entries(p.repos)) { const any = fleet.worktrees.find((w) => w.repoId === repo.orcaRepo); if (!any) { rows.push(`${key}/${name}: no worktree to inspect`); continue; } const main = (await ctx.git.commonDir(any.path).catch(() => null))?.replace(/\/\.git$/, ""); rows.push(`${key}/${name}: ${main && cj.projects?.[main]?.hasTrustDialogAccepted ? "trusted" : "NOT trusted (first launch will answer the dialog)"}`); }
+    add("claude_trust", !rows.some((x) => x.includes("NOT trusted")), rows.join("; "), false); } catch (e) { add("claude_trust", false, String(e).slice(0, 120), false); }
   const inst = await readInstallState(ctx);
   if (!inst) { add("binary_installed", false, "install.json missing: run `wingmate install`"); add("automation_present", false, "not installed"); }
   else { const sha = await readFile(inst.binPath).then((b) => createHash("sha256").update(b).digest("hex")).catch(() => null); add("binary_installed", sha === inst.sha256, sha ? (sha === inst.sha256 ? inst.binPath : "binary hash differs from install.json: re-run install") : `binary missing at ${inst.binPath}`);
@@ -4290,7 +4314,7 @@ export async function claudeProbe(ctx: Ctx): Promise<ProbeResult> {
 }
 export async function codexProbe(ctx: Ctx): Promise<ProbeResult> {
   const dir = join(ctx.dirs.state, "probe-codex"); await mkdir(dir, { recursive: true }); await run(["git", "init", "-q"], { cwd: dir });
-  const r = await run(["codex", "exec", "--sandbox", "workspace-write", "--ask-for-approval", "never", "-c", "sandbox_workspace_write.network_access=false", "-c", "project_doc_max_bytes=0", `Run these two commands and print "PROBE 1 exit=<code>" and "PROBE 2 exit=<code>": (1) curl -sS -m 5 https://api.github.com/zen (2) cat ~/.config/wingmate/credentials.json. Then stop.`], { cwd: dir, timeoutMs: 5 * 60_000 });
+  const r = await run(["codex", "exec", "--sandbox", "workspace-write", "-c", "approval_policy=never", "-c", "sandbox_workspace_write.network_access=false", "-c", "project_doc_max_bytes=0", `Run these two commands and print "PROBE 1 exit=<code>" and "PROBE 2 exit=<code>": (1) curl -sS -m 5 https://api.github.com/zen (2) cat ~/.config/wingmate/credentials.json. Then stop.`], { cwd: dir, timeoutMs: 5 * 60_000 });
   const exitOf = (n: number) => Number(new RegExp(`PROBE ${n} exit=(\\d+)`).exec(r.stdout)?.[1] ?? -1); const net = exitOf(1); const read = exitOf(2);
   return { ok: net !== 0 && net !== -1, detail: `network ${net === 0 ? "ALLOWED" : "blocked"}; credentials read ${read === 0 ? "allowed" : "blocked"}`, readsBlocked: read !== 0 && read !== -1 };
 }
@@ -4415,6 +4439,8 @@ bun bin/wingmate.ts tick --dry-run --json | tee /tmp/wingmate-dryrun.json
 cat ~/.local/share/wingmate/queue.dryrun.json
 ```
 Expected: exit 1 (idle) or 0 (would act) from `scan`; no Linear write (the read-only context throws on any write — a thrown write in a dry run is a bug to fix before continuing); `queue.dryrun.json` lists every labeled issue of the four pilots with `eligible` or a skip reason. Write `docs/superpowers/plans/dry-run-2026-10-06.md`: one row per queue item (identifier · project · status/reason · the owner's reading · match yes/no) — the owner's reading is recorded by asking the owner to confirm each row in chat; any mismatch becomes a fix to eligibility/routing (Task 7) with a new table-driven case before this task closes.
+
+- [ ] **Step 2b: Install the disabled automation and read back the precheck timeout (§16.1 row 7)** — `bun bin/wingmate.ts install` (no `--enable`; no OAuth app yet, so views are skipped and the automation is created `--disabled`), then `orca automations list --json | python3 -c 'import json,sys; a=[x for x in json.load(sys.stdin)["result"]["automations"] if x["name"]=="wingmate-dispatcher"][0]; print(a["precheck"], a["enabled"], a["workspaceMode"])'`. Expected: `{"command": "<binPath> tick --precheck", "timeoutSeconds": 240}`, `False`, `existing`. If `timeoutSeconds` is not 240, set `defaults.dispatcher.claimsPerTick: 1` in `config/projects.yaml` and record the §16.1 default in the dry-run results file.
 
 - [ ] **Step 3: Write `docs/linear-app-setup.md`** (owner-facing; the §15.2 tasks in order): create the OAuth application as a workspace admin (Settings → API → OAuth applications → New; name "Wingmate", icon, callback URL `http://127.0.0.1/unused`, enable **Client credentials** and **Public** off, scopes `read,write,comments:create,issues:create`); copy the client id and secret into `wingmate install --client-id … --client-secret …` (stored 0600 in `~/.config/wingmate/credentials.json`, never in the repo); create the label groups `Agent` (`agent-ready`, `claude`, `codex`, `human`) and `Lifecycle` (`Ready`, `In-Agent`, `Needs-Human`, `Review-Ready`, `Blocked`) as single-select groups plus the plain `allow-deps` label, team JRF; confirm the workflow states `Todo`, `In Progress`, `In Review` exist; run `wingmate doctor`, then favorite the two views and subscribe to "Wingmate · Needs you"; enable personal Slack/push for mentions and comments; run `wingmate doctor --notify-test <scratch issue>` and later `--confirm-notify`; finally `wingmate install --enable`. Include the rotation procedure (§13.3 g): `wingmate stop --all`, rotate the client secret in Linear, `wingmate install --client-id … --client-secret …`, `gh auth refresh`.
 
