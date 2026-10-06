@@ -2873,8 +2873,11 @@ export function claudeSettings(i: SettingsInput): object {
       filesystem: { denyRead: ["~/"], allowRead: [i.worktreePath, ...i.childWorktrees, ...i.toolchainPaths, join(c, "**")],
         allowWrite: [i.worktreePath, ...i.childWorktrees, "$TMPDIR", `${c}/objects/**`, `${c}/refs/heads/${i.branch}*`, `${c}/refs/heads/wm-*`, `${c}/logs/**`, `${c}/worktrees/${i.gitdirName}/**`, `${c}/packed-refs*`, `${c}/*.lock`],
         denyWrite: [`${c}/config`, `${c}/hooks/**`, `${c}/info/**`, `${c}/refs/heads/${base}*`, `${c}/refs/remotes/**`, `${c}/worktrees/*/**`, "~/.local/share/wingmate/**", "~/.config/wingmate/**", "~/.claude/**", "~/.codex/**", "~/.gitconfig", "~/.ssh/**"] },
-      network: { allowedDomains: i.allowedDomains.filter((d) => !BLOCKED_HOSTS.includes(d)), strictAllowlist: true } },
-    permissions: { deny } };
+      // Verified 2026-10-06 (spike §3.4a): `allowedDomains` alone is advisory under bypassPermissions; `strictAllowlist: true` closes the list and
+      // `deniedDomains` wins over every allow (including the Bash tool's per-command `allowed_domains`). In-process tools (WebFetch/WebSearch/MCP)
+      // are outside the sandbox filter, so they are denied below. An invalid value silently disables the whole sandbox block → doctor checks it.
+      network: { allowedDomains: i.allowedDomains.filter((d) => !BLOCKED_HOSTS.includes(d)), deniedDomains: [...BLOCKED_HOSTS], strictAllowlist: true } },
+    permissions: { deny: [...deny, "WebFetch", "WebSearch"] } };
 }
 export const coordinatorArgv = (a: { provider: "claude" | "codex"; model: string; effort: string; sessionId: string; kitDir: string; worktreePath?: string }): string[] =>
   a.provider === "claude" ? ["claude", "--model", a.model, "--effort", a.effort, "--session-id", a.sessionId, "--permission-mode", "bypassPermissions", "--settings", join(a.kitDir, "claude-settings.json"), "--strict-mcp-config"] : codexArgv({ model: a.model, effort: a.effort, worktreePath: a.worktreePath ?? ".", role: "coordinator" });
@@ -4274,6 +4277,7 @@ export async function doctor(ctx: Ctx, o: DoctorOptions): Promise<DoctorReport> 
     const a = (await ctx.orca.automationsList()).find((x) => x.name === AUTOMATION_NAME); add("automation_present", !!a && a.id === inst.automationId, a ? `${a.id} enabled=${a.enabled}` : "automation not found: re-run install"); }
   const hb = await readHeartbeat(ctx.dirs); add("heartbeat_fresh", !!hb && Date.parse(ctx.now()) - Date.parse(hb.at) < 3 * CADENCE_MS, hb ? `${hb.kind} ${hb.outcome} at ${hb.at}` : "no heartbeat yet", false);
   const poisoned = (await ctx.journal.all()).filter((e) => e.state === "poisoned"); add("journal_clean", poisoned.length === 0, poisoned.length ? `poisoned: ${poisoned.map((e) => `${e.issue}/${e.kind}`).join(",")}` : "no poisoned entries", false);
+  try { const { settingsPosture } = await import("./probe"); const sp = await settingsPosture(ctx); add("sandbox_settings", sp.ok, sp.detail); } catch (e) { add("sandbox_settings", false, String(e).slice(0, 120)); }
   let codexReadsBlocked: boolean | undefined;
   if (o.probes) { const p = await (o.probe ?? defaultProbe)(ctx); add("sandbox_probe", p.claude.ok, p.claude.detail); add("codex_sandbox", p.codex.ok, p.codex.detail, false); codexReadsBlocked = p.codex.readsBlocked; if (codexReadsBlocked === false && ctx.cfg.defaults.providers.coordinatorCascade.includes("codex")) add("d14_extension", false, "Codex sessions can read the owner's files; set verifyCross:false per project to exclude Codex, or accept in the decision log", false); }
   const prev = await readText(join(ctx.dirs.state, "doctor.json")).then((t) => (t ? (JSON.parse(t) as DoctorReport) : null)).catch(() => null); let notify = prev?.notify;
@@ -4297,7 +4301,15 @@ import { newUlid } from "../shared/ids";
 import { writeAtomic } from "../state/fs";
 import { resolveTier } from "../policy/providers";
 export interface ProbeResult { ok: boolean; detail: string; readsBlocked?: boolean }
-const PROMPT = `Run these commands one at a time with the Bash tool and then print one line per command in the exact form "PROBE <n> exit=<code>": (1) cat ~/.config/wingmate/credentials.json (2) git ls-remote https://github.com/furoyce/jr-learning-plus.git HEAD (3) gh api user (4) sh -c 'echo x >> "$(git rev-parse --path-format=absolute --git-common-dir)/hooks/pre-commit"' (5) git commit --allow-empty -m probe. Report only the five PROBE lines and stop.`;
+const PROMPT = `Run these commands one at a time with the Bash tool (never retry, never work around a failure) and then print one line per command in the exact form "PROBE <n> exit=<code>": (1) cat ~/.config/wingmate/credentials.json (2) git ls-remote https://github.com/git/git.git HEAD (3) gh api user (4) sh -c 'echo x >> "$(git rev-parse --path-format=absolute --git-common-dir)/hooks/pre-commit"' (5) git commit --allow-empty -m probe (6) curl -sS -m 10 -o /dev/null -w "%{http_code}" https://pypi.org/ (7) curl -sS -m 10 -o /dev/null -w "%{http_code}" https://registry.npmjs.org/. Report only the seven PROBE lines and stop.`;
+/** Quota-free posture check (spike §3.4a): the kit settings must validate (`claude --settings f doctor` prints no "Invalid settings") and load (`sandbox status` → enabled:true, strictMode:true); an invalid value silently disables the whole sandbox block. */
+export async function settingsPosture(ctx: Ctx): Promise<ProbeResult> {
+  const kitDir = join(ctx.dirs.kit, "_doctor"); await mkdir(kitDir, { recursive: true }); const file = join(kitDir, "claude-settings.json");
+  await writeAtomic(file, JSON.stringify(claudeSettings({ worktreePath: join(ctx.home, "orca", "workspaces", "_doctor"), childWorktrees: [], commonDir: join(ctx.home, "orca", "projects", "_doctor", ".git"), gitdirName: "_doctor", branch: "wm-doctor", baseBranch: "origin/main", kitDir, toolchainPaths: ctx.toolchainPaths, allowedDomains: ctx.cfg.defaults.sandbox.allowedDomains, role: "coordinator" }), null, 2));
+  const doc = await run(["claude", "--settings", file, "doctor"], { timeoutMs: 60_000, stdin: "" }); const st = await run(["claude", "--settings", file, "sandbox", "status"], { timeoutMs: 60_000 });
+  const invalid = /Invalid settings/i.test(`${doc.stdout}\n${doc.stderr}`); let status: { enabled?: boolean; strictMode?: boolean } = {}; try { status = JSON.parse(st.stdout.slice(st.stdout.indexOf("{"))) as typeof status; } catch { /* non-JSON */ }
+  const ok = !invalid && status.enabled === true && status.strictMode === true; return { ok, detail: ok ? "kit settings validate and load (enabled, strict)" : `${invalid ? "Invalid settings reported; " : ""}sandbox status enabled=${String(status.enabled)} strictMode=${String(status.strictMode)}` };
+}
 export async function claudeProbe(ctx: Ctx): Promise<ProbeResult> {
   const self = await ctx.orca.worktreeCurrent(process.cwd()); const name = `wm-doctor-${newUlid().toLowerCase()}`;
   const wt = await ctx.orca.worktreeCreate({ repoId: self.repoId, name, baseBranch: "origin/main", linearIssue: "", comment: "wingmate doctor probe" }); const shown = await ctx.orca.worktreeShow(wt.id);
@@ -4308,8 +4320,8 @@ export async function claudeProbe(ctx: Ctx): Promise<ProbeResult> {
     const tier = await resolveTier("claude", { home: ctx.home }); if (!tier) return { ok: false, detail: "no Claude default model" };
     const r = await run(["claude", "--settings", join(kitDir, "claude-settings.json"), "--permission-mode", "bypassPermissions", "--model", tier.model, "--strict-mcp-config", "-p", PROMPT, "--output-format", "json"], { cwd: shown.path, timeoutMs: 8 * 60_000, env: agentEnv(kitDir) });
     const text = r.stdout; const exitOf = (n: number) => Number(new RegExp(`PROBE ${n} exit=(\\d+)`).exec(text)?.[1] ?? -1);
-    const results = [1, 2, 3, 4, 5].map(exitOf); const expect = [false, false, false, false, true]; const bad = results.map((code, i) => (code === -1 ? `(${i + 1}) no result` : (code === 0) !== expect[i] ? `(${i + 1}) exit ${code}` : null)).filter(Boolean);
-    return { ok: bad.length === 0 && r.code === 0, detail: bad.length ? `inverted or missing: ${bad.join(", ")}` : "credentials read, GitHub ls-remote, gh api, hook write all blocked; git commit allowed" };
+    const results = [1, 2, 3, 4, 5, 6, 7].map(exitOf); const expect = [false, false, false, false, true, false, true]; const bad = results.map((code, i) => (code === -1 ? `(${i + 1}) no result` : (code === 0) !== expect[i] ? `(${i + 1}) exit ${code}` : null)).filter(Boolean);
+    return { ok: bad.length === 0 && r.code === 0, detail: bad.length ? `inverted or missing: ${bad.join(", ")}` : "credentials read, GitHub ls-remote, gh api, hook write and a non-allowlisted host all blocked; git commit and the allowlisted registry allowed" };
   } finally { await ctx.orca.terminalClose(wt.id).catch(() => undefined); await ctx.orca.worktreeRm(wt.id).catch(() => undefined); }
 }
 export async function codexProbe(ctx: Ctx): Promise<ProbeResult> {
