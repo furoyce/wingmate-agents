@@ -616,10 +616,22 @@ nextStep }` on refusal; every refusal is a ledger event; `<id>` defaults to the 
   <provider>] [--worktree current|new-child] [--task <id>] [--deps <json>] [--dry-run]` — creates the child Run on
   first use (`run-create` from the coordinator's terminal; records `childRunId`), resolves the provider by role
   (verifier/reviewer: the provider other than the coordinator's when `verifyCross`, else the coordinator's; worker:
-  the project's `workers` list in order, `--prefer` first), applies §9.1 availability and §9.2 tier, then runs
-  `orca orchestration worker-start --run <childRunId> --worktree <current|new-child> --agent <p> [--model --effort]
-  --spec <file content> --task-title … --json`, journals the receipt, and prints `{ dispatchId, taskId }`. The
-  coordinator supervises its workers with the standard Orca loop (`check --wait`, `reply`, `worker-release`).
+  the project's `workers` list in order, `--prefer` first), applies §9.1 availability and §9.2 tier, then
+  launches the role agent itself so that the §13.3(b)/(c) controls apply (amended 2026-10-06; `worker-start --agent`
+  would start it under Orca's own new-tab settings, outside the kit): it creates a terminal in the issue worktree with
+  `orca terminal create --worktree id:<wt> --title "wingmate <id> <role>" --command "exec <role argv>"`, where the role
+  argv is the Claude argv of §13.3(b) with the dispatcher-written per-role settings file
+  `kit/<identifier>/claude-settings.<role>.json` and `agentEnv`, or `codexArgv(role)` for Codex (`--sandbox
+  read-only` for verifier and reviewer roles, `workspace-write` without network for workers); waits for `tui-idle`
+  (answering the folder-trust dialog, §4.4); then binds the terminal to the Run with `orca orchestration worker-start
+  --run <childRunId> --terminal <handle> --spec <file content> --task-title … --json` (model and effort travel in the
+  argv because `--model/--effort` cannot be combined with `--terminal`), journals the receipt, and prints
+  `{ dispatchId, taskId }`. `--worktree new-child` is refused with `new_child_unsupported` in the pilot (a child
+  worktree needs its own settings file, which an agent cannot write into the dispatcher-owned kit); graph-method
+  workers share the issue worktree with exclusive file ownership. `doctor` verifies that the `orca` CLI is reachable
+  from inside the kit sandbox; if it is not, spawn becomes a dispatcher-executed outbox intent (phase 2 of this
+  verb). The coordinator supervises its workers with the standard Orca loop (`check --wait`, `reply`,
+  `worker-release`).
 - `run --id <runId>` — records a child Run created outside `spawn` (fallback; the tick also adopts a Run whose
   `coordinator_handle` equals the coordinator's terminal handle).
 - `finish --summary-file <path> [--title …] [--draft] [--repo <name>]…` — refuses with `gates_incomplete` unless
