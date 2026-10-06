@@ -282,7 +282,16 @@ export async function createRecordExclusive(dirs: Dirs, r: WRecord): Promise<voi
 export async function readRecord(dirs: Dirs, id: string): Promise<WRecord | null> {
   const text = await readText(file(dirs, id));
   if (text === null) return null;
-  const parsed = RecordSchema.safeParse(JSON.parse(text));
+  let json: unknown;
+  try {
+    json = JSON.parse(text);
+  } catch (e) {
+    throw new WingmateError(
+      "record_invalid",
+      `${id}: not valid JSON (${file(dirs, id)}): ${(e as Error).message}`,
+    );
+  }
+  const parsed = RecordSchema.safeParse(json);
   if (!parsed.success) {
     const issue = parsed.error.issues[0];
     throw new WingmateError("record_invalid", `${id}: ${issue?.path.join(".")} ${issue?.message}`);

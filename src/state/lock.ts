@@ -1,4 +1,4 @@
-import { readFile, rename, unlink } from "node:fs/promises";
+import { link, readFile, rename, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { newUlid } from "../shared/ids";
 import type { Dirs } from "../shared/paths";
@@ -30,9 +30,30 @@ export interface AcquiredLock {
 }
 export type AcquireResult = AcquiredLock | { kind: "held" };
 
+type LockRead = { kind: "ok"; lock: LockFile } | { kind: "missing" } | { kind: "garbage" };
+async function readLock(path: string): Promise<LockRead> {
+  let text: string;
+  try {
+    text = await readFile(path, "utf8");
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return { kind: "missing" };
+    throw e;
+  }
+  try {
+    const lock = JSON.parse(text) as Partial<LockFile> | null;
+    if (!lock || typeof lock.pid !== "number" || typeof lock.token !== "string") return { kind: "garbage" };
+    return { kind: "ok", lock: lock as LockFile };
+  } catch {
+    return { kind: "garbage" };
+  }
+}
+
 /**
- * The single tick lock (§6.0): O_EXCL create; a stale lock (dead pid, or a heartbeat older than
- * STALE_MIN minutes) is reclaimed by writing a fresh token and confirming it survived the rename.
+ * The single tick lock (§6.0). Creation is atomic with its content (temp file + hard link), so a lock file is
+ * never observable empty. A stale lock (dead pid, or a heartbeat older than STALE_MIN minutes) is reclaimed by an
+ * election: the stale file is renamed away — exactly one caller succeeds — and only that caller creates the new
+ * lock; a caller that finds it moved a lock other than the stale one it judged puts it back and yields. An
+ * unparseable lock file is treated as held (after one short re-read), never as stale.
  */
 export const TickLock = {
   path: (dirs: Dirs) => join(dirs.state, "tick.lock"),
@@ -44,26 +65,47 @@ export const TickLock = {
       token: newUlid(),
       heartbeatAt: iso(clock.now()),
     };
+    const body = JSON.stringify(mine);
     let kind: "acquired" | "reclaimed" = "acquired";
-    if (!(await createExclusive(path, JSON.stringify(mine)))) {
-      let existing: LockFile | null = null;
-      try {
-        existing = JSON.parse(await readFile(path, "utf8")) as LockFile;
-      } catch {
-        existing = null;
+    let created = await createExclusive(path, body);
+    for (let attempt = 0; !created && attempt < 3; attempt++) {
+      let cur = await readLock(path);
+      if (cur.kind === "garbage") {
+        await Bun.sleep(50);
+        cur = await readLock(path);
+        if (cur.kind === "garbage") return { kind: "held" };
+      }
+      if (cur.kind === "missing") {
+        // released, or renamed away by a reclaimer that is about to create its own lock: give that election a
+        // moment to finish, and create only if the lock is still absent (a genuine release)
+        await Bun.sleep(25);
+        if ((await readLock(path)).kind !== "missing") continue;
+        created = await createExclusive(path, body);
+        continue;
       }
       const stale =
-        !existing ||
-        !pidAlive(existing.pid) ||
-        minutesBetween(existing.heartbeatAt, iso(clock.now())) > STALE_MIN;
+        !pidAlive(cur.lock.pid) || minutesBetween(cur.lock.heartbeatAt, iso(clock.now())) > STALE_MIN;
       if (!stale) return { kind: "held" };
-      const tmp = `${path}.${mine.token}.tmp`;
-      await writeAtomic(tmp, JSON.stringify(mine));
-      await rename(tmp, path);
-      const check = JSON.parse(await readFile(path, "utf8")) as LockFile;
-      if (check.token !== mine.token) return { kind: "held" };
+      const moved = `${path}.stale-${mine.token}`;
+      try {
+        await rename(path, moved);
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code === "ENOENT") return { kind: "held" }; // lost the election
+        throw e;
+      }
+      const movedRead = await readLock(moved);
+      if (movedRead.kind !== "ok" || movedRead.lock.token !== cur.lock.token) {
+        // a winner already re-created the lock and we moved that one: restore it and yield
+        await link(moved, path).catch(() => undefined);
+        await unlink(moved).catch(() => undefined);
+        return { kind: "held" };
+      }
+      created = await createExclusive(path, body);
+      await unlink(moved).catch(() => undefined);
+      if (!created) return { kind: "held" };
       kind = "reclaimed";
     }
+    if (!created) return { kind: "held" };
     const timer = setInterval(() => {
       void writeAtomic(path, JSON.stringify({ ...mine, heartbeatAt: iso(clock.now()) }));
     }, HEARTBEAT_MS);

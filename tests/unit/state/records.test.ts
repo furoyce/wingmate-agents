@@ -1,6 +1,6 @@
 // tests/unit/state/records.test.ts
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { homeDirs } from "../../../src/shared/paths";
@@ -52,7 +52,10 @@ describe("records", () => {
     r.coordinator.terminalHandle = "term_abc";
     await writeRecord(dirs, r);
     expect((await readRecord(dirs, "JRF-1"))?.coordinator.terminalHandle).toBe("term_abc");
-    expect(existsSync(join(dirs.records, "JRF-1.json.tmp"))).toBe(false);
+    // temp names are `<path>.<pid>.<ts>.tmp`; none may survive the rename
+    expect(
+      readdirSync(dirs.records).filter((n) => n.startsWith("JRF-1.json.") && n.endsWith(".tmp")),
+    ).toEqual([]);
   });
   test("archive moves the file under archive/<id>.<cycle>.json and frees the slot", async () => {
     const r = newRecord({
@@ -73,5 +76,9 @@ describe("records", () => {
   test("rejects a corrupt record with record_invalid", async () => {
     await Bun.write(join(dirs.records, "JRF-9.json"), '{"schemaVersion":1}');
     await expect(readRecord(dirs, "JRF-9")).rejects.toMatchObject({ code: "record_invalid" });
+  });
+  test("rejects a non-JSON record file with record_invalid (not a raw SyntaxError)", async () => {
+    await Bun.write(join(dirs.records, "JRF-8.json"), "{not json");
+    await expect(readRecord(dirs, "JRF-8")).rejects.toMatchObject({ code: "record_invalid" });
   });
 });

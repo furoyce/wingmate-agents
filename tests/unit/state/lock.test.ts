@@ -1,6 +1,6 @@
 // tests/unit/state/lock.test.ts
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { homeDirs } from "../../../src/shared/paths";
@@ -82,5 +82,45 @@ describe("withRecordLock", () => {
       }),
     ]);
     expect(order.indexOf("a-end")).toBeLessThan(order.indexOf("b-start"));
+  });
+});
+describe("TickLock races (regression: concurrent acquirers must never both succeed)", () => {
+  type Result = Awaited<ReturnType<typeof TickLock.acquire>>;
+  const kinds = (xs: Result[]) => xs.map((x) => x.kind).sort();
+  const releaseAll = async (xs: Result[]) => {
+    for (const x of xs) if (x.kind !== "held") await x.release();
+  };
+  test("two concurrent acquirers on a fresh dir: exactly one acquired, one held (30×)", async () => {
+    for (let i = 0; i < 30; i++) {
+      const d = homeDirs({ WINGMATE_HOME: join(root, `fresh-${i}`), WINGMATE_CONFIG_HOME: root, HOME: root });
+      const res = await Promise.all([TickLock.acquire(d, clock), TickLock.acquire(d, clock)]);
+      expect(kinds(res)).toEqual(["acquired", "held"]);
+      await releaseAll(res);
+    }
+  });
+  test("two concurrent reclaimers of a stale lock: exactly one reclaimed, one held (30×)", async () => {
+    for (let i = 0; i < 30; i++) {
+      const home = join(root, `stale-${i}`);
+      mkdirSync(home, { recursive: true });
+      writeFileSync(
+        join(home, "tick.lock"),
+        JSON.stringify({
+          pid: 999999,
+          startedAt: "2026-10-06T09:00:00Z",
+          token: `old-${i}`,
+          heartbeatAt: "2026-10-06T09:40:00Z",
+        }),
+      );
+      const d = homeDirs({ WINGMATE_HOME: home, WINGMATE_CONFIG_HOME: root, HOME: root });
+      const res = await Promise.all([TickLock.acquire(d, clock), TickLock.acquire(d, clock)]);
+      expect(kinds(res)).toEqual(["held", "reclaimed"]);
+      await releaseAll(res);
+      expect(readdirSync(home).filter((n) => n.includes(".stale-"))).toEqual([]);
+    }
+  });
+  test("a lock file containing garbage is held, never reclaimed", async () => {
+    writeFileSync(join(root, "tick.lock"), "not json at all");
+    const a = await TickLock.acquire(dirs, clock);
+    expect(a.kind).toBe("held");
   });
 });
