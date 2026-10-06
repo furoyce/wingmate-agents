@@ -24,3 +24,19 @@ child workers, W-7/F4 per-provider quota shapes, W-8/UX-11 cost provenance (no p
 W-9/F18 automation `--workspace … --workspace-mode existing --fresh-session` + compiled dispatcher binary,
 W-10 handoff settles predecessor, C-02..C-20 state-machine holes, UX-01..UX-17 (mention owner id, health tile,
 immediate resume, skip reasons, trimmed Console v1), F-series formats and per-slice acceptance criteria.
+
+## Status after revision 2 and the recheck (2026-10-06)
+- Revision 2 (`be77e53`) addressed the six blockers and the major themes above.
+- A capped three-lens recheck (consistency, Orca feasibility, security; no refuter fan-out) confirmed 69 prior
+  findings resolved and raised 29 new ones (5 blockers, 22 majors, 2 minors): see `recheck-2026-10-06.md`.
+  Headlines: override-table ordering released paused issues; the self-answer block had no exit; no authoritative
+  transition table; publish-guard failures had no wake-up; `dispatch:` addressing could not reach a non-Dispatch
+  coordinator; `account list` snapshots are hours stale; `terminal wait/send` needed explicit handles and the
+  `exec` prefix; `worktree ps` retains closed-tab entries; shared dispatcher state defeated the outbox model;
+  the Claude sandbox had to be loaded from a dispatcher-owned file with `allowUnsandboxedCommands: false`;
+  GitHub hosts had to leave the agent network allowlist; Codex needed read-only/no-network modes; the Console
+  token could not live on disk or in argv; `wingmate stop` could not wait on the tick lock and needed a process
+  sweep.
+- Revision 3 applies all 29 (spec sections 4.4, 5.1, 5.2.1, 5.4, 5.5, 6.0, 6.3, 7.1–7.4, 8.0–8.1, 9.1, 9.4, 9.6,
+  10.1, 12.2, 12.5, 12.8, 13.1, 13.3, 14.3, 16.1, Appendix A). Decisions D14–D18 remain *proposed* pending the
+  owner's review.

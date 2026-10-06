@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Date | 2026-10-05 (revision 2, 2026-10-06, after the five-lens critique in `review/2026-10-05-critique/`) |
+| Date | 2026-10-05 · revision 3 on 2026-10-06, after the five-lens critique and the three-lens recheck in `review/2026-10-05-critique/` |
 | Status | Draft for owner review |
 | Owner | Royce Fu (royce.code@gmail.com) |
 | Scope | Pilot of the Wingmate Agents framework on four projects, plus the Wingmate Console |
@@ -196,7 +196,7 @@ Linear (control plane)                            Orca (execution plane)
   automation idempotently:
   `orca automations create --name wingmate-dispatcher --trigger '*/5 * * * *' --workspace id:<repoId>::<dispatcher
   worktree path> --workspace-mode existing --fresh-session --precheck '<binPath> tick --precheck'
-  --precheck-timeout 240 --missed-run-grace-minutes 10 --timezone <owner tz> --provider codex
+  --precheck-timeout 240 --missed-run-grace-minutes 10 --timezone <defaults.timezone> --provider codex
   --prompt 'This automation never runs an agent. If you are reading this, print UNEXPECTED_AGENT_RUN and stop.'
   --disabled --json`.
 - The precheck command performs the whole tick (§6) and exits **1** after acting or when idle, **2** on error or
@@ -211,19 +211,29 @@ Linear (control plane)                            Orca (execution plane)
 
 ### 4.4 Coordinator execution model and Run topology (D16)
 - The coordinator is launched into the issue worktree with `orca terminal create --worktree id:<wt> --title
-  "wingmate <identifier>" --command "<argv>" --json`, then `terminal wait --for tui-idle --timeout-ms 120000`,
-  then `terminal send --text "<pointer brief>" --enter --wait-submit 10 --json` (success = receipt stage
-  `turn_started`). The argv carries the resolved model and effort (§9.2), a deterministic session id for Claude,
-  and the unattended-but-sandboxed flags in §13.3; the kit's `.claude/settings.local.json` deny rules apply to
-  Claude sessions in the worktree.
+  "wingmate <identifier>" --command "exec <shell-quoted argv>" --json` → record `result.handle` and the row's
+  `${tabId}:${leafId}` as `paneKey`; then `orca terminal wait --terminal <handle> --for tui-idle --timeout-ms
+  120000 --json` — send **only** when `result.wait.satisfied === true` (on `false`, wait once more with
+  `--timeout-ms 180000`; still unsatisfied → the step fails with `launch_not_ready` and the next tick retries the
+  send against the same handle after a fresh wait, never a second `terminal create` while the handle is live);
+  then `orca terminal send --terminal <handle> --text "<pointer brief>" --enter --wait-submit 10 --json` (success
+  = receipt stage `turn_started`). `--command` is a line typed into the login shell Orca spawns, not argv: the
+  dispatcher shell-quotes the argv and prefixes `exec` so the PTY and its handle end with the agent process. The
+  argv carries the resolved model and effort (§9.2), a deterministic session id for Claude, and the
+  unattended-but-sandboxed flags of §13.3(b)/(c), including `--settings` pointing at the dispatcher-owned settings
+  file; the worktree's `.claude/settings.local.json` is written too but not relied on.
 - The coordinator is **not** an Orca Dispatch, so no injected worker preamble conflicts with the Wingmate protocol
   and resume is a plain `terminal send` to the same session. It is depth 0: it creates its own orchestration Run
   on first fan-out (through `wingmate issue spawn`, which runs `run-create` from the coordinator's terminal and
-  records `coordinator.childRunId`), and its verifiers and workers are depth-1 Dispatches of that Run — within
-  Orca's default nested-depth limit. Workers never create Runs or spawn workers.
-- The dispatcher addresses the coordinator by recorded terminal handle and pane key (re-resolved from `terminal
-  list --worktree` each tick because handles are runtime-scoped) and its workers by `worker-list --run
-  <childRunId>`. Nothing relies on a terminal's Run binding across ticks.
+  records `coordinator.childRunId` in `.wingmate/run.json`), and its verifiers and workers are depth-1 Dispatches
+  of that Run — within Orca's default nested-depth limit. Workers never create Runs or spawn workers.
+- The dispatcher addresses the coordinator by its terminal handle (re-resolved each tick from `terminal list
+  --worktree id:<wt> --json`, because handles are runtime-scoped) and by the pane key `${tabId}:${leafId}` of
+  that row, which joins to the `worktree ps` `agents[]` entry; that row's `agentIdentity` and `lastOutputAt` plus
+  the matching `agents[]` entry are the liveness inputs (§5.5). Messages to a `working` coordinator go to its own
+  Run mailbox (`orchestration send --to run:<childRunId>`), never to a `dispatch:` address, which would reach a
+  worker. Workers are addressed by `worker-list --run <childRunId>`. Nothing relies on a terminal's Run binding
+  across ticks.
 
 ## 5. Work-item model and state machine
 
@@ -235,15 +245,16 @@ Orca ids are stored verbatim; the record is the source for the Console and `stat
 {
   schemaVersion: 1, source: 'linear-issue',
   identifier: 'JRF-404', linearId, project: 'bouncr', repo: 'api',           // one routed repo per record
-  routing: { basis: 'rule'|'default'|'ambiguous', candidates: string[] },
+  routing: { basis: 'rule'|'default'|'ambiguous', candidates: string[], rerouteFrom: string|null },
   cycle: 1,                                     // increments on each re-claim after a terminal stage
   stage: 'claimed'|'working'|'awaiting-human'|'review'|'blocked'|'released'|'done'|'cancelled',
   paused: boolean,                              // owner-added Blocked/Needs-Human on an active record
   pipelineStage: 'intake'|'plan'|'planVerify'|'implement'|'validate'|'ui'|'security'|'pr',
   provider: 'claude'|'codex', tier: 'best', method: 'loop'|'graph'|null, autonomy,
-  worktree: { id, path, branch, baseSha },
+  worktree: { id, path, branch /* short name */, baseSha, gitCommonDir, gitdirName },
   coordinator: { mode: 'terminal', terminalHandle, paneKey, sessionId, argv: string[],
-                 launch: { model, effort }, startedAt, childRunId: string|null, attempt: number },
+                 launch: { model, effort }, startedAt, childRunId: string|null,
+                 attempt: number, relaunches: number, launchRetries: number },
   attempts: [{ cycle, attempt, provider, startedAt, endedAt, outcome, reason, terminalHandle }],
   handoffs: { total, thisCycle },
   questions: [{ id, commentId, askedAt, status: 'open'|'answered'|'stale', answerCommentId, answeredAt,
@@ -257,13 +268,20 @@ Orca ids are stored verbatim; the record is the source for the Console and `stat
            bySession: [{ role, provider, sessionRef, tokens, costUsd, agentMinutes,
                          provenance: 'measured-transcript'|'timed'|'unknown' }] },
   budget: { softTokens: number|null, hardTokens: number|null, capLifted: boolean, softNoticeAt: string|null },
-  linear: { state, lifecycleLabel, statusCommentId, subscribed: boolean, lastSeenUpdatedAt,
-            lastSeenCommentAt, finishedAt: string|null },
+  linear: { state, lifecycleLabel, lifecycleLabelAtClaim: string|null, pausedWith: string|null,
+            statusCommentId, subscribed: boolean, lastSeenUpdatedAt, lastSeenCommentAt,
+            finishedAt: string|null },
   outbox: { pending: number, lastDrainedAt },
   history: [{ at, from, to, cause, evidence }],
   claimedAt, updatedAt
 }
 ```
+
+**Attempts, relaunches, retries.** An **attempt** is one provider's tenure on the issue within a cycle:
+`coordinator.attempt` increments on handoff and reroute only, and `attempts[]` holds one entry per attempt.
+Relaunches of the same attempt (a successor session in the same worktree after `exited` or a lost terminal) are
+counted in `coordinator.relaunches` (reset on a new attempt); retries of a failed claim step (§5.4) are counted in
+`coordinator.launchRetries`. `paused` is a flag orthogonal to the stage.
 
 ### 5.2 States and their Linear mirror
 | Stage | Linear state | Lifecycle label | Set by |
@@ -273,7 +291,7 @@ Orca ids are stored verbatim; the record is the source for the Console and `stat
 | `working` | In Progress | `In-Agent` | dispatcher, when the coordinator's brief was accepted (`turn_started`) |
 | `awaiting-human` | In Progress | `Needs-Human` | dispatcher, when it executes an `ask` intent |
 | `review` | In Review | `Review-Ready` | dispatcher, when it executes a `finish` intent (after publishing) |
-| `blocked` | In Progress | `Blocked` (+ one `<!-- wingmate:blocked -->` comment) | dispatcher: cascade exhausted, launch failed twice, provider unavailable, resume failed twice, kit tampered, optional hard budget, owner `stop` |
+| `blocked` | In Progress | `Blocked` (+ one `<!-- wingmate:blocked -->` comment) | dispatcher; causes enumerated in §5.2.1 |
 | `released` | as the owner left it | Wingmate's Lifecycle label removed | dispatcher, on an owner override (§7.4) |
 | `done` / `cancelled` | Done / Canceled or Duplicate | Wingmate's Lifecycle label removed as its final write | the owner or GitHub merge; Wingmate reacts |
 
@@ -293,6 +311,23 @@ Rules:
   vetoes; it is replaced by `In-Agent` at claim and restored on `released`.
 - The record's `linear` block is a mirror for display and change detection; it is never written back to Linear.
 
+#### 5.2.1 Transitions (the only edges; invariant I6 asserts this table; `paused` is orthogonal)
+| From → to | Cause (section) |
+|---|---|
+| `claimed → working` | brief accepted, `turn_started` (§5.4 step 5) |
+| `claimed → blocked` | `launch_failed`, `setup_failed`, `launch_not_ready` twice (§5.4) |
+| `working → awaiting-human` | `ask` intent executed (§6.3 step 2) |
+| `working → review` | `finish` intent published (§13.3 d) |
+| `working → claimed` | handoff (§9.4) or reroute (§10.3): same worktree, next attempt |
+| `working → blocked` | `cascade_exhausted`, `provider_unavailable`, `kit_tampered`, `budget`, `grace_expired_no_cascade`, `owner_stop`, `publish_guard` after two failed re-gates |
+| `awaiting-human → working` | verified answer delivered, `turn_started` (§7.1 step 4) |
+| `awaiting-human → blocked` | `resume_failed`, `self_answer_suspected`, `worktree_gone`, `owner_stop` |
+| `review → working` | owner moves In Review → In Progress (§7.3) |
+| `blocked → working` | approver `continue` or Console **Continue** / **Confirm answer** — only for `budget`, `resume_failed`, `self_answer_suspected` |
+| any non-terminal → `released` | owner override (§7.4) |
+| any → `done` / `cancelled` | Done / Canceled / Duplicate observed with valid authorship (§7.4) |
+| `blocked` / `released` / `done` / `cancelled` → archive → `claimed` | eligible again: new cycle (§5.2 Rules) |
+
 ### 5.3 Eligibility (evaluated by `scan` and `tick` over the candidate query, §6.2)
 An issue is **eligible** when all hold: project ∈ pilots ∧ `archivedAt == null` ∧ `trashed != true` ∧ state type
 `unstarted` (Todo) ∧ exactly one Agent-group label ∈ {`agent-ready`, `claude`, `codex`} ∧ no Lifecycle label ∈
@@ -308,38 +343,53 @@ matters. Every skip reason is recorded in `queue.json` with the next evaluation 
 ### 5.4 Claim and launch sequence (one journal entry with ordered steps; replayed as a unit)
 1. Exclusive create of the record (`O_EXCL`); `cycle` set; routing resolved (§10.3); provider and tier resolved
    (§9.1–9.2); `baseSha` read from the repo's base ref.
-2. Linear (as Wingmate, pre-write re-read): state → In Progress, Lifecycle → `In-Agent`, subscribe the owner,
-   create the status comment (or reuse the existing one).
+2. Linear (as Wingmate, pre-write re-read): record `linear.lifecycleLabelAtClaim`, state → In Progress, Lifecycle
+   → `In-Agent`, subscribe the owner, create the status comment (or reuse the existing one).
 3. `orca worktree create --repo id:<orcaRepo> --name wm-<identifier-lowercase> --no-parent --base-branch
    <repos.<name>.base> --linear-issue <identifier> --comment "wingmate: claimed" --setup skip --json`; journal
-   `result.worktree.id`; read `branch` and `path` back with `worktree show`. If a worktree linked to the issue
-   already exists (previous cycle), reuse it and reset it to the base ref only when its branch has no unpushed
-   commits; otherwise reuse as is.
-4. Install the kit (§8.0) into `<path>/.wingmate/` and the agent settings into `<path>/.claude/settings.local.json`
-   (merged if present); append both paths to `$(git -C <path> rev-parse --git-common-dir)/info/exclude`; write
-   install policy files (§13.3 dependency policy); run `repos.<name>.setup` synchronously with a 10-minute timeout
-   (journaled; failure → `blocked` with reason `setup_failed`).
-5. `orca terminal create --worktree id:<wt> --title "wingmate <identifier>" --command "<argv>" --json`; `terminal
-   wait --for tui-idle --timeout-ms 120000`; `terminal send --text "<pointer brief>" --enter --wait-submit 10
-   --json`. `turn_started` → stage `working`, record `terminalHandle`, `paneKey`, `sessionId`. `input_accepted`
-   only → stay `claimed`, `attention: launch_unconfirmed`, re-check next tick (never resend; a stale handle triggers
-   re-resolution). A bare create may open a fallback shell terminal; it is never counted as an agent and is closed
-   only after `terminal show` proves it is an unused shell.
+   `result.worktree.id`; read `path` and `branch` back with `worktree show --json` and store `worktree.branch` as
+   the short name (`refs/heads/` removed; the full ref stays in the journal receipt); record `gitCommonDir`
+   (`git rev-parse --git-common-dir`) and the worktree's gitdir name. If a worktree linked to the issue already
+   exists (previous cycle), reuse it and reset it to the base ref only when its branch has no commits beyond
+   `baseSha`; otherwise reuse as is.
+4. Install the kit (§8.0) into `<path>/.wingmate/`; write the dispatcher-owned agent settings to
+   `~/.local/share/wingmate/kit/<identifier>/` (Claude settings, empty `gh` config dir, git config, no-hooks dir —
+   §13.3(b)) and a courtesy copy of the deny rules to `<path>/.claude/settings.local.json` (merged if present);
+   append `.wingmate/` and `.claude/settings.local.json` to `<gitCommonDir>/info/exclude`; write the install-policy
+   files (§13.3(e)); take the integrity-set hashes (§6.3 step 6); run `repos.<name>.setup` synchronously with a
+   10-minute timeout (journaled; failure → `blocked`, `setup_failed`).
+5. Launch per §4.4: `terminal create … --command "exec <argv>"` → handle and pane key; `terminal wait --terminal
+   <handle> --for tui-idle` with the `satisfied` rule; `terminal send --terminal <handle> …`. `turn_started` →
+   stage `working`; record `terminalHandle`, `paneKey`, `sessionId` (Claude: the uuid passed as `--session-id`;
+   Codex: the newest `~/.codex/sessions/**/rollout-*.jsonl` whose `session_meta.cwd` equals the worktree path and
+   whose start time is ≥ the launch time, captured within two ticks, else `attention: codex_session_unknown`).
+   `input_accepted` only → stay `claimed`, `attention: launch_unconfirmed`; next tick: if the pane shows `state ==
+   'working'` or `.wingmate/stage.json` exists → `working`; else re-issue the same send once with the receipt's
+   `--retry-request <id>` (Orca replays the bound prompt idempotently); still unconfirmed → a failed step. A bare
+   create may open a fallback shell terminal; it is never counted as an agent and is closed only after `terminal
+   show` proves it is an unused shell.
 6. `orca worktree set --worktree id:<wt> --workspace-status in-progress --comment "<pipelineStage>"`.
-A step that fails is recorded on `attempts[]` with Orca's receipt; the same step is retried next tick at most once;
-a second failure → `blocked` (`launch_failed`), with `In-Agent` removed so the issue is visibly stuck, and the
-retained worktree named in the blocked comment.
+A step that fails is recorded with Orca's receipt; `coordinator.launchRetries` increments and the same step is
+retried next tick at most once; a second failure → `blocked` (`launch_failed`), with `In-Agent` removed so the
+issue is visibly stuck, and the retained worktree named in the blocked comment.
 
-### 5.5 Coordinator liveness (one function in `machine/reconcile.ts`, evaluated each tick)
-Sources: the issue worktree's row in `orca worktree ps --json` (`agents[]` by `paneKey`: `state`, `stateStartedAt`,
-`updatedAt`; `lastOutputAt`), `orca terminal list --worktree id:<wt> --json` (handle existence), and for workers
-`orca orchestration worker-list --run <childRunId> --json` (`projection.liveness.verdict`).
-- `working` := agent entry `state == 'working'`.
-- `idle` := agent entry `state == 'done'` with a live terminal (turn ended; parked or finished a turn).
-- `exited` := the terminal handle is gone and no agent entry exists for the pane, or the worktree is gone.
-- `unverifiable` := Orca unreachable, partial fleet read (`truncated`/`omittedHostIds`), or an agent entry without
-  state. `unverifiable` never triggers stop, relaunch, handoff or `blocked`; it is recorded as
-  `attention: liveness_unverifiable`.
+### 5.5 Coordinator liveness (one function in `machine/liveness.ts`, evaluated each tick)
+Sources: `orca terminal list --worktree id:<wt> --json` (rows: `handle`, `tabId`, `leafId`, `agentIdentity`,
+`lastOutputAt`), the worktree's row in `orca worktree ps --json` (`agents[]` keyed by `paneKey = tabId:leafId`:
+`state`, `stateStartedAt`, `updatedAt`), and for workers `orca orchestration worker-list --run <childRunId> --json`
+(`projection.liveness.verdict`). `worktree ps` retains `done` entries for closed tabs, so an `agents[]` entry whose
+`tabId` is not in `terminal list` is ignored.
+- `working` := the recorded handle is present in `terminal list` and its pane's `agents[]` entry has `state ==
+  'working'`.
+- `idle` := the handle is present, the row has `agentIdentity` set, and the pane's entry is `state == 'done'`
+  (turn ended; parked or between turns).
+- `exited` := the recorded handle is absent from `terminal list` (the `exec` prefix makes the PTY end with the
+  agent), or the row is present with `agentIdentity == null` (only a shell remains; confirmed by `terminal wait
+  --terminal <handle> --for exit --timeout-ms 1 --json` or a `terminal show` preview ending in a shell prompt), or
+  the worktree is gone.
+- `unverifiable` := Orca unreachable, a partial fleet read (`truncated`/`omittedHostIds`), or a present row whose
+  pane has no `agents[]` entry and no `agentIdentity`. `unverifiable` never triggers stop, relaunch, handoff or
+  `blocked`; it is recorded as `attention: liveness_unverifiable`.
 - A worker is live when its Dispatch verdict is `live`; `unverifiable` workers are waited on, never stopped.
 
 ## 6. The tick
@@ -349,7 +399,8 @@ Sources: the issue worktree's row in `orca worktree ps --json` (`agents[]` by `p
   heartbeatAt }`; an async timer refreshes `heartbeatAt` every 30 s while any `orca`/Linear call is in flight. Stale
   when the pid is dead *or* `heartbeatAt` is older than 15 min; a stale lock is reclaimed by atomically renaming a
   fresh lock over it and re-reading to confirm the token. A fresh lock held by another process → the tick exits 1
-  with reason `lock_held`.
+  with reason `lock_held`. `wingmate stop` never waits on this lock: it writes `stop-requested.json`, which the
+  tick checks before every external action and honors by aborting with outcome `stopped` (§13.3 i).
 - `records/<identifier>.lock`: every record read-modify-write — in the tick, in `issue` verbs, in `pause`/`stop`,
   in Console actions — holds it for the duration of the write (< 1 s) and writes via temp file + atomic rename.
   `issue` verbs never wait on `tick.lock`.
@@ -387,13 +438,20 @@ Candidate query: project ∈ pilots ∧ state type `unstarted` ∧ Agent label �
    retried next tick.
 3. **Answers and comments** per §7.2: resume `awaiting-human` on a verified answer; forward owner notes to
    `working` coordinators; collect `review` comments; `continue` on `blocked`.
-4. **Liveness**: `claimed`/`working` with coordinator `exited` → relaunch once in the same worktree with the resume
-   argv (§7.1 step 4); a second `exited` in the same attempt → handoff per §9.4 or `blocked`. `idle` in `working`
-   for > 10 min with no gate/note since → one `terminal send` nudge ("continue from stage X; if blocked, run
-   `wingmate issue ask`"), at most 2 nudges, then the cap/grace rule.
+4. **Liveness**: `claimed`/`working` with coordinator `exited` → relaunch once in the same attempt
+   (`coordinator.relaunches = 1`) with the resume argv (§7.1 step 4); a further `exited` in the same attempt →
+   handoff per §9.4 or `blocked`. `idle` in `working` for > `timers.idleNudgeMin` with no gate, note or outbox
+   item since → one `terminal send` nudge ("continue from stage X; if blocked, run `wingmate issue ask`"); still
+   idle after another `idleNudgeMin` → a second nudge; still idle after a third → `attention: cap_passed` and the
+   §9.6 grace clock starts immediately, as if the stage cap had been crossed.
 5. **Timers and budgets** (§9.6).
-6. **Kit integrity**: re-hash `.wingmate/PROTOCOL.md`, `.claude/settings.local.json` and the pinned gate commands
-   in every active worktree; a mismatch → stop workers, `blocked` with reason `kit_tampered`.
+6. **Kit integrity.** The **integrity set** is `.wingmate/PROTOCOL.md`, `.wingmate/BRIEF.md`, `.wingmate/prompts/**`,
+   `.wingmate/gates.json`, `.wingmate/launch.json`, `.claude/**`, `.mcp.json`, `.codex/**`, `.cursor/**`,
+   `.gemini/**`, `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, plus the repo's git common-dir `config` and `hooks/**`
+   (shared by every worktree of that repo); hashes are taken at claim after kit install. Every tick, and `spawn`
+   immediately before `worker-start`, re-hash the set and run `git status --porcelain --untracked-files=all --
+   <set>`; any hash mismatch, modified tracked file or untracked file in the set → stop workers, `blocked`
+   (`kit_tampered`), Console alert naming the path; a common-dir change blocks every active issue of that repo.
 7. **Cleanup**: records in `done`/`cancelled` older than `cleanup.worktreeGraceHours` → §13.3 cleanup sequence.
 
 ### 6.4 Claim new work
@@ -438,18 +496,24 @@ claims, resumes, relaunches or handoffs** that start an agent; `stop` requests s
    `working` — every pane of the issue worktree and its child worktrees must have been non-`working` with
    `stateStartedAt ≤ createdAt − 60 s`, and the coordinator terminal's `lastOutputAt ≤ createdAt − 60 s`. A comment
    failing the author rule appears in the Console inbox as "unverified input — forward to the agent?" and is never
-   auto-forwarded. A comment failing the activity rule marks the issue `attention: possible_self_answer`, sets
-   `Blocked`, and requires the owner's confirmation in the Console before any resume. Console answers are posted
-   by the owner's click and satisfy both rules by construction.
+   auto-forwarded. A comment failing the activity rule is recorded in `questions[].nonAnswerCommentIds` and the
+   record moves to `blocked` (`self_answer_suspected`, `attention: possible_self_answer`) with `Blocked` set and
+   one blocked comment; it leaves `blocked` only by the owner's **Confirm answer** action in the Console (which
+   re-runs step 4 with that comment as the answer) or by an approver comment whose first line is exactly `continue`
+   (which treats the most recent flagged comment as the answer). Console answers are posted by the owner's click;
+   the answer endpoint applies the same activity rule server-side (409 `agent_active` while any agent of the issue
+   is `working`).
 4. **Resume** (at most 2 attempts per answer, then `blocked` with `resume_failed`): persist first — write the
    answer and "continue from `<pipelineStage>`" into `.wingmate/inbox/<questionId>.md`, fenced as untrusted data
    with the brief's nonce; then deliver a pointer ("question `<id>` answered — read `.wingmate/inbox/<id>.md` and
-   continue") with `terminal send --terminal <handle> --text … --enter --wait-submit 10 --json` after a `terminal
-   wait --for tui-idle --timeout-ms 30000`. Success = `turn_started` → `Needs-Human → In-Agent`, stage `working`,
+   continue") with `terminal send --terminal <handle> --text … --enter --wait-submit 10 --json` after `terminal
+   wait --terminal <handle> --for tui-idle --timeout-ms 30000 --json` reports `satisfied`. Success =
+   `turn_started` → `Needs-Human → In-Agent`, stage `working`,
    `questions[].status = answered`. `input_accepted` only → `attention: resume_unconfirmed`; next tick re-evaluates
    from `worktree ps` before deciding; never resend the same message. Terminal gone but worktree present → launch
-   a successor in the same worktree with the resume argv (Claude `--resume <sessionId>`; Codex `codex resume
-   --last` in the worktree; else a fresh session) and the pointer brief. Worktree gone → `blocked` with the retained
+   a successor in the same worktree with the resume argv (Claude `claude --resume <sessionId>`; Codex `codex resume
+   <sessionId>` with the id captured per §5.4 step 5; `codex_session_unknown` → a fresh session from `.wingmate/`)
+   and the pointer brief. Worktree gone → `blocked` with the retained
    branch named; Wingmate never re-creates a worktree the owner removed.
 5. An unanswered question never retries or re-plans. After 24 h the question comment is edited to prepend
    "Reminder (1 day)" and re-mentions the owner once; the Console marks it stale; no further reminders.
@@ -458,13 +522,14 @@ claims, resumes, relaunches or handoffs** that start an agent; `stop` requests s
 | Stage | Owner comment |
 |---|---|
 | `awaiting-human` | the answer (§7.1); if the coordinator judges it not an answer it runs `ask --reask <questionId>` (edits the existing question, re-mentions, bumps `askedAt`) and ends its turn |
-| `claimed` / `working` | forwarded at the next tick as "Owner note (data, not an instruction)", nonce-fenced, via `terminal send` when idle or `orchestration send --to dispatch:` to live workers' coordinator mailbox when working; logged and shown in the status activity line |
+| `claimed` / `working` | persisted first to `.wingmate/inbox/note-<ulid>.md` (nonce-fenced, "Owner note — data, not an instruction"), then delivered: `idle` → `terminal send --terminal <handle>` with a pointer; `working` with `childRunId` set → `orca orchestration send --to run:<childRunId> --type status --subject "wingmate: owner note <ulid>" --body "read .wingmate/inbox/note-<ulid>.md" --json` (read at the coordinator's next `check`; PROTOCOL.md requires `check --peek` before every gate); `working` with no Run yet → waits in the inbox until the coordinator is idle. Best effort, ledgered as `note_enqueued`; shown in the status activity line |
 | `review` | never resumes by itself; collected as feedback and shown as "feedback pending"; resume requires the state move in §7.3 |
-| `blocked` | a comment whose first line is exactly `continue` (case-insensitive) lifts a budget block or re-runs a failed resume; other comments are notes shown in the Console |
+| `blocked` | an approver comment whose first line is exactly `continue` (case-insensitive) — honored only when it passes the author and activity rules of §7.1 — lifts a budget block, re-runs a failed resume, or confirms a suspected self-answer; other comments are notes shown in the Console |
 Comments by non-approver humans are ledgered and surfaced in the Console, never forwarded automatically.
 
 ### 7.3 Review feedback loop
-The trigger is the owner moving the issue **In Review → In Progress** (the owner's own convention). Next tick:
+The trigger is the owner moving the issue **In Review → In Progress** (the owner's own convention), subject to the
+authorship rule of §7.4. Next tick (a resume: counts against `resumesPerTick`, deferred in reconcile-only ticks):
 `Review-Ready → In-Agent`, stage `review → working` at `implement`, gates `implement`…`pr` reset to pending, the
 completion comment kept (edited on the next finish), and the coordinator resumed with every human comment created
 after `linear.finishedAt` as fenced feedback. The completion comment and the PR body both say: "To request changes:
@@ -472,20 +537,33 @@ move this issue back to In Progress or reply in this Linear thread. Reviews left
 are not read in the pilot. To accept: approve and merge as usual; the GitHub integration moves the issue to Done."
 
 ### 7.4 Owner overrides (classified by the *resulting* Linear state and Lifecycle label; first match wins)
-Definitions: **release** = stop every live worker in `childRunId` (`worker-stop` on proof, `worker-abandon` on
-proven exit), close the coordinator terminals (`terminal close --worktree id:<wt> --all`; a failed bulk close is
-`unverifiable` → keep the record, `attention: release_unverifiable`, retry next tick), `worker-release` settled
-Dispatches, remove Wingmate's Lifecycle label, set stage `released`, post one comment, keep the worktree.
+**Authorship.** An override is applied only when its `IssueHistory` entry has `botActor == null` and `actor.id ∈
+workspace.approvers` (or `botActor` is the Linear GitHub integration, for Done-by-merge), **and** the activity rule
+of §7.1 step 3 holds at the entry's `createdAt` (no agent of the issue `working` within the preceding 60 s). A
+Done/Canceled/Duplicate failing the activity rule → stop workers, keep the worktree, no cleanup, `attention:
+possible_self_close`, Console inbox item "closed while an agent was active — confirm or reopen"; any other change
+failing it → ignored for one tick and surfaced the same way.
+
+**Release** = for every unsettled Dispatch in `worker-list --run <childRunId>`: `worker-stop --dispatch <id>
+--retry-request <ulid> --json`; if the stop receipt's verdict is not `exited`, `worker-abandon --dispatch <id>`
+(fences the attempt; the process may still be live) and `attention: release_unverifiable(<dispatchId>)`; then
+`terminal close --worktree id:<wt> --all --json` for the issue worktree and its child worktrees (a failed bulk
+close is `unverifiable` → keep the record, retry next tick); then the **process sweep** of §13.3(i); `worker-release`
+only Dispatches that settled by `worker_done`; remove Wingmate's Lifecycle label (re-applying
+`linear.lifecycleLabelAtClaim` when it was `Ready`); stage `released`; one comment; keep the worktree.
 
 | Resulting state / label | Response |
 |---|---|
-| Done (any stage) | stop workers if live, final status-comment edit, Lifecycle label removed, stage `done`, cleanup after `cleanup.worktreeGraceHours` |
+| Done (any stage) | release steps without the comment, final status-comment edit, Lifecycle label removed, stage `done`, cleanup after `cleanup.worktreeGraceHours` |
 | Canceled or Duplicate | same with stage `cancelled` |
-| `human` label, or Wingmate's Lifecycle label removed by the owner outside a Wingmate transition | release |
+| `human` label added (whatever the resulting Lifecycle label) | release |
+| In Review → In Progress on a `review` record | §7.3 review feedback loop (a resume) |
 | In Progress → Todo or Backlog while active | release; normal eligibility applies afterwards |
-| Owner-added `Blocked` or `Needs-Human` on an active record | `paused = true`: no resume, relaunch, nudge or timers until removed; then continue from the previous pipeline stage |
+| Owner-added `Blocked`, or owner-added `Needs-Human` on a record that is not `awaiting-human`, replacing Wingmate's label on an active record | `paused = true`, `linear.pausedWith = <label>`; no resume, relaunch, nudge or timers until that label is removed |
+| The pausing label removed while `paused` (resulting Lifecycle label none or `Ready`) | Wingmate re-applies the Lifecycle label for the record's stage (§5.2), `paused = false`, continues from the previous pipeline stage; never a release |
+| Wingmate's Lifecycle label removed by the owner while not `paused`, nothing added in its place | release |
 | Wingmate-set `Blocked` removed by the owner | no action until the issue is also Todo with an Agent label (`status`/Console: "blocked — move to Todo to re-queue") |
-| `continue` comment on a budget-blocked issue | resume with `budget.capLifted = true` |
+| `continue` comment (per §7.2) on a budget-, resume- or self-answer-blocked issue | resume (`budget.capLifted = true` for budget) |
 | Owner edits between the tick's read and write | the write is dropped and the tick re-derives next time (Linear wins) |
 
 ### 7.5 Notification path (no Wingmate-owned notification integration in the pilot)
@@ -509,10 +587,15 @@ Dispatches, remove Wingmate's Lifecycle label, set stage `released`, post one co
 `BRIEF.md` (generated, Appendix C) · `PROTOCOL.md` (stages, verbs, retry rule, end-turn-after-ask, Orca read-only
 rules) · `prompts/` (plan verifier, adversarial code reviewer, security reviewer, UI reviewer, worker brief
 template) · `gates.json` (pinned commands as argv arrays) · `launch.json` (resolved tier args for `spawn`) ·
-`ticket/` (fenced title, description, comments with the brief's nonce) · `plan.md`, `decisions.md`, `stage.json`,
-`inbox/`, `outbox/`, `evidence/` (written during the run; `gate` copies plan/decisions/stage/evidence to
-`~/.local/share/wingmate/evidence/<identifier>/<cycle>/` so loss of the worktree loses no history). The worktree
-also receives `.claude/settings.local.json` (§13.3) and the install-policy files for the package manager.
+`ticket/` (fenced title, description, comments with the brief's nonce) · `record.json` (a dispatcher-written,
+agent-readable mirror of the record, refreshed every tick and after every intent execution) · `plan.md`,
+`decisions.md`, `stage.json`, `gates.json`, `questions.json`, `run.json`, `inbox/`, `outbox/`, `evidence/` (written
+during the run). `issue` verbs read and write **only** `.wingmate/`; everything under it is advisory — the
+dispatcher re-validates every outbox intent against its own record and Orca before acting, and copies
+plan/decisions/stage/evidence to `~/.local/share/wingmate/evidence/<identifier>/<cycle>/` each tick so loss of the
+worktree loses no history. The worktree also receives a courtesy `.claude/settings.local.json` and the
+install-policy files for the package manager; the authoritative agent settings live in the dispatcher-owned kit
+directory (§5.4 step 4, §13.3 b).
 
 ### 8.1 Verb contracts (all `issue` verbs: JSON on stdout; exit 0 on success; non-zero with `{ code, message,
 nextStep }` on refusal; every refusal is a ledger event; `<id>` defaults to the worktree's linked issue)
@@ -524,7 +607,8 @@ nextStep }` on refusal; every refusal is a ledger event; `<id>` defaults to the 
   `--verdict`: the CLI computes them (§8.2). `ui` rejects `NA` when `git diff <baseSha>..HEAD --name-only` touches
   the repo's `ui.paths`. FAIL increments `failCount`; the third FAIL on one stage is refused with
   `gate_retry_exhausted` and the exact `ask` command to run. Every PASS records `headSha`; a later HEAD change marks
-  `validate`, `security` and `ui` as `STALE`.
+  `validate`, `security` and `ui` as `STALE`. Verdicts written by `gate` live in `.wingmate/gates.json`; the
+  dispatcher recomputes `validate` and `security` at publish and treats agent-side values as advisory.
 - `ask` — §7.1; refuses on `workers_live` and `question_open`; `--recommend` must be one of `--options`.
 - `note "<text>"` — appends to the status comment's activity line (last 5 kept), secret-scanned.
 - `spawn --role plan-verifier|code-reviewer|security-reviewer|ui-reviewer|worker --spec <file> [--prefer
@@ -539,9 +623,23 @@ nextStep }` on refusal; every refusal is a ledger event; `<id>` defaults to the 
   `coordinator_handle` equals the coordinator's terminal handle).
 - `finish --summary-file <path> [--title …] [--draft] [--repo <name>]…` — refuses with `gates_incomplete` unless
   every stage up to `security` is PASS or NA at the current HEAD, with `workers_live` while workers run, and with
-  `nothing_to_publish` when the branch has no commits. Writes a `finish` intent; the dispatcher publishes
-  (§13.3) and completes. The coordinator ends its turn after `finish`.
-- `handoff --reason …` — writes a `handoff` intent; the coordinator ends its turn.
+  `nothing_to_publish` when the branch has no commits beyond `baseSha`. Writes a `finish` intent; the coordinator
+  ends its turn. On accepting the intent the dispatcher sets `pipelineStage = pr`, recomputes `validate` and
+  `security`, publishes (§13.3 d) and completes, recording `gates.pr = PASS` with `headSha` and the PR url. On a
+  guard failure it writes the finding to `.wingmate/inbox/publish-<ulid>.md` (fenced), sets `security` to FAIL
+  (`note: publish_guard`), leaves `pr` null, and in the same tick delivers the pointer "publish refused — read
+  `.wingmate/inbox/publish-<ulid>.md`, fix, re-gate security and run finish again" via the §7.1 step 4 delivery
+  (counts as one of the tick's resumes); nothing is pushed. A second guard failure on the same issue → `blocked`
+  (`publish_guard`).
+- `handoff --reason <code> [--repo <name>]` — writes a `handoff` intent; the coordinator ends its turn. Without
+  `--repo` the dispatcher applies §9.4. With `--repo` (reroute, §10.3) it re-claims in that repo with the same
+  provider and cycle, does not increment `handoffs`, records the old worktree in `routing.rerouteFrom`, and removes
+  the old worktree only when its branch has no commits beyond `baseSha` (otherwise it is kept and named in the
+  status comment). Owner-initiated handoffs from the Console run §9.4 in-process (§12.5); no verb is involved.
+- `ui-smoke --recipe <file>` — the gate runner for browser checks and the only path by which an agent may drive the
+  embedded browser: opens its own tab under a dedicated profile (`orca tab profile create wingmate-<identifier>`),
+  runs the recipe's navigation and assertions, captures redacted console/network logs and screenshots into
+  `.wingmate/evidence/`, and closes the tab.
 - `followup --title "…" --body-file <path>` — intent to create a parented Backlog issue as Wingmate in the same
   team and project, no labels, body marker `<!-- wingmate:followup of=<id> -->`; refused if the parent is no longer
   active; listed in the completion comment.
@@ -581,13 +679,18 @@ worktree.
 2. `agent-ready` → project default (**Claude Code** for all pilots); if unavailable, the **coordinator cascade**
    `[claude, codex]`.
 3. **Availability(provider)** from `orca account list --json` → `result.rateLimits.<provider>`: unavailable when the
-   key is absent or `status != 'ok'` (reason `quota_unknown`, `error` ledgered) or `updatedAt` older than
-   `quota.maxSnapshotAgeMin` (30; reason `quota_stale`); otherwise classify every present usage entry — the
-   top-level `{ usedPercent, windowMinutes }` objects (`session`, `weekly`, `fableWeekly`, `monthly`, any future key
-   of that shape, matched structurally) plus every `buckets[]` element — by window: `windowMinutes ≥ 1440` → weekly
-   class (cap `quota.weeklyMax` 80), else session class (cap `quota.sessionMax` 90); a null or absent window is "no
-   limit"; any entry over its cap → unavailable with `quota(<provider>, <window>, <pct>)`. Evaluated at claim **and**
-   at every `spawn`. The raw snapshot is stored in the ledger each tick; the Console renders the same windows.
+   key is absent or `status != 'ok'` (reason `quota_unknown`, `error` ledgered). Orca refreshes `rateLimits` on
+   its own schedule and `account list` does not trigger a refresh (verified: `updatedAt` hours old across repeated
+   calls), so snapshot age is advisory, never a veto: when `updatedAt` is older than `quota.maxSnapshotAgeMin`
+   (360) the tick records `attention: quota_stale(<provider>, <ageMin>)` and the Console shows the age. Before
+   classifying, every entry whose `resetsAt ≤ now` counts as 0 % (its window rolled over after the snapshot). Then
+   classify every present usage entry — the top-level `{ usedPercent, windowMinutes }` objects (`session`,
+   `weekly`, `fableWeekly`, `monthly`, any future key of that shape, matched structurally) plus every `buckets[]`
+   element — by window: `windowMinutes ≥ 1440` → weekly class (cap `quota.weeklyMax` 80), else session class (cap
+   `quota.sessionMax` 90); a null or absent window is "no limit"; any non-expired entry over its cap →
+   unavailable with `quota(<provider>, <window>, <pct>)`. Evaluated at claim **and** at every `spawn`. The raw
+   snapshot is stored in the ledger each tick; the Console renders the same windows. `doctor` samples `updatedAt`
+   at start and after 10 minutes and warns `quota_never_refreshes` when neither pilot provider advanced.
    `headroom` is documentation of why the caps are 80/90, not a separate term.
 
 ### 9.2 Tiers (D10)
@@ -603,13 +706,16 @@ Pool `[claude, codex, cursor, antigravity]`; Cursor and Antigravity are workers 
 `worker-start --agent gemini` is verified. Workers inherit the coordinator's worktree unless `new-child`.
 
 ### 9.4 Mid-issue handoff (single rule; §5.2, §6.3, §9.6 and §13.1 cite it)
-Triggers: (a) the coordinator calls `handoff --reason …` and ends its turn; (b) second `exited` of the current
-provider's coordinator in one attempt; (c) a provider auth/rate-limit failure detected mid-run; (d) the cap + grace
-stop in §9.6; (e) an owner request from the Console. Invariant: at most one coordinator per issue worktree. Action
-(one journal entry): stop live workers in `childRunId` (proof-based), close the coordinator terminals, write the
-Handoff-Template comment, re-claim with the next provider in `coordinatorCascade` that has **not yet been tried in
-this cycle** and is available — in the same worktree, with a resume brief that points at `.wingmate/` — else
-`blocked` (`cascade_exhausted`). Handoffs per cycle are bounded by cascade length − 1 (one in the pilot).
+Triggers: (a) the coordinator calls `handoff --reason …` and ends its turn; (b) a further `exited` of the current
+provider's coordinator after its one relaunch in the attempt; (c) a provider auth/rate-limit failure detected
+mid-run; (d) the cap + grace stop in §9.6; (e) an owner request from the Console (performed in-process). Invariant:
+at most one coordinator per issue worktree. Action (one journal entry): stop every unsettled worker in
+`childRunId` and close the coordinator terminals exactly as the release sequence in §7.4 (`worker-stop`, then
+`worker-abandon` if not proven `exited`, `terminal close --worktree --all`, process sweep), write the
+Handoff-Template comment, increment `coordinator.attempt`, re-claim with the next provider in `coordinatorCascade`
+that has **not yet been tried in this cycle** and is available — in the same worktree, with a resume brief that
+points at `.wingmate/` — else `blocked` (`cascade_exhausted`). Handoffs per cycle are bounded by cascade length −
+1 (one in the pilot).
 
 ### 9.5 Concurrency (caps gate new claims only; resumes, relaunches and handoffs always proceed)
 `maxWorking` counts records in `claimed`/`working`: global 3, per project 1, per provider 2 (by the record's
@@ -621,11 +727,13 @@ is `exited` does not hold a slot). The Console and `status` show "slot held by J
 ### 9.6 Timers and budgets (D11)
 - Every pipeline stage has a wall-clock cap (§10.1 `timers`); timers run only in `working`, pause in
   `awaiting-human`, `review` and `paused`, and reset when the pipeline stage changes or the issue resumes.
-- Crossing a cap never stops an agent by itself: the dispatcher sends one nudge (`terminal send` when idle,
-  `orchestration send --to dispatch:` to the coordinator's mailbox when working — best effort), sets
-  `attention: cap_passed`, and starts the grace clock (`graceMin` 30). If grace expires with **no activity** (no
-  gate, note, worker event, ledger entry, and the agent not `working`), the dispatcher stops the coordinator and
-  hands off per §9.4, else `blocked`. An agent that is still producing activity is never stopped by a timer.
+- Crossing a cap — or exhausting the idle nudges of §6.3 step 4 — never stops an agent by itself: the dispatcher
+  sends one nudge (`terminal send --terminal <handle>` when idle; `orchestration send --to run:<childRunId>
+  --type status` when working and a Run exists — best effort, ledgered as `nudge_enqueued`), sets `attention:
+  cap_passed`, and starts the grace clock (`graceMin` 30). If grace expires with **no activity** (no gate, note,
+  outbox item, worker event, and the agent not `working`), the dispatcher stops the coordinator and hands off per
+  §9.4, else `blocked` (`grace_expired_no_cascade`). An agent that is still producing activity is never stopped by
+  a timer.
 - Budgets: no token caps by default. Optional per-project `budgets`: `softTokens` reached → one budget notice
   (status-comment Cost row, Console alert) and a nudge asking the coordinator to finish the current stage and
   `ask` before starting the next; the issue keeps working. `hardTokens` reached → stop workers and coordinator,
@@ -645,24 +753,32 @@ reported as **timed**, and cost renders as "—" (**unknown**), never 0. Aggrega
 ```yaml
 workspace: { linearWorkspace: dfcf61c2-72c0-4d39-9485-96576cabb555, team: JRF,
              owner: 71aef180-1742-4a76-8d49-51f14e8ada1e, approvers: [71aef180-1742-4a76-8d49-51f14e8ada1e] }
-labels:   # names are canonical; ids resolved and cached by `config validate`
-  agent: [agent-ready, claude, codex, human]
+labels:   # names are canonical; group names resolve to group ids; every member label of both groups is cached
+  agentGroup: Agent
+  lifecycleGroup: Lifecycle
+  agent: { supported: [agent-ready, claude, codex], human: human, unsupported: [gemini, manus, tunip, tweak] }
   lifecycle: [Ready, In-Agent, Needs-Human, Review-Ready, Blocked]
+  allowDeps: allow-deps
 defaults:
+  timezone: <IANA tz>                        # passed to the automation; `install` defaults it from the Mac's system timezone
+  sandbox: { allowedDomains: [] }            # agents' network allowlist: `doctor` adds the package registries named in
+                                             # packageRoots' lockfiles and the provider API hosts; never GitHub, GitLab,
+                                             # Vercel, Supabase or Neon hosts (the dispatcher owns every fetch and push)
   providers: { default: claude, coordinatorCascade: [claude, codex], workers: [claude, codex, cursor, antigravity], verifyCross: true }
   autonomy: ask-first
   done: review                               # review | merge | deploy
   concurrency: { maxWorking: { global: 3, perProject: 1, perProvider: 2 }, maxInFlight: 6, maxLiveWorktrees: 8 }
-  quota: { weeklyMax: 80, sessionMax: 90, maxSnapshotAgeMin: 30 }
+  quota: { weeklyMax: 80, sessionMax: 90, maxSnapshotAgeMin: 360 }
   timers: { intakeMin: 20, planMin: 45, planVerifyMin: 30, implementMin: 180, validateMin: 60, uiMin: 90,
             securityMin: 30, prMin: 20, graceMin: 30, idleNudgeMin: 10 }
   budgets: { softTokens: null, hardTokens: null }
   cleanup: { worktreeGraceHours: 24 }
   dispatcher: { provider: codex, precheckTimeoutSec: 240, missedRunGraceMinutes: 10, claimsPerTick: 2, resumesPerTick: 3 }
-  forbiddenPaths: [".github/**", ".claude/**", ".wingmate/**", ".mcp.json", "CLAUDE.md", "AGENTS.md", "**/.env*",
-                   ".npmrc", "pnpm-workspace.yaml", ".pnpmfile.cjs", "bunfig.toml", "turbo.json", "vercel.json",
-                   "Dockerfile*", "infra/**", "terraform/**", "supabase/migrations/**", "db/migrations/**",
-                   "CODEOWNERS", "scripts/agent-*/**"]   # dependency manifests/lockfiles are governed by dependency policy
+  forbiddenPaths: [".github/**", ".claude/**", ".wingmate/**", ".mcp.json", ".codex/**", ".cursor/**", ".gemini/**",
+                   ".vscode/**", ".idea/**", ".husky/**", "lefthook.yml", "CLAUDE.md", "AGENTS.md", "GEMINI.md",
+                   "**/.env*", ".npmrc", "pnpm-workspace.yaml", ".pnpmfile.cjs", "bunfig.toml", "turbo.json",
+                   "vercel.json", "Dockerfile*", "infra/**", "terraform/**", "supabase/migrations/**",
+                   "db/migrations/**", "CODEOWNERS", "scripts/agent-*/**"]   # manifests/lockfiles: dependency policy
 projects:
   <key>:
     linearProject: <uuid>
@@ -671,14 +787,16 @@ projects:
                 gates: [<argv array>...],          # non-empty; schema refuses an empty list
                 requiredCheck: <ci check name|none>,
                 ui: { kind: web|ios|none, paths: [...], dev: <argv>, url: <url>, smokeRoutes: [...] },
-                packageRoots: [...], allowedBuildScripts: [...], forbiddenPaths: [...] }   # merged with defaults
+                packageRoots: [...], allowedBuildScripts: [...], forbiddenPaths: [...],
+                sandbox: { allowedDomains: [...] } }   # list fields merge with defaults
     routing: { default: <repo name>, rules: [{ match: [kw...], repo: <name> }] }
     conventions: [<file>...]                   # excerpted into the brief
     coexist: { prReview: existing-orca-automation|none, githubIssues: leave-to-agent-fix|none }   # informational for the brief
     autonomy / done / budgets / concurrency / timers   # overrides
 ```
 Secrets live in `~/.config/wingmate/credentials.json` (0600): Linear client id/secret and the cached app token.
-`config/tiers.yaml` (optional): `{ best: { claude?: {model, effort}, codex?: {model, effort} }, standard: {…} }`.
+`config/tiers.yaml` (optional): `{ best: { claude?: {model, effort}, codex?: {model, effort} }, standard: { claude?:
+{model}, codex?: {model} } }`; a project may override `standard` under `projects.<key>.tiers.standard`.
 
 ### 10.2 Pilot values (gates pinned by hand from each repo's CI workflow and package scripts; a project key is added only with non-empty gates)
 | Project | Linear project | Repos (Orca id) | Gates | UI check |
@@ -762,8 +880,9 @@ managing the same issues through the same lifecycle in Linear and in the Console
   to the compiled binary `ui --serve`; `EnvironmentVariables.PATH` including `~/.bun/bin` and `/usr/local/bin`
   because launchd does not inherit the shell PATH; `WorkingDirectory` = the dispatcher worktree; logs to
   `~/.local/share/wingmate/logs/ui.log`). `doctor` checks `GET /healthz`. `wingmate uninstall` boots it out.
-- `wingmate ui --open orca [--worktree <selector>]` runs `orca tab create --url http://127.0.0.1:4848/#t=<token>
-  --worktree <selector>` (default `active`); `--open browser` opens the same URL in the default browser.
+- `wingmate ui --open orca [--worktree <selector>]` mints a single-use launch code (§12.8) and runs `orca tab create
+  --url http://127.0.0.1:4848/#l=<code> --worktree <selector>` (default `active`); `--open browser` opens the same
+  URL in the default browser.
 - SPA: React 19 + TypeScript (strict) + Vite + Tailwind v4 + shadcn/Radix; Zustand; TanStack Query; Lucide; Recharts
   loaded lazily and only in v1.1's charts.
 - Data: `index.html` inlines the current snapshot as `<script type="application/json" id="bootstrap">` so first
@@ -809,7 +928,8 @@ or `codex` to a Todo issue in a pilot project"; Needs-Human: "Nothing is waiting
 
 ### 12.5 Actions (all confirmed by a dialog naming the issue and consequence; all audited in the ledger with
 `{ actor: 'console', tokenId, origin, idempotencyKey, at }`; each endpoint idempotent on the key)
-- **Answer** → posts the reply once as the owner (`orca linear comment add <id> --reply-to <questionCommentId>
+- **Answer** → refused with 409 `agent_active` while any agent of the issue is `working` (§7.1 activity rule);
+  otherwise posts the reply once as the owner (`orca linear comment add <id> --reply-to <questionCommentId>
   --write-id <uuid> --body-file -`; on `linear_write_unconfirmed` follow its payload exactly once), records
   `answerCommentId`, then performs the §7.1 resume in-process under the tick lock (waiting ≤ 30 s). The Console
   shows "Reply posted → resuming now"; if the lock cannot be taken, "Reply posted → resumes at the next tick
@@ -818,7 +938,10 @@ or `codex` to a Todo issue in a pilot project"; Needs-Human: "Nothing is waiting
 - **Stop** (per issue) → `orca linear label add <id> --label human` as the owner (the §7.4 gesture), then the
   release sequence in-process under the lock; Stop is the only label the Console writes.
 - **Continue** (budget-blocked) → posts the `continue` comment as the owner and resumes in-process.
-- **Hand off** → `wingmate issue <id> handoff --by owner --reason …` (performs §9.4 under the lock).
+- **Confirm answer** (self-answer suspected, §7.1) → marks the flagged comment as the answer and performs the §7.1
+  resume in-process under the lock; reopening a suspiciously closed issue is the owner's own Linear action.
+- **Hand off** → the `ui` process performs §9.4 in-process under the tick lock (trigger e), like Answer and Stop;
+  no `issue` verb is invoked.
 - **Pause / Resume** (dispatcher or project) → `wingmate pause|resume`; while anything is paused a persistent banner
   names who paused what and when, with a Resume button.
 - **Open in Linear**; **Open worktree in Orca** → `orca terminal switch --terminal <coordinator handle>`.
@@ -840,15 +963,20 @@ becomes a Linear Agent.
    interfaces); no `--host` flag in v1 — remote viewing is an SSH port-forward (`ssh -L 4848:127.0.0.1:4848`). Any
    request whose `Host` is not exactly `127.0.0.1:<port>` or `localhost:<port>` gets 421 (DNS rebinding). The
    server never emits CORS headers.
-2. **Token.** 32 random bytes per start, written 0600 to `~/.local/share/wingmate/ui.token` (inside the agents'
-   deny-read region), delivered once in the URL fragment, stripped with `history.replaceState`, held in memory or
-   `sessionStorage` only; every `/api/*` request (including `/api/snapshot`, `/api/events`, `/api/issues/:id`)
-   requires `Authorization: Bearer <token>`; SSE is consumed via `fetch` streaming with the header, not
-   `EventSource`.
+2. **Tokens.** No token file exists. `wingmate ui --open …` mints a single-use **launch code** (16 random bytes,
+   60 s TTL, held only in server memory) and opens `/#l=<code>`; the SPA exchanges it once via `POST /api/session`
+   for a **session token** (32 random bytes) returned in the response body, kept in memory and `sessionStorage`
+   only, never written to disk or passed as a process argument; the launch code is invalid after the first exchange
+   or 60 s. Session tokens expire after 12 h or on `wingmate ui --rotate`; the server keeps at most 4 live sessions
+   and lists them in the Dispatcher tile with a Revoke button. Every `/api/*` request (including `/api/snapshot`,
+   `/api/events`, `/api/issues/:id`) requires `Authorization: Bearer <session token>`; SSE is consumed via `fetch`
+   streaming with the header, not `EventSource`. The CLI's own actions (`stop`, `pause`, Console-equivalent
+   handoffs) call the action handlers in-process, never over HTTP.
 3. **Browser-origin checks** on every `/api/*` request: when `Origin` is present it must be the Console's own
    origin; when `Sec-Fetch-Site` is present it must be `same-origin`. Mutating endpoints accept `POST` only, with
-   `Content-Type: application/json`, the custom header `X-Wingmate-Action: <idempotency-key>`, and return 409 for a
-   repeated key.
+   `Content-Type: application/json`, the custom header `X-Wingmate-Action: <idempotency-key>`, `Sec-Fetch-Site:
+   same-origin` and `Sec-Fetch-Mode: cors` present (browsers always send them; curl does not), and return 409 for a
+   repeated key. `/api/actions/answer` applies the §7.1 activity rule server-side (409 `agent_active`).
 4. **Headers.** `Content-Security-Policy: default-src 'self'; connect-src 'self'; img-src 'self' data:; script-src
    'self'; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'`,
    `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`.
@@ -857,9 +985,12 @@ becomes a Linear Agent.
    issue's evidence directory; all Linear- and agent-authored text rendered through a sanitizing markdown pipeline
    with raw HTML disabled, `rel="noopener noreferrer"` and `http(s)` schemes only; `dangerouslySetInnerHTML` is
    forbidden in `console/` by lint rule.
-6. **Agent-scriptable embedded browser.** Orca's embedded browser can be driven by agents (`orca eval`, `orca cookie
-   get`), so the agents' deny rules (§13.3) cover `orca eval`, `orca cookie` and `orca tab`; the Console session
-   opened with `--open orca` is otherwise identical to a browser session. The residual risk is covered by D14.
+6. **Agent-scriptable embedded browser.** Orca's embedded browser and desktop can be driven by agents (`orca eval`,
+   `orca cookie`, `orca goto|click|fill|type|…`, `orca computer *`), so the agents' deny rules (§13.3 b) cover
+   every browser, tab, cookie and computer verb for every role; the `ui-reviewer` drives the browser only through
+   `wingmate issue ui-smoke`, which uses a dedicated tab profile (`wingmate-<identifier>`), never the default
+   profile the Console tab lives in. The residual risk — a Codex session (§13.3 c) or a deny-rule dodge — is covered
+   by D14 and by the session-token model above (no token on disk or in argv).
 
 ## 13. Failure handling, observability, safety
 
@@ -880,7 +1011,7 @@ becomes a Linear Agent.
 | Overlapping ticks / stale lock | §6.0 |
 | Mac asleep / Orca down for hours | missed-run grace (`run_once_within_grace`); first tick back is reconcile-only |
 | Partial external write | journal replays remaining steps idempotently; poisoned after 3 failures |
-| Publish guard failure (path guard, secret, dependency policy) | `security` gate set to FAIL with the finding; the coordinator must fix or ask; nothing is pushed |
+| Publish guard failure (path guard, secret, dependency policy) | finding written to `.wingmate/inbox/publish-<ulid>.md`, `security` → FAIL (`publish_guard`), pointer delivered to the coordinator in the same tick (§8.1 `finish`); nothing is pushed; second failure → `blocked` |
 
 ### 13.2 Observability
 Append-only JSONL ledger (per issue and global): transitions, gate verdicts, Orca receipts, Linear write ids,
@@ -895,46 +1026,81 @@ finish, done), worker lists. Linear surfaces: status comment, the two views. Con
 **Trust boundary (D14).** Coordinators, verifiers and workers run unattended as the owner's macOS user. Prompt rules
 are advisory; the controls below are enforced in code and verified by `wingmate doctor` (a failing check refuses
 `install --enable`).
-- **(a) Credentials never enter an agent process.** `issue` verbs perform no network writes; they append intents to
-  `<worktree>/.wingmate/outbox/` and the dispatcher executes Linear and GitHub writes at the next tick (≤ 5 min,
-  which `ask` and `finish` tolerate by design) or immediately for Console actions. `~/.config/wingmate/` is read
-  only by `tick`, `ui`, `install`, `doctor`, `stop`.
+- **(a) Credentials and dispatcher state never enter an agent process.** `issue` verbs perform no network writes;
+  they append intents to `<worktree>/.wingmate/outbox/` and the dispatcher executes Linear and GitHub writes at the
+  next tick (≤ 5 min, which `ask` and `finish` tolerate by design) or immediately for Console actions.
+  **State ownership:** `~/.local/share/wingmate/` (records, journal, ledger, queue, heartbeat, evidence copies,
+  `install.json`, `kit/`, `bin/`) and `~/.config/wingmate/` are dispatcher-owned — written only by `tick`, `ui`,
+  `install`, `doctor`, `stop`, `pause` — and sit in the agents' `denyRead`/`denyWrite` sets, with the single
+  exception of read-and-execute access to the compiled binary so `wingmate issue …` can run. `issue` verbs touch
+  only `<worktree>/.wingmate/`, and the dispatcher re-validates every intent it finds there against its own record
+  and Orca (gate prerequisites from its record; `workers_live` from `worker-list`; `planVerify` from `worker-show`
+  of the named Dispatch; `validate`/`security` recomputed at publish; `nothing_to_publish` from git).
 - **(b) Claude sessions in `wm-` worktrees** run with explicit argv `claude --model <id> --effort max --session-id
-  <uuid> --permission-mode bypassPermissions` plus a kit-written `.claude/settings.local.json` containing
-  `sandbox.enabled: true`, `sandbox.filesystem.denyRead: ["~/"]` with `allowRead` for the issue worktree, its child
-  worktrees and the toolchain paths `doctor` discovers, `sandbox.network.allowedDomains` from `projects.yaml`
-  (default registry, GitHub, provider API hosts), and `permissions.deny` for: `Read(~/.config/wingmate/**)`,
-  `Read(~/.ssh/**)`, `Read(~/.config/gh/**)`, `Read(~/.claude/**)`, `Read(~/.codex/**)`, `Read(**/.env*)`,
-  `Bash(orca linear comment *)`, `Bash(orca linear status *)`, `Bash(orca linear label *)`, `Bash(orca linear
-  save-issue *)`, `Bash(orca linear assignee *)`, `Bash(orca linear create *)`, `Bash(orca linear attach *)`,
-  `Bash(orca linear relation *)`, `Bash(orca linear priority *)`, `Bash(orca eval *)`, `Bash(orca cookie *)`,
-  `Bash(orca tab *)`, `Bash(orca automations *)`, `Bash(orca worktree rm *)`, `Bash(git push *)`, `Bash(gh pr
-  create *)`, `Bash(gh pr merge *)`, `Bash(gh api *)`, `Bash(gh secret *)`, `Bash(gh workflow *)`, `Bash(gh release
-  *)`, `Bash(gh repo *)`, `Bash(vercel *)`, `Bash(eas *)`, `Bash(neonctl *)`, `Bash(npx neonctl *)`, `Bash(git reset
+  <uuid> --permission-mode bypassPermissions --settings ~/.local/share/wingmate/kit/<identifier>/claude-settings.json
+  --strict-mcp-config`, with the environment `GH_TOKEN=` (empty), `GH_CONFIG_DIR=<kit>/gh-empty`,
+  `GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL=<kit>/gitconfig` (sets `credential.helper=` and
+  `core.hooksPath=<kit>/no-hooks`), `GIT_TERMINAL_PROMPT=0`. The settings file is dispatcher-owned (inside the
+  agents' deny region) and contains `sandbox.enabled: true`, `sandbox.allowUnsandboxedCommands: false`,
+  `sandbox.failIfUnavailable: true`, `sandbox.autoAllowBashIfSandboxed: true`; **filesystem:** `denyRead: ["~/"]`
+  with `allowRead` for the issue worktree, its child worktrees and the toolchain paths `doctor` discovers;
+  `allowWrite`: the issue worktree, its child worktrees, `$TMPDIR`, and within the repo's git common dir only
+  `objects/**`, `refs/heads/<worktree.branch>*`, `refs/heads/wm-*`, `logs/**`, `worktrees/<gitdirName>/**`,
+  `packed-refs*` and lock files under those paths; `denyWrite`: `<common>/config`, `<common>/hooks/**`,
+  `<common>/info/**`, `<common>/refs/heads/<base branch>*`, `<common>/refs/remotes/**`, every other
+  `<common>/worktrees/*/**`, `~/.local/share/wingmate/**`, `~/.config/wingmate/**`, `~/.claude/**`, `~/.codex/**`,
+  `~/.gitconfig`, `~/.ssh/**`; **network:** `sandbox.network.allowedDomains` = `defaults.sandbox.allowedDomains` ∪
+  the repo's list (registries and provider API hosts only — never `github.com`, `api.github.com`,
+  `*.githubusercontent.com`, `gitlab.com`, `vercel.com`, `*.supabase.co`, `*.neon.tech`; a project needing a GitHub
+  read, e.g. a submodule, lists it explicitly with the reason); **`permissions.deny`:** `Read(~/.config/wingmate/**)`,
+  `Read(~/.ssh/**)`, `Read(~/.config/gh/**)`, `Read(~/.claude/**)`, `Read(~/.codex/**)`, `Read(**/.env*)`;
+  `Bash(orca linear comment *)`, `status *`, `label *`, `save-issue *`, `assignee *`, `create *`, `attach *`,
+  `relation *`, `priority *`, `estimate *`, `due-date *`; `Bash(orca eval *)`, `cookie *`, `tab *`, `automations *`,
+  `account *`, `environment *`, `repo *`, `project *`, `skills share *`, `computer *`; `Bash(orca worktree rm *)`,
+  `worktree create *`, `worktree set *`; `Bash(orca terminal send *)`, `terminal create *`, `terminal close *`,
+  `terminal split *`; `Bash(orca orchestration reset *)`, `run-use *`, `gate-resolve *`, `coordinator-*`; for every
+  role except `ui-reviewer` the browser verbs `Bash(orca goto *)`, `click`, `dblclick`, `fill`, `type`,
+  `inserttext`, `keypress`, `select`, `check`, `uncheck`, `upload`, `drag`, `mouse *`, `get *`, `snapshot`,
+  `screenshot`, `find`, `focus`, `clear`, `back`, `forward`, `reload`; `Bash(git push *)`, `Bash(gh pr create *)`,
+  `Bash(gh pr merge *)`, `Bash(gh api *)`, `Bash(gh secret *)`, `Bash(gh workflow *)`, `Bash(gh release *)`,
+  `Bash(gh repo *)`, `Bash(vercel *)`, `Bash(eas *)`, `Bash(neonctl *)`, `Bash(npx neonctl *)`, `Bash(git reset
   --hard *)`, `Bash(git branch -D *)`, `Bash(git switch *)`, `Bash(git checkout -b *)`, and the Linear MCP write
   tools (`mcp__*Linear__save_*`, `create_*`, `delete_*`). Worker sessions additionally deny `Bash(orca orchestration
-  worker-start *)`, `run-create`, `task-create`. Deny rules hold in bypass mode; the sandbox and the dispatcher-side
-  controls are the hard layer.
-- **(c) Codex sessions** run `codex --model <id> -c model_reasoning_effort=<e> --sandbox workspace-write
-  --ask-for-approval never -c sandbox_workspace_write.network_access=true` (filesystem writes confined to the
-  worktree; no approval prompts). Until §16 verifies these flags on the installed CLI, Codex is limited to verifier
-  and reviewer roles and the coordinator cascade is `[claude]`; the owner may instead record an explicit extension
-  of D14.
+  worker-start *)`, `run-create *`, `task-create *`. Deny rules are prefix matches on the command string and can be
+  dodged by `sh -c`, absolute paths, `env`, `git -C` or a script file: they stop a well-behaved agent, not a
+  compromised one. The sandbox is the hard layer because its policy is loaded from a file the agent cannot write and
+  cannot opt out of per command; `doctor` runs a sandboxed probe from a `wm-` worktree that must fail `git
+  ls-remote origin`, `gh api user`, a read of `~/.config/wingmate/credentials.json` and a write to
+  `<common>/hooks/pre-commit`, and must succeed at `git commit` — any inverted result is a `doctor` failure.
+- **(c) Codex sessions** run `codex -C <worktree> --model <id> -c model_reasoning_effort=<e> --ask-for-approval
+  never -c project_doc_max_bytes=0` with `--sandbox read-only` for verifier and reviewer roles (they read a local
+  diff and report through `orchestration send`) and `--sandbox workspace-write -c
+  sandbox_workspace_write.network_access=false` for workers. Codex has no deny-rule mechanism: every `orca`, `gh`
+  and `git` verb is callable from a Codex session, and its sandbox restricts writes and network but not reads
+  outside the worktree. Therefore `doctor` verifies on the installed CLI that `network_access=false` blocks outbound
+  TCP and whether reads of `~/.config/wingmate/credentials.json` are blocked; until verified, Codex is limited to
+  verifier and reviewer roles and the coordinator cascade is `[claude]`. If reads are not blocked, D14 records
+  explicitly that Codex sessions can read every file of the owner's user, and the owner may set `verifyCross:
+  false` per project to keep Codex out entirely.
 - **(d) Publishing is a dispatcher action.** Agents never run `git push`, `gh pr create/merge`, `gh secret`, `gh
   api` writes or deploy CLIs. `finish` enqueues a `publish` intent; the dispatcher runs, in order: `git diff
   --name-only --diff-filter=ACMRD <baseSha>...HEAD` → **path guard** against the merged `forbiddenPaths` (no lift
   mechanism in the pilot: ticket text, comments and labels never lift it) → **secret scan** over added lines and
   the PR title/body (pattern set ported from `ehr-dispatch` `guard.mjs`/`screen.mjs` plus `sk-ant-`, `gh[pousr]_`,
   `github_pat_`, JWTs, `AKIA`, private-key blocks, `postgres(ql)?://…:…@`, Supabase/Neon strings, `xox[abp]-`,
-  high-entropy ≥ 32-char tokens) → **dependency policy** (below) → `git push -u origin <worktree.branch>` → `gh pr
-  create` (never `--web`; body from the template; `--draft` on request) → attach, complete. Any guard failure sets
-  the `security` gate to FAIL with the finding; nothing is pushed. Four of five pilot repos have no branch
-  protection today, which is exactly why the guards run before the push.
+  high-entropy ≥ 32-char tokens) → **dependency policy** (below) → `git push -u origin
+  HEAD:refs/heads/<worktree.branch>` → `gh pr create --head <worktree.branch>` (never `--web`; body from the
+  template; `--draft` on request) → attach, complete — all from the dispatcher process with the owner's `gh`
+  session; no agent environment holds GitHub credentials (b). Any guard failure follows §8.1 `finish` (finding
+  delivered, nothing pushed). Four of five pilot repos have no branch protection today, which is exactly why the
+  guards run before the push.
 - **(e) Dependency policy.** At claim the kit writes install-policy files into every `packageRoots` entry (pnpm:
   `.npmrc` `ignore-scripts=true` and `onlyBuiltDependencies` from `allowedBuildScripts`; npm: `ignore-scripts`;
   bun: `trustedDependencies` unchanged) so lifecycle scripts never run during agent installs. Adding or upgrading a
-  dependency requires the label `allow-deps` added by an approver; otherwise the `security` gate fails on any
-  manifest or lockfile diff. When allowed, the gate records per changed package registry, exact version, publish
+  dependency requires the label `allow-deps` whose history entry passes the authorship rule of §7.4 and was created
+  before claim or while the record was `awaiting-human` (the owner grants it in answer to a question); otherwise
+  the `security` gate fails on any manifest or lockfile diff. When allowed, the gate records per changed package
+  registry, exact version, publish
   date (fail < 14 days), weekly downloads (fail < 1,000 unless named in the `allow-deps` comment), install scripts
   (fail unless in `allowedBuildScripts`) and the audit result. This repository: `bun install --frozen-lockfile`,
   lockfile committed, dependency PRs reviewed by the owner only.
@@ -950,15 +1116,21 @@ are advisory; the controls below are enforced in code and verified by `wingmate 
   `--force`, and never while an open PR references the branch (`attention: cleanup_failed`, retried daily).
   `install` lists the v0 worktrees linked to JRF-401/402/404 and offers to archive them; it never removes a
   worktree it did not create.
-- **(i) Operating controls.** `wingmate stop [--issue <id>|--project <key>|--all] [--reason …]` is the kill
-  switch: a direct CLI/Console action needing neither the automation nor a tick; under the tick lock it marks each
-  targeted record `blocked` (`owner-stop`) so no tick relaunches, enumerates every live Wingmate agent from Orca
-  (recorded coordinator panes and every Dispatch of each `childRunId`, plus any `working` agent on a `wm-`
-  worktree), runs `worker-stop` (then `worker-abandon` on proven exit) and `terminal close --worktree --all`,
-  verifies with `worktree ps`, sets `Blocked` with one comment, and records the proof. `wingmate pause [--project]`
-  switches the dispatcher to reconcile-only (owner overrides and stop requests still execute). The `human` label is
-  honored at the next tick (≤ 5 min) and the setup guide says so. Disabling the Orca automation stops new work
-  only; run `wingmate stop` first.
+- **(i) Operating controls.** `wingmate stop [--issue <id>|--project <key>|--all] [--reason …]` is the kill switch:
+  a direct CLI/Console action needing neither the automation nor a tick, and it never waits on `tick.lock`. (1) It
+  writes `~/.local/share/wingmate/stop-requested.json` (scopes, at), which the tick checks before every external
+  action and honors by aborting with outcome `stopped`. (2) Without the lock it stops agents idempotently:
+  `worker-stop --dispatch` for every Dispatch of each `childRunId` (then `worker-abandon` when the verdict is not
+  `exited`), `terminal close --worktree id:<wt> --all` for the issue and child worktrees, and any `working` agent on
+  a `wm-` worktree found in `worktree ps`. (3) The **process sweep**: enumerate processes of the owner's user whose
+  cwd, executable or open files are under the worktree or child worktree paths (`lsof -F pcn +D <path>` plus
+  `pgrep -u $UID -f <path>`), SIGTERM, wait 5 s, SIGKILL, and record pids and command lines in the proof. (4) Under
+  the record lock, mark each record `blocked` (`owner_stop`), set `Blocked` with one comment, clear the flag. The
+  same process sweep runs on release (§7.4) and on every transition into `awaiting-human` (parking means no process
+  of the issue is running — a detached sleeper would otherwise defeat the activity rule). `wingmate pause
+  [--project]` switches the dispatcher to reconcile-only (owner overrides and stop requests still execute). The
+  `human` label is honored at the next tick (≤ 5 min) and the setup guide says so. Disabling the Orca automation
+  stops new work only; run `wingmate stop` first.
 - **(j) Phase 2:** run agents under a dedicated macOS user or VM — the only boundary bypass mode is designed for.
 
 ## 14. Repository layout, tooling, testing
@@ -1001,13 +1173,15 @@ Zustand, TanStack Query, Lucide (Recharts lazily, v1.1).
 Invariants: I1 at most one live coordinator per issue worktree; I2 no Linear or Orca write without a journal entry
 that reaches `confirmed`; I3 zero agent launches, resumes or `terminal send`s while an issue is `awaiting-human`
 unless a verified answer exists; I4 exactly one status comment and at most one completion comment per issue; I5 an
-owner change made between read and write is never overwritten; I6 transitions follow only §5.2 edges; I7 caps are
-never exceeded by a claim; I8 `unverifiable` liveness never causes stop, relaunch, handoff or `blocked`; I9 no
+owner change made between read and write is never overwritten; I6 transitions follow only §5.2.1 edges; I7 caps
+are never exceeded by a claim; I8 `unverifiable` liveness never causes stop, relaunch, handoff or `blocked`; I9 no
 publish without path guard, secret scan and dependency policy passing at the pushed HEAD; I10 timers never advance
-while parked.
+while parked; I11 no process in an issue worktree can open a TCP connection to a GitHub host (the simulation stubs
+the resolver; the live `doctor` probe asserts it).
 Scenarios: S1 golden path including ≥ 3 idle ticks while parked, then resume to the same handle; S2 resume with
-the terminal gone → successor in the same worktree; S3 `exited` → relaunch → `exited` → handoff → `blocked`, no
-third launch; S4 owner `human` label mid-run with live workers → full release; S5 answer by a non-approver → not
+the terminal gone → successor in the same worktree; S3 `exited` → relaunch → `exited` → handoff to the next
+cascade provider → that coordinator `exited` → relaunch → `exited` → `blocked` (`cascade_exhausted`), no launch
+after that; S4 owner `human` label mid-run with live workers → full release; S5 answer by a non-approver → not
 forwarded; S6 answer created while an agent was `working` → possible self-answer → blocked until confirmed;
 S7 crash between claim steps → replay completes the claim without a second worktree; S8 cap + grace with activity
 (no stop) vs without (handoff); S9 Linear write fails mid-publish → retried, exactly one completion comment;
@@ -1053,9 +1227,10 @@ user or VM.
 | Item | Default if unverified |
 |---|---|
 | Terminal-agent launch: `terminal create --command` with the Claude argv (`--model <id> --effort max --session-id`), `terminal wait --for tui-idle`, `terminal send … --wait-submit` returning `turn_started`; resume with `claude --resume <id>` in the same worktree | launch without `--effort`; resume with a fresh session from `.wingmate/` |
-| `worktree ps` / `terminal list` vocabulary for working, turn-ended (idle), exited and unverifiable coordinators; captured as fixtures | treat any state other than `working` as idle; exited only when the terminal handle is gone |
+| `worktree ps` / `terminal list` vocabulary for working, turn-ended (idle), exited and unverifiable coordinators; captured as fixtures | `exited` only when the recorded handle is absent from `terminal list`; `worktree ps` entries for closed tabs are ignored |
 | `spawn` from a terminal coordinator: `run-create` binds the terminal and `worker-start --run <id> --worktree current` succeeds at depth 1 | force method `loop`; verifiers run as unsupervised terminals (`terminal create --command` + `send`), ledgered as such |
-| Codex flags on the installed CLI: `--sandbox workspace-write --ask-for-approval never`, `-c model_reasoning_effort=xhigh` | Codex limited to verifier/reviewer roles; cascade `[claude]` |
+| Claude sandbox loaded via `--settings` from a path outside the worktree: `allowUnsandboxedCommands: false`, `failIfUnavailable: true`, the filesystem allow/deny lists and network allowlist of §13.3(b); `git commit` works under the common-dir write policy; the `doctor` probe fails `git ls-remote`/`gh api user` | `doctor` fails and `install --enable` is refused |
+| Codex flags on the installed CLI: `--sandbox read-only|workspace-write`, `--ask-for-approval never`, `-c sandbox_workspace_write.network_access=false`, `-c project_doc_max_bytes=0`, `-c model_reasoning_effort=xhigh`; whether the sandbox blocks reads outside the worktree | Codex limited to verifier/reviewer roles; cascade `[claude]`; D14 extended if reads are not blocked |
 | Linear app actor: comments expose `botActor`/`user` as expected; `issueUpdate` with two labels of a single-select group rejects or replaces; user-mention markup in API comments; `client_credentials` install steps; notification test | subscription as the only delivery path; plain-text names; `doctor` blocks `install --enable` until the notification test passes |
 | Automation precheck running the whole tick: `--precheck-timeout 240` honored; stdout stored on skipped runs | reduce `claimsPerTick` to 1 and the tick budget to 50 s |
 
@@ -1085,8 +1260,9 @@ wingmate issue <id> note "…"
 wingmate issue <id> spawn --role plan-verifier|code-reviewer|security-reviewer|ui-reviewer|worker --spec <file> [--prefer <p>] [--worktree current|new-child] [--task <id>] [--deps <json>] [--dry-run]
 wingmate issue <id> run --id <runId>
 wingmate issue <id> finish --summary-file <path> [--title …] [--draft] [--repo <name>]…
-wingmate issue <id> handoff --reason … [--repo <name>] [--by owner]
+wingmate issue <id> handoff --reason <code> [--repo <name>]
 wingmate issue <id> followup --title "…" --body-file <path>
+wingmate issue <id> ui-smoke --recipe <file>
 wingmate issue <id> log | show
 wingmate status [--json|--md] [--cost] [--project <key>]
 wingmate config validate | show
@@ -1094,7 +1270,7 @@ wingmate install [--enable] | uninstall
 wingmate doctor [--notify-test] [--rotate]
 wingmate pause [--project <key>] | resume [--project <key>]
 wingmate stop [--issue <id>|--project <key>|--all] [--reason …]
-wingmate ui [--serve] [--port 4848] [--open orca|browser] [--worktree <selector>]
+wingmate ui [--serve] [--port 4848] [--open orca|browser] [--worktree <selector>] [--rotate]
 ```
 
 ## Appendix B — Linear comment templates (markers are HTML comments)
