@@ -141,16 +141,24 @@ export async function reconcile(ctx: Ctx): Promise<Reconciled> {
   // Events for active records: owner overrides, comments/answers, PR attachments, liveness.
   const events: Event[] = [];
   const approvers = ctx.cfg.workspace.approvers;
-  const since = records.reduce<string>(
-    (m, r) => (r.linear.lastSeenCommentAt && r.linear.lastSeenCommentAt < m ? r.linear.lastSeenCommentAt : m),
-    ctx.now(),
+  // Comment window: from the oldest "last seen" across active records; a record that has not seen any
+  // comment yet starts at its claim time (never at now, which would hide an answer already posted).
+  const seenFrom = (r: WRecord) => r.linear.lastSeenCommentAt ?? r.claimedAt;
+  const since = activeRecords.reduce<string | null>(
+    (m, r) => (m === null || seenFrom(r) < m ? seenFrom(r) : m),
+    null,
   );
-  const comments: LinearComment[] = activeRecords.length
-    ? await ctx.linear.listComments(
-        activeRecords.map((r) => r.linearId),
-        since,
-      )
-    : [];
+  const comments: LinearComment[] =
+    activeRecords.length && since !== null
+      ? await ctx.linear.listComments(
+          activeRecords.map((r) => r.linearId),
+          since,
+        )
+      : [];
+  const agentGroupLabelIds = new Set(
+    ctx.meta.labels.filter((l) => l.parentId === ctx.meta.agentGroupId).map((l) => l.id),
+  );
+  const groupLabelIds = new Set([...ctx.meta.lifecycleIds, ...agentGroupLabelIds]);
   for (const r of activeRecords) {
     const issue = issuesById.get(r.linearId);
     if (!issue) continue;
@@ -158,42 +166,54 @@ export async function reconcile(ctx: Ctx): Promise<Reconciled> {
     const terms = r.worktree ? (terminals.get(r.worktree.id) ?? []) : [];
     const activeAt = (iso: string) => agentActiveAt(row, terms, iso, ACTIVITY_MARGIN_SEC);
     const hist = await ctx.linear.issueHistory(issue.id, r.linear.lastSeenUpdatedAt ?? r.claimedAt);
-    // §7.4 authorship: the history entry at the change time must be an approver (or the GitHub integration)
-    // and no agent of this issue may have been active then.
-    const authorizedAt = (at: string) => {
-      const h = hist.find((x) => x.createdAt === at) ?? hist[hist.length - 1];
-      const human = !!h && !h.botActorId && !!h.actorId && approvers.includes(h.actorId);
-      const byGithub = !!h && h.botActorType === "integration";
-      return (human || byGithub) && !activeAt(at);
+    // §7.4 authorship is resolved by WHAT changed, never by when the issue was last touched: the latest history
+    // entry that produced the observed change must be an approver (or the GitHub integration) and no agent of
+    // this issue may have been active at that entry's own time. No matching entry → not authorized.
+    const latestEntry = (pred: (h: LinearHistoryEntry) => boolean): LinearHistoryEntry | undefined => {
+      for (let i = hist.length - 1; i >= 0; i--) {
+        const h = hist[i];
+        if (h && pred(h)) return h;
+      }
+      return undefined;
+    };
+    const authorizedBy = (h: LinearHistoryEntry | undefined) => {
+      if (!h) return false;
+      const human = !h.botActorId && !!h.actorId && approvers.includes(h.actorId);
+      const byGithub = h.botActorType === "integration";
+      return (human || byGithub) && !activeAt(h.createdAt);
     };
     if (issue.state.name !== r.linear.state) {
+      const entry = latestEntry((h) => h.toStateId === issue.state.id);
       events.push({
         type: "owner_state",
         identifier: r.identifier,
         stateType: issue.state.type,
         stateName: issue.state.name,
-        authorized: authorizedAt(issue.updatedAt),
-        at: issue.updatedAt,
+        authorized: authorizedBy(entry),
+        at: entry?.createdAt ?? issue.updatedAt,
       });
     }
     const life = issue.labels.find((l) => ctx.meta.lifecycleIds.has(l.id))?.name ?? null;
     const agents = issue.labels.filter((l) => l.parentId === ctx.meta.agentGroupId).map((l) => l.name);
-    if (life !== r.linear.lifecycleLabel) {
+    // The `human` label is the owner's kill switch (§7.4): report it even when the Lifecycle label is unchanged,
+    // otherwise a release request that leaves Lifecycle alone would never reach the tick.
+    if (life !== r.linear.lifecycleLabel || agents.includes(ctx.cfg.labels.agent.human)) {
+      const entry = latestEntry(
+        (h) =>
+          h.addedLabelIds.some((id) => groupLabelIds.has(id)) ||
+          h.removedLabelIds.some((id) => groupLabelIds.has(id)),
+      );
       events.push({
         type: "owner_labels",
         identifier: r.identifier,
         lifecycle: life,
         agent: agents,
-        authorized: authorizedAt(issue.updatedAt),
-        at: issue.updatedAt,
+        authorized: authorizedBy(entry),
+        at: entry?.createdAt ?? issue.updatedAt,
       });
     }
     const fresh = comments
-      .filter(
-        (x) =>
-          x.issueId === r.linearId &&
-          (!r.linear.lastSeenCommentAt || x.createdAt > r.linear.lastSeenCommentAt),
-      )
+      .filter((x) => x.issueId === r.linearId && x.createdAt > seenFrom(r))
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
     for (const c of fresh) {
       const cls = classifyComment(c, r, approvers, activeAt);

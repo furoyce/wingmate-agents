@@ -172,3 +172,100 @@ describe("reconcile", () => {
     expect(r.candidates[0]?.verdict).toMatchObject({ status: "skipped", reason: "paused" });
   });
 });
+
+describe("reconcile authorship and comment window (fix round 1)", () => {
+  const inProgress = (id: string, identifier: string) => {
+    const i = todo(id, identifier);
+    i.state = { id: "st-prog", name: "In Progress", type: "started" };
+    return i;
+  };
+
+  test("a non-approver state change stays unauthorized even after a later owner label edit", async () => {
+    const w = await makeWorld();
+    w.linear.add(inProgress("i6", "JRF-506"));
+    await createRecordExclusive(w.dirs, parkedRecord("JRF-506", "i6"));
+    w.linear.setState("i6", "Done", "guest-user", "2026-10-06T09:50:00.000Z");
+    w.linear.setLabels("i6", ["agent-ready", "Needs-Human"], OWNER, "2026-10-06T09:55:00.000Z");
+    const r = await reconcile(w.ctx);
+    expect(r.events.find((e) => e.type === "owner_state")).toMatchObject({
+      identifier: "JRF-506",
+      stateType: "completed",
+      authorized: false,
+      at: "2026-10-06T09:50:00.000Z",
+    });
+  });
+
+  test("a 1 ms skew between the issue's updatedAt and the history entry does not change the verdict", async () => {
+    const w = await makeWorld();
+    w.linear.add(inProgress("i7", "JRF-507"));
+    await createRecordExclusive(w.dirs, parkedRecord("JRF-507", "i7"));
+    w.linear.setState("i7", "Done", "guest-user", "2026-10-06T09:50:00.000Z");
+    const issue = w.linear.issues.get("i7");
+    if (!issue) throw new Error("issue missing");
+    issue.updatedAt = "2026-10-06T09:50:00.001Z";
+    expect((await reconcile(w.ctx)).events.find((e) => e.type === "owner_state")).toMatchObject({
+      authorized: false,
+    });
+    // ...and an owner change with the same skew is still authorized.
+    w.linear.add(inProgress("i8", "JRF-508"));
+    await createRecordExclusive(w.dirs, parkedRecord("JRF-508", "i8"));
+    w.linear.setState("i8", "Done", OWNER, "2026-10-06T09:51:00.000Z");
+    const owned = w.linear.issues.get("i8");
+    if (!owned) throw new Error("issue missing");
+    owned.updatedAt = "2026-10-06T09:51:00.001Z";
+    const r = await reconcile(w.ctx);
+    expect(r.events.find((e) => e.type === "owner_state" && e.identifier === "JRF-508")).toMatchObject({
+      authorized: true,
+    });
+  });
+
+  test("a label change by a non-approver is unauthorized; the owner's lifecycle change is authorized", async () => {
+    const w = await makeWorld();
+    w.linear.add(inProgress("i9", "JRF-509"));
+    const rec = parkedRecord("JRF-509", "i9");
+    rec.linear.lifecycleLabel = null;
+    await createRecordExclusive(w.dirs, rec);
+    w.linear.setLabels("i9", ["agent-ready", "human"], "guest-user", "2026-10-06T09:50:00.000Z");
+    expect((await reconcile(w.ctx)).events.find((e) => e.type === "owner_labels")).toMatchObject({
+      authorized: false,
+      agent: ["agent-ready", "human"],
+    });
+    w.linear.setLabels("i9", ["agent-ready", "Needs-Human"], OWNER, "2026-10-06T09:52:00.000Z");
+    expect((await reconcile(w.ctx)).events.find((e) => e.type === "owner_labels")).toMatchObject({
+      authorized: true,
+      lifecycle: "Needs-Human",
+      at: "2026-10-06T09:52:00.000Z",
+    });
+  });
+
+  test("a parked record that has never seen a comment still receives the owner's answer", async () => {
+    const w = await makeWorld(); // clock 10:00, answer at 09:40 — the old window started at now and hid it
+    w.linear.add(inProgress("i10", "JRF-510"));
+    const rec = parkedRecord("JRF-510", "i10");
+    rec.linear.lastSeenCommentAt = null;
+    await createRecordExclusive(w.dirs, rec);
+    w.linear.humanComment("i10", "1", OWNER, "2026-10-06T09:40:00.000Z", "cq");
+    const r = await reconcile(w.ctx);
+    expect(r.events.find((e) => e.type === "answer")).toMatchObject({
+      identifier: "JRF-510",
+      commentId: "c-1",
+    });
+  });
+
+  test("comments posted before a record's claim never arrive as notes", async () => {
+    const w = await makeWorld();
+    w.linear.add(inProgress("i11", "JRF-511"));
+    const rec = parkedRecord("JRF-511", "i11");
+    rec.stage = "working";
+    rec.questions = [];
+    rec.linear.lastSeenCommentAt = null; // claimedAt 09:00
+    await createRecordExclusive(w.dirs, rec);
+    w.linear.humanComment("i11", "old thoughts", OWNER, "2026-10-06T08:30:00.000Z");
+    w.linear.humanComment("i11", "new thoughts", OWNER, "2026-10-06T09:30:00.000Z");
+    const r = await reconcile(w.ctx);
+    const notes = r.events
+      .filter((e) => e.type === "comment")
+      .map((e) => (e.type === "comment" ? e.body : ""));
+    expect(notes).toEqual(["new thoughts"]);
+  });
+});

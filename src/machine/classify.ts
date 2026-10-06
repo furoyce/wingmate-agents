@@ -25,6 +25,8 @@ export function classifyComment(
     if (!q || c.createdAt <= q.askedAt) return "ignore";
     return activeAt(c.createdAt) ? "self_answer_suspected" : "answer";
   }
-  if (r.stage === "claimed" || r.stage === "working") return "note";
+  // In review the owner's comments are review feedback: the tick forwards them when the issue returns to
+  // In Progress (§7.3), so they must survive classification as notes.
+  if (r.stage === "claimed" || r.stage === "working" || r.stage === "review") return "note";
   return "ignore";
 }

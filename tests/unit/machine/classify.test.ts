@@ -80,14 +80,24 @@ describe("classifyComment", () => {
       "note",
     );
   });
-  test("parked without an open question, or in review/terminal stages, is ignored", () => {
+  test("parked without an open question, or in terminal stages, is ignored", () => {
     const noQ = parked();
     noQ.questions = [];
     expect(classifyComment(c({}), noQ, approvers, () => false)).toBe("ignore");
-    for (const stage of ["review", "released", "done", "cancelled"] as const) {
+    for (const stage of ["released", "done", "cancelled"] as const) {
       const r = parked();
       r.stage = stage;
       expect(classifyComment(c({}), r, approvers, () => false)).toBe("ignore");
     }
+  });
+});
+
+describe("classifyComment in review (fix round 1)", () => {
+  test("an approver's comment in review is a note; others keep their authorship class", () => {
+    const r = parked();
+    r.stage = "review";
+    expect(classifyComment(c({ body: "please rename the hook" }), r, approvers, () => false)).toBe("note");
+    expect(classifyComment(c({ userId: "guest" }), r, approvers, () => false)).toBe("unverified_author");
+    expect(classifyComment(c({ userId: null, botActorId: "app" }), r, approvers, () => false)).toBe("ignore");
   });
 });
