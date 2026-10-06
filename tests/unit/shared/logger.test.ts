@@ -14,41 +14,45 @@ describe("logger", () => {
     }
   });
 
-  test("redacts secrets at top level", async () => {
-    const log = logger(testDir);
-    log.info({ token: "secret123", message: "test" });
-    log.info({ password: "secret456", message: "test" });
-    await new Promise((resolve) => setTimeout(resolve, 100));
+  test("redacts secrets at top level", () => {
+    const log = logger(testDir, true);
+    log.info({ token: "secret123", secret: "secret456", message: "test" });
     const content = readFileSync(join(testDir, "wingmate.log"), "utf8");
     expect(content).not.toContain("secret123");
     expect(content).not.toContain("secret456");
     expect(content).toContain("[redacted]");
   });
 
-  test("redacts secrets one level deep", async () => {
-    const log = logger(testDir);
+  test("redacts secrets one level deep", () => {
+    const log = logger(testDir, true);
     log.info({ cfg: { token: "secret789", accessToken: "secret012" }, message: "test" });
-    await new Promise((resolve) => setTimeout(resolve, 100));
     const content = readFileSync(join(testDir, "wingmate.log"), "utf8");
     expect(content).not.toContain("secret789");
     expect(content).not.toContain("secret012");
     expect(content).toContain("[redacted]");
   });
 
-  test("redacts secrets two levels deep", async () => {
-    const log = logger(testDir);
+  test("redacts secrets two levels deep", () => {
+    const log = logger(testDir, true);
     log.info({ cfg: { linear: { token: "secret345", clientSecret: "secret678" } }, message: "test" });
-    await new Promise((resolve) => setTimeout(resolve, 100));
     const content = readFileSync(join(testDir, "wingmate.log"), "utf8");
     expect(content).not.toContain("secret345");
     expect(content).not.toContain("secret678");
     expect(content).toContain("[redacted]");
   });
 
-  test("preserves non-secret values", async () => {
-    const log = logger(testDir);
+  test("redacts webhook secret nested", () => {
+    const log = logger(testDir, true);
+    log.info({ webhook: { secret: "webhook-secret-key", token: "webhook-token-key" }, message: "test" });
+    const content = readFileSync(join(testDir, "wingmate.log"), "utf8");
+    expect(content).not.toContain("webhook-secret-key");
+    expect(content).not.toContain("webhook-token-key");
+    expect(content).toContain("[redacted]");
+  });
+
+  test("preserves non-secret values", () => {
+    const log = logger(testDir, true);
     log.info({ user: "alice", message: "test data", count: 42 });
-    await new Promise((resolve) => setTimeout(resolve, 100));
     const content = readFileSync(join(testDir, "wingmate.log"), "utf8");
     expect(content).toContain("alice");
     expect(content).toContain("test data");
