@@ -288,6 +288,22 @@ block (`deny network-outbound <host>:<port> (host is on the deny list | host is 
 wrapped process (`network: true`), which I read as the OS-level profile blocking direct egress. The model appended `; echo "exit=$?"` to its commands in run B, so a failing command shows `is_error:false`
 there; the classifier in the script reads the content.
 
+### 3.4b Posture checks for Task 12's `doctor` (quota-free unless noted; all observed on this machine)
+
+Run with the kit's file, `<file>` = `<kit>/claude-settings.json`, from any directory:
+
+| check | command | good | bad (observed) |
+|---|---|---|---|
+| keys accepted | `claude --settings <file> doctor </dev/null`; read the section that starts at the line `Invalid settings` and ends at the next blank line | no such section | `Invalid settings` / `- <file> › sandbox.network.strictAllowlist: Expected boolean, but received string` / `  Suggested fix: Use true or false without quotes. …` (file and key path are named) |
+| sandbox on | `claude --settings <file> sandbox status` (one JSON line) | `"enabled":true,"enabledSource":"policy"` | `"enabled":false,"enabledSource":"off"` — what a mistyped value inside the `sandbox` block produces (the whole block is dropped), and what you get without `--settings` |
+| unsandboxed escape closed | same JSON | `"strictMode":true,"strictModeSource":"policy"` | `"strictMode":false` — true exactly for files that set `allowUnsandboxedCommands:false` |
+| network control (needs one `claude -p`, ≈ $0.75) | a sandboxed `git ls-remote https://github.com/git/git.git HEAD` | exit 128, `CONNECT tunnel failed, response 403`, `<sandbox_violations> deny network-outbound github.com:443 (host is not on the allow list)` | a ref line |
+
+Things that are **not** reliable signals: the exit code of `doctor` (0 even when it reports invalid settings) and of `sandbox status` (0 in every case, nothing on stderr, even when the sandbox block was dropped);
+`doctor` does not report an unknown key (`sandbox.network.bogusKey` was silently tolerated, the sandbox stayed `enabled:true`), so a misspelled key is not caught by it; `allowManagedDomainsOnly: true` in a `--settings`
+file raises no error either (and, by the code, is ignored). `WebFetch(*)` in the owner's user settings does **not** widen the sandbox allowlist (by the code only `WebFetch(domain:X)` rules merge,
+and none do under `strictAllowlist`), so `doctor` need not special-case it.
+
 ### 3.5 Codex (CLI 0.160.1)
 
 Flag acceptance (`<cmd> <flags> --help`, no model call; `-c key=value` is always accepted syntactically):
