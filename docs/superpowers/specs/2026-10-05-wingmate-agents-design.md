@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Date | 2026-10-05 · revision 3 on 2026-10-06, after the five-lens critique and the three-lens recheck in `review/2026-10-05-critique/` |
-| Status | Draft for owner review |
+| Status | Approved by the owner 2026-10-06 (revision 3) |
 | Owner | Royce Fu (royce.code@gmail.com) |
 | Scope | Pilot of the Wingmate Agents framework on four projects, plus the Wingmate Console |
 | Supersedes | The one-off "Bouncr-auto Linear engineering" Orca automation (v0) |
@@ -112,7 +112,7 @@ orchestrator in `ehr-dispatch`, and the Linear multi-agent conventions — and r
   is public. Linear cannot distinguish an `actor=user` OAuth write (e.g. `orca linear`) from the owner typing.
 - GitHub Issues sync exists (per repo↔team, bidirectional) — the basis for deferred GitHub intake.
 
-## 3. Decision log (approved by the owner unless marked *proposed*)
+## 3. Decision log (all approved by the owner; D14–D18 approved 2026-10-06)
 
 | # | Decision |
 |---|---|
@@ -129,11 +129,11 @@ orchestrator in `ehr-dispatch`, and the Linear multi-agent conventions — and r
 | D11 | Budgets notify, never block, by default; optional per-project caps; the owner controls spend via the number of labeled issues |
 | D12 | Provider quota gating stays: no new start above 80 % of any weekly-class window / 90 % of a session window, evaluated at claim and at every worker launch |
 | D13 | The **Wingmate Console** is in scope: Linear-like, high-performance, with a human-input inbox, delivered as a loopback-only local web app usable inside Orca's embedded browser |
-| D14 *proposed* | **Trust boundary risk acceptance.** Coordinators, verifiers and workers run unattended as the owner's macOS user; until phase-2 isolation (separate user/VM), file permissions protect nothing from a compromised agent and prompt rules are advisory. The pilot accepts the residual risk because the Linear team has one member, an issue reaches an agent only after the owner labels it, and the enforced controls in §13.3 reduce the blast radius of an injected ticket, comment, web page or dependency |
-| D15 *proposed* | **The dispatcher never runs an LLM.** The Orca automation's precheck command *is* the tick; it always exits non-zero so Orca never starts the automation's agent; the tick summary lives in the run record's precheck output and in local state |
-| D16 *proposed* | **The coordinator is an ordinary Orca terminal agent** launched by the dispatcher with explicit argv (model, effort, session id, sandbox and deny settings), not a supervised Dispatch; it owns one orchestration Run for its verifiers and workers, which are started only through `wingmate issue spawn` |
-| D17 *proposed* | **Agents never hold credentials and never publish.** `issue` verbs write intents to a per-worktree outbox; the dispatcher performs every Linear and GitHub write after deterministic guards (path guard without a lift mechanism in the pilot, secret scan, dependency policy) |
-| D18 *proposed* | Console v1 scope is Portfolio (with dispatcher tile and queue), List/Board, Issue detail, Inbox (answer, stop, continue, pause), a flat Fleet list and provenance-tagged cost; charts, saved filters, command palette and routing actions move to v1.1/v2 |
+|| D14 *proposed* || **Trust boundary risk acceptance.** Coordinators, verifiers and workers run unattended as the owner's macOS user; until phase-2 isolation (separate user/VM), file permissions protect nothing from a compromised agent and prompt rules are advisory. The pilot accepts the residual risk because the Linear team has one member, an issue reaches an agent only after the owner labels it, and the enforced controls in §13.3 reduce the blast radius of an injected ticket, comment, web page or dependency |
+|| D15 *proposed* || **The dispatcher never runs an LLM.** The Orca automation's precheck command *is* the tick; it always exits non-zero so Orca never starts the automation's agent; the tick summary lives in the run record's precheck output and in local state |
+|| D16 *proposed* || **The coordinator is an ordinary Orca terminal agent** launched by the dispatcher with explicit argv (model, effort, session id, sandbox and deny settings), not a supervised Dispatch; it owns one orchestration Run for its verifiers and workers, which are started only through `wingmate issue spawn` |
+|| D17 *proposed* || **Agents never hold credentials and never publish.** `issue` verbs write intents to a per-worktree outbox; the dispatcher performs every Linear and GitHub write after deterministic guards (path guard without a lift mechanism in the pilot, secret scan, dependency policy) |
+|| D18 *proposed* || Console v1 scope is Portfolio (with dispatcher tile and queue), List/Board, Issue detail, Inbox (answer, stop, continue, pause), a flat Fleet list and provenance-tagged cost; charts, saved filters, command palette and routing actions move to v1.1/v2 |
 
 ## 4. Architecture
 
@@ -381,15 +381,16 @@ Sources: `orca terminal list --worktree id:<wt> --json` (rows: `handle`, `tabId`
 `tabId` is not in `terminal list` is ignored.
 - `working` := the recorded handle is present in `terminal list` and its pane's `agents[]` entry has `state ==
   'working'`.
-- `idle` := the handle is present, the row has `agentIdentity` set, and the pane's entry is `state == 'done'`
-  (turn ended; parked or between turns).
+- `idle` := the handle is present and the pane's `agents[]` entry (joined by `tabId:leafId`; the live `terminal
+  list` rows expose no agent-identity field of their own) has `state == 'done'` (turn ended; parked or between
+  turns).
 - `exited` := the recorded handle is absent from `terminal list` (the `exec` prefix makes the PTY end with the
-  agent), or the row is present with `agentIdentity == null` (only a shell remains; confirmed by `terminal wait
-  --terminal <handle> --for exit --timeout-ms 1 --json` or a `terminal show` preview ending in a shell prompt), or
-  the worktree is gone.
+  agent), or the row is present but its pane has no `agents[]` entry and `terminal wait --terminal <handle> --for
+  exit --timeout-ms 1 --json` or a `terminal show` preview shows a shell prompt (only a shell remains), or the
+  worktree is gone.
 - `unverifiable` := Orca unreachable, a partial fleet read (`truncated`/`omittedHostIds`), or a present row whose
-  pane has no `agents[]` entry and no `agentIdentity`. `unverifiable` never triggers stop, relaunch, handoff or
-  `blocked`; it is recorded as `attention: liveness_unverifiable`.
+  pane has no `agents[]` entry and whose shell state cannot be confirmed. `unverifiable` never triggers stop,
+  relaunch, handoff or `blocked`; it is recorded as `attention: liveness_unverifiable`.
 - A worker is live when its Dispatch verdict is `live`; `unverifiable` workers are waited on, never stopped.
 
 ## 6. The tick
@@ -624,8 +625,11 @@ nextStep }` on refusal; every refusal is a ledger event; `<id>` defaults to the 
 - `finish --summary-file <path> [--title …] [--draft] [--repo <name>]…` — refuses with `gates_incomplete` unless
   every stage up to `security` is PASS or NA at the current HEAD, with `workers_live` while workers run, and with
   `nothing_to_publish` when the branch has no commits beyond `baseSha`. Writes a `finish` intent; the coordinator
-  ends its turn. On accepting the intent the dispatcher sets `pipelineStage = pr`, recomputes `validate` and
-  `security`, publishes (§13.3 d) and completes, recording `gates.pr = PASS` with `headSha` and the PR url. On a
+  ends its turn. On accepting the intent the dispatcher sets `pipelineStage = pr`, recomputes `security` (path
+  guard, secret scan, dependency policy), verifies `validate` (the CLI-computed gate must be `PASS` at the exact
+  HEAD being pushed with its evidence report showing exit 0 for every pinned command — the commands themselves are
+  not re-run inside the tick budget; any other state refuses with `validate_stale`), publishes (§13.3 d) and
+  completes, recording `gates.pr = PASS` with `headSha` and the PR url. On a
   guard failure it writes the finding to `.wingmate/inbox/publish-<ulid>.md` (fenced), sets `security` to FAIL
   (`note: publish_guard`), leaves `pr` null, and in the same tick delivers the pointer "publish refused — read
   `.wingmate/inbox/publish-<ulid>.md`, fix, re-gate security and run finish again" via the §7.1 step 4 delivery
@@ -1035,7 +1039,7 @@ are advisory; the controls below are enforced in code and verified by `wingmate 
   exception of read-and-execute access to the compiled binary so `wingmate issue …` can run. `issue` verbs touch
   only `<worktree>/.wingmate/`, and the dispatcher re-validates every intent it finds there against its own record
   and Orca (gate prerequisites from its record; `workers_live` from `worker-list`; `planVerify` from `worker-show`
-  of the named Dispatch; `validate`/`security` recomputed at publish; `nothing_to_publish` from git).
+  of the named Dispatch; `security` recomputed and `validate` verified at the pushed HEAD at publish; `nothing_to_publish` from git).
 - **(b) Claude sessions in `wm-` worktrees** run with explicit argv `claude --model <id> --effort max --session-id
   <uuid> --permission-mode bypassPermissions --settings ~/.local/share/wingmate/kit/<identifier>/claude-settings.json
   --strict-mcp-config`, with the environment `GH_TOKEN=` (empty), `GH_CONFIG_DIR=<kit>/gh-empty`,
@@ -1137,7 +1141,8 @@ are advisory; the controls below are enforced in code and verified by `wingmate 
 
 ### 14.1 Layout (this repository)
 ```
-package.json (bun), tsconfig.json (strict, noUncheckedIndexedAccess), vitest, biome
+package.json (bun), tsconfig.json (strict, noUncheckedIndexedAccess), `bun test` (built-in runner; the same Bun
+runtime that runs the dispatcher), biome
 src/cli        scan · tick · issue · status · config · install · doctor · pause · stop · ui
 src/config     schema.ts · load.ts
 src/linear     client.ts · auth.ts · queries.ts · writes.ts · markers.ts · templates.ts · views.ts
