@@ -159,6 +159,7 @@ export async function reconcile(ctx: Ctx): Promise<Reconciled> {
     ctx.meta.labels.filter((l) => l.parentId === ctx.meta.agentGroupId).map((l) => l.id),
   );
   const groupLabelIds = new Set([...ctx.meta.lifecycleIds, ...agentGroupLabelIds]);
+  const humanLabelId = ctx.meta.labels.find((l) => l.name === ctx.cfg.labels.agent.human)?.id;
   for (const r of activeRecords) {
     const issue = issuesById.get(r.linearId);
     if (!issue) continue;
@@ -176,11 +177,12 @@ export async function reconcile(ctx: Ctx): Promise<Reconciled> {
       }
       return undefined;
     };
+    const byApprover = (h: LinearHistoryEntry) =>
+      !h.botActorId && !!h.actorId && approvers.includes(h.actorId);
     const authorizedBy = (h: LinearHistoryEntry | undefined) => {
       if (!h) return false;
-      const human = !h.botActorId && !!h.actorId && approvers.includes(h.actorId);
       const byGithub = h.botActorType === "integration";
-      return (human || byGithub) && !activeAt(h.createdAt);
+      return (byApprover(h) || byGithub) && !activeAt(h.createdAt);
     };
     if (issue.state.name !== r.linear.state) {
       const entry = latestEntry((h) => h.toStateId === issue.state.id);
@@ -197,19 +199,24 @@ export async function reconcile(ctx: Ctx): Promise<Reconciled> {
     const agents = issue.labels.filter((l) => l.parentId === ctx.meta.agentGroupId).map((l) => l.name);
     // The `human` label is the owner's kill switch (§7.4): report it even when the Lifecycle label is unchanged,
     // otherwise a release request that leaves Lifecycle alone would never reach the tick.
-    if (life !== r.linear.lifecycleLabel || agents.includes(ctx.cfg.labels.agent.human)) {
+    const humanAdded = agents.includes(ctx.cfg.labels.agent.human);
+    if (life !== r.linear.lifecycleLabel || humanAdded) {
       const entry = latestEntry(
         (h) =>
           h.addedLabelIds.some((id) => groupLabelIds.has(id)) ||
           h.removedLabelIds.some((id) => groupLabelIds.has(id)),
       );
+      // §13.3(i): `human` is the owner's kill switch, "honored at the next tick". Stopping work is the safe direction, so an
+      // approver adding it counts whatever an agent was doing at the time; the activity rule guards answers and closes.
+      const humanEntry =
+        humanAdded && humanLabelId ? latestEntry((h) => h.addedLabelIds.includes(humanLabelId)) : undefined;
       events.push({
         type: "owner_labels",
         identifier: r.identifier,
         lifecycle: life,
         agent: agents,
-        authorized: authorizedBy(entry),
-        at: entry?.createdAt ?? issue.updatedAt,
+        authorized: humanEntry ? byApprover(humanEntry) : authorizedBy(entry),
+        at: (humanEntry ?? entry)?.createdAt ?? issue.updatedAt,
       });
     }
     const fresh = comments

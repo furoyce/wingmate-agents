@@ -238,6 +238,45 @@ describe("reconcile authorship and comment window (fix round 1)", () => {
     });
   });
 
+  test("§13.3(i): an approver's `human` label is honored while an agent works (kill switch); another label change is not", async () => {
+    const w = await makeWorld();
+    w.linear.add(inProgress("i12", "JRF-512"));
+    const rec = parkedRecord("JRF-512", "i12");
+    rec.stage = "working";
+    rec.questions = [];
+    const wt = await w.orca.worktreeCreate({
+      repoId: "repo",
+      name: "wm-jrf-512",
+      baseBranch: "origin/main",
+      linearIssue: "JRF-512",
+      comment: "",
+    });
+    const term = await w.orca.terminalCreate(wt.id, "wingmate JRF-512", "exec claude");
+    rec.worktree = {
+      id: wt.id,
+      path: wt.path,
+      branch: "wm-jrf-512",
+      baseSha: "basesha",
+      gitCommonDir: "/repo/.git",
+      gitdirName: "wm-jrf-512",
+    };
+    rec.coordinator.terminalHandle = term.handle;
+    rec.coordinator.paneKey = `${term.tabId}:${term.leafId}`;
+    rec.linear.lifecycleLabel = "In-Agent";
+    await createRecordExclusive(w.dirs, rec);
+    w.orca.setAgentState(wt.id, rec.coordinator.paneKey, "working", "2026-10-06T09:39:00.000Z");
+    w.linear.setLabels("i12", ["agent-ready", "In-Agent", "human"], OWNER, "2026-10-06T09:50:00.000Z");
+    expect((await reconcile(w.ctx)).events.find((e) => e.type === "owner_labels")).toMatchObject({
+      authorized: true,
+      agent: ["agent-ready", "human"],
+    });
+    w.linear.setLabels("i12", ["agent-ready", "Blocked"], OWNER, "2026-10-06T09:55:00.000Z");
+    expect((await reconcile(w.ctx)).events.find((e) => e.type === "owner_labels")).toMatchObject({
+      authorized: false,
+      lifecycle: "Blocked",
+    });
+  });
+
   test("a parked record that has never seen a comment still receives the owner's answer", async () => {
     const w = await makeWorld(); // clock 10:00, answer at 09:40 — the old window started at now and hid it
     w.linear.add(inProgress("i10", "JRF-510"));

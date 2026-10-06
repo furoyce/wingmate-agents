@@ -1,5 +1,5 @@
 // src/cli/index.ts — hand-rolled argv parsing and command dispatch (Appendix A of the spec).
-import { WingmateError } from "../shared/errors";
+import { WingmateError, errorCode, errorText } from "../shared/errors";
 /** A flag given once is its value (or `true` without one); given again, its values accumulate in order (`--repo a --repo b`). */
 export type FlagValue = string | boolean | string[];
 export interface Argv {
@@ -38,7 +38,28 @@ type Handler = (argv: Argv) => Promise<number>;
 const registry: Record<string, () => Promise<Handler>> = {
   config: async () => (await import("./commands/config")).configCommand,
   issue: async () => (await import("./commands/issue")).issueCommand,
+  tick: async () => (await import("./commands/tick")).tickCommand,
+  scan: async () => (await import("./commands/scan")).scanCommand,
 };
+
+/** Every error a command lets escape: `code: message` on stderr (never a stack trace, never stdout), exit 2. */
+export function reportError(
+  e: unknown,
+  write: (s: string) => void = (s) => {
+    process.stderr.write(s);
+  },
+): number {
+  if (e instanceof WingmateError)
+    write(`${e.code}: ${e.message}${e.nextStep ? `\n  next: ${e.nextStep}` : ""}\n`);
+  else {
+    const code = errorCode(e);
+    write(
+      `${code}: ${code === "internal_error" ? errorText(e) : e instanceof Error ? e.message : String(e)}\n`,
+    );
+  }
+  return 2;
+}
+
 export async function main(args: string[]): Promise<number> {
   const argv = parseArgv(args);
   const top = argv.cmd[0];
@@ -50,10 +71,6 @@ export async function main(args: string[]): Promise<number> {
   try {
     return await (await load())(argv);
   } catch (e) {
-    if (e instanceof WingmateError) {
-      process.stderr.write(`${e.code}: ${e.message}${e.nextStep ? `\n  next: ${e.nextStep}` : ""}\n`);
-      return 2;
-    }
-    throw e;
+    return reportError(e);
   }
 }
