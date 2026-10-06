@@ -636,7 +636,7 @@ const Budgets = z.object({ softTokens: z.number().nullable().default(null), hard
 export const DefaultsSchema = z.object({
   timezone: z.string().min(1),
   sandbox: z.object({ allowedDomains: z.array(z.string()).default([]) }).default({}),
-  providers: z.object({ default: Provider.default("claude"), coordinatorCascade: z.array(z.enum(["claude", "codex"])).default(["claude", "codex"]), workers: z.array(Provider).default(["claude", "codex", "cursor", "antigravity"]), verifyCross: z.boolean().default(true) }).default({}),
+  providers: z.object({ default: Provider.default("claude"), coordinatorCascade: z.array(z.enum(["claude", "codex"])).default(["claude"]), workers: z.array(Provider).default(["claude", "codex", "cursor", "antigravity"]), verifyCross: z.boolean().default(true) }).default({}),
   autonomy: z.enum(["ask-first", "balanced", "autonomous"]).default("ask-first"),
   done: z.enum(["review", "merge", "deploy"]).default("review"),
   concurrency: Concurrency.default({}), quota: z.object({ weeklyMax: z.number().default(80), sessionMax: z.number().default(90), maxSnapshotAgeMin: z.number().default(360) }).default({}),
