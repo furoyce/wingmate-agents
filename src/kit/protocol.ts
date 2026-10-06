@@ -13,6 +13,9 @@ intake → plan → planVerify → implement → validate → ui → security �
 - security: \`wingmate issue <id> gate security\` (computed) plus \`spawn --role security-reviewer\`.
 - finish: \`wingmate issue <id> finish --summary-file <file>\`; the dispatcher pushes, opens the PR and moves the issue to review. Then END YOUR TURN.
 
+## Spawning
+Run every \`wingmate issue <id> spawn …\` with a Bash timeout of 600000 ms: its waits for the role agent can take up to ~10 minutes. If the call times out anyway, check \`wingmate issue <id> show\` before retrying (\`run\` names the child Run; \`orca orchestration worker-list --run <runId> --json\` shows whether the role started), so one role is never started twice.
+
 ## Turn-ending verbs
 After \`ask\`, \`finish\` or \`handoff\` you MUST end your turn immediately and do nothing else. Answers, notes and publish results arrive as files in \`.wingmate/inbox/\` and a pointer message in this terminal; read the file, then continue from the stage it names.
 Before every gate run \`orca orchestration check --peek --json\` if you have a child Run; owner notes may be waiting.

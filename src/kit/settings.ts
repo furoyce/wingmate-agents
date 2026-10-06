@@ -119,6 +119,18 @@ const ORCA_EXTRA_DENY = [
 ];
 
 /**
+ * §13.3(b) `wingmate issue … spawn` for every non-coordinator role (C2), by bare name or path (`~/.local/bin/wingmate`), with or
+ * without the optional `<id>` (§8.1). Prefix rules stop a well-behaved agent; `spawn` itself refuses unless WINGMATE_ROLE is
+ * coordinator.
+ */
+const SPAWN_DENY = [
+  "Bash(wingmate issue * spawn*)",
+  "Bash(*/wingmate issue * spawn*)",
+  "Bash(wingmate issue spawn*)",
+  "Bash(*/wingmate issue spawn*)",
+];
+
+/**
  * §13.3(a): the single exception to the state dir's deny region — read (hence execute) access to the compiled binary, which
  * `~/.local/bin/wingmate` links to (§4.3), so `wingmate issue …` runs inside the sandbox. `denyWrite` still covers it.
  */
@@ -211,6 +223,20 @@ export function siblingDenyWrite(commonDir: string, gitdirName: string, names?: 
 const isLiteralBranch = (b: string): boolean =>
   b.length > 0 && b.split("/").every((p) => GITDIR_NAME.test(p));
 
+/**
+ * `git check-ref-format --branch` (git 2.53): whether git can give a branch this name. A HEAD that names anything else points at
+ * no ref git writes, so there is nothing to deny for it (C9).
+ */
+export function isValidBranchName(name: string): boolean {
+  if (name === "" || name === "HEAD" || name.startsWith("-") || name.startsWith("/")) return false;
+  if (name.endsWith("/") || name.endsWith(".") || /\.\.|@\{|\/\/|[ ~^:?*[\\]/.test(name)) return false;
+  for (const ch of name) {
+    const code = ch.charCodeAt(0);
+    if (code < 0x20 || code === 0x7f) return false; // control characters and DEL
+  }
+  return name.split("/").every((p) => !p.startsWith(".") && !p.endsWith(".lock"));
+}
+
 function assertBranch(branch: string): void {
   if (!isLiteralBranch(branch))
     throw new WingmateError(
@@ -250,9 +276,9 @@ export function siblingBranches(commonDir: string, gitdirName: string, names?: r
 
 /**
  * F10: Claude's common-dir grant leaves `refs/heads/**` writable apart from the base branch, so each other worktree's branch ref is
- * denied by name, with its lock (a planted lock blocks that worktree's commits). The own branch is never denied, nor a branch that is
- * a path prefix or extension of it: a plain deny covers its subtree, and the sandbox denies creating or unlinking every deny's
- * ancestors — either would break the own ref update.
+ * denied by name, with its lock (a planted lock blocks that worktree's commits). A name git cannot give a branch is skipped: no ref
+ * git writes has it (C9). No emitted path is the own ref, its lock or one of their ancestors or descendants: a plain deny covers its
+ * subtree, and the sandbox denies creating or unlinking every deny's ancestors — either would break the own ref update (C9).
  */
 export function siblingBranchDenyWrite(
   commonDir: string,
@@ -260,16 +286,21 @@ export function siblingBranchDenyWrite(
   branches: readonly string[],
 ): string[] {
   assertBranch(branch);
+  const heads = `${commonDir}/refs/heads/`;
+  const own = [`${heads}${branch}`, `${heads}${branch}.lock`];
+  const overlap = (p: string, q: string) => p === q || p.startsWith(`${q}/`) || q.startsWith(`${p}/`);
   const out: string[] = [];
   for (const b of [...new Set(branches)].sort()) {
-    if (b === branch || branch.startsWith(`${b}/`) || b.startsWith(`${branch}/`)) continue;
+    if (!isValidBranchName(b)) continue;
+    const deny = [`${heads}${b}`, `${heads}${b}.lock`];
+    if (deny.some((p) => own.some((o) => overlap(p, o)))) continue;
     if (!isLiteralBranch(b))
       throw new WingmateError(
         "settings_invalid",
         `branch ${JSON.stringify(b)} checked out in another worktree of ${commonDir} is not a literal ref name, so it cannot be denied exactly`,
         "rename that branch or remove its worktree, then re-install the kit",
       );
-    out.push(`${commonDir}/refs/heads/${b}`, `${commonDir}/refs/heads/${b}.lock`);
+    out.push(...deny);
   }
   return out;
 }
@@ -366,13 +397,16 @@ export function claudeSettings(i: SettingsInput): object {
     "mcp__*Linear__delete_*",
   ];
   if (i.role !== "ui-reviewer") deny.push(...BROWSER_VERBS.map((v) => `Bash(orca ${v} *)`));
+  // Every role, the coordinator included (C4): a coordinator starts workers only through `wingmate issue spawn`, which runs
+  // worker-start as a subprocess the permission layer never sees, under the role's own settings file (§8.1). `dispatch` hands a
+  // task to another terminal — a spawn by another name (Orca 1.4.220).
+  deny.push("Bash(orca orchestration worker-start *)", "Bash(orca orchestration dispatch *)");
+  // §13.3(b): only the coordinator creates Runs and tasks or spawns (C2; `spawn` also refuses unless WINGMATE_ROLE is coordinator)
   if (i.role !== "coordinator")
     deny.push(
-      "Bash(orca orchestration worker-start *)",
       "Bash(orca orchestration run-create *)",
       "Bash(orca orchestration task-create *)",
-      // `dispatch` hands a task to another terminal — a spawn by another name (Orca 1.4.220).
-      "Bash(orca orchestration dispatch *)",
+      ...SPAWN_DENY,
     );
   return {
     sandbox: {
@@ -544,7 +578,8 @@ export const roleArgv = (a: {
         role: a.role,
       });
 
-export const agentEnv = (kitDir: string): Record<string, string> => ({
+/** The environment every agent is launched with (§13.3 b); `role` is the agent's own, which `spawn` checks (C2). */
+export const agentEnv = (kitDir: string, role: Role = "coordinator"): Record<string, string> => ({
   GH_TOKEN: "",
   // gh falls back to these when GH_TOKEN is empty, so an owner shell exporting one would hand it to the agent (F9, §13.3 a)
   GITHUB_TOKEN: "",
@@ -554,15 +589,18 @@ export const agentEnv = (kitDir: string): Record<string, string> => ({
   GIT_CONFIG_NOSYSTEM: "1",
   GIT_CONFIG_GLOBAL: join(kitDir, "gitconfig"),
   GIT_TERMINAL_PROMPT: "0",
+  WINGMATE_ROLE: role,
 });
 
-const SHELL_SAFE = /^[A-Za-z0-9_./:=,-]+$/;
+const SHELL_SAFE = /^[A-Za-z0-9_./,-]+$/;
 /**
- * POSIX single-quoting. `[`/`]` (as in `claude-fable-5-1[1m]`) must be quoted or zsh globs them; a word starting with `=` (zsh
- * EQUALS expansion: `=cmd` becomes its path) or `~` (tilde expansion) is quoted although its characters are otherwise safe.
+ * POSIX single-quoting of every word outside a charset no shell expands. `[`/`]` (as in `claude-fable-5-1[1m]`) would be globbed by
+ * zsh; a leading `=` (zsh EQUALS: `=cmd` becomes its path) or `~` (tilde) is expanded; and under zsh's MAGIC_EQUAL_SUBST, which
+ * the owner's login shell running the launch line may set, so are `=cmd` and `~` after the `=` of any `anything=value` word and
+ * after each `:` in it (`x==ls` → `x=/bin/ls`). So any word with `:` or `=` is quoted too (C6).
  */
 export const shellQuote = (argv: string[]): string =>
-  argv.map((a) => (SHELL_SAFE.test(a) && !/^[=~]/.test(a) ? a : `'${a.replace(/'/g, `'\\''`)}'`)).join(" ");
+  argv.map((a) => (SHELL_SAFE.test(a) ? a : `'${a.replace(/'/g, `'\\''`)}'`)).join(" ");
 
 /** The one line typed into the login shell Orca spawns: env assignments, then `exec` so the PTY ends with the agent (§4.4). */
 export const launchCommand = (argv: string[], env: Record<string, string>): string =>

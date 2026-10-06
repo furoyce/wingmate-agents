@@ -4,20 +4,28 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  rmSync,
   statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
-import { type IssueDeps, issueCommand } from "../../../src/cli/commands/issue";
+import { type Env, type IssueDeps, issueCommand } from "../../../src/cli/commands/issue";
 import { parseArgv } from "../../../src/cli/index";
 import { loadConfig } from "../../../src/config/load";
 import { installKit, integrityHashes } from "../../../src/kit/install";
 import { listIntents } from "../../../src/kit/intents";
 import { type Launch, type Local, readLocal, writeLocal } from "../../../src/kit/local";
-import { agentEnv, codexArgv, launchCommand } from "../../../src/kit/settings";
-import { OrcaError } from "../../../src/orca/cli";
+import {
+  SPAWN_ROLES,
+  agentEnv,
+  codexArgv,
+  launchCommand,
+  roleSettingsFile,
+  roleSettingsFiles,
+} from "../../../src/kit/settings";
+import { OrcaError, type OrcaOptions } from "../../../src/orca/cli";
 import type { WorkerRow } from "../../../src/ports";
 import { run } from "../../../src/shared/exec";
 import { newRecord } from "../../../src/state/records";
@@ -484,9 +492,14 @@ describe("wingmate issue", () => {
     expect((await runVerb(wt, ["run", "--id", "run_1"])).code).toBe(0);
     const kinds = (await listIntents(wt)).map((i) => i.kind);
     expect(kinds).toEqual(["note", "handoff", "followup", "run"]);
-    const show = JSON.parse((await runVerb(wt, ["show"])).out) as { pendingIntents: { kind: string }[] };
+    const show = JSON.parse((await runVerb(wt, ["show"])).out) as {
+      pendingIntents: { kind: string }[];
+      run: unknown;
+    };
     expect(show.pendingIntents.map((p) => p.kind)).toEqual(kinds);
     expect((await readLocal(wt)).run).toEqual({ childRunId: "run_1" });
+    // C8: PROTOCOL sends a coordinator whose spawn timed out to `show`, so it names the child Run to look in
+    expect(show.run).toEqual({ childRunId: "run_1" });
     expect(refusal(await runVerb(wt, ["note", `key AKIA${"ABCDEFGHIJKLMNOP"}`])).code).toBe(
       "secret_detected",
     );
@@ -636,31 +649,56 @@ describe("wingmate issue", () => {
 });
 
 describe("wingmate issue spawn (§8.1 amended: launch the role agent with the kit, then bind it with worker-start --terminal)", () => {
-  async function spawnWorktree(over: Partial<Launch> = {}) {
-    const wt = await worktree({ git: true });
-    writeFileSync(join(wt, ".wingmate", "spec.md"), "verify the plan");
-    writeLaunch(wt, {
-      tiers: { codex: { model: "gpt-x", effort: "xhigh" }, claude: { model: "c", effort: "max" } },
-      ...over,
-    });
+  /** Writes launch.json and re-seals integrity.json over it, as installKit leaves them. */
+  async function sealLaunch(wt: string, launch: Launch) {
+    writeFileSync(join(wt, ".wingmate", "launch.json"), JSON.stringify(launch));
     const hashes = await integrityHashes(wt, join(wt, ".git"));
     writeFileSync(
       join(wt, ".wingmate", "integrity.json"),
       JSON.stringify({ commonDir: join(wt, ".git"), hashes }),
     );
-    return wt;
+  }
+  /**
+   * An issue worktree and its kit. The kit dir sits where spawn derives it (`<WINGMATE_HOME>/kit/JRF-404`, C1) with one settings
+   * file per role, launch.json names it, and `env` is the coordinator's environment (WINGMATE_ROLE, C2) in a temp home.
+   */
+  async function spawnWorktree(over: Partial<Launch> = {}) {
+    const wt = await worktree({ git: true });
+    const home = mkdtempSync(join(tmpdir(), "wm-home-"));
+    const state = join(home, "state");
+    const kit = join(state, "kit", "JRF-404");
+    mkdirSync(kit, { recursive: true });
+    for (const role of SPAWN_ROLES) writeFileSync(roleSettingsFile(kit, role), "{}\n");
+    writeFileSync(join(wt, ".wingmate", "spec.md"), "verify the plan");
+    const tiers = { codex: { model: "gpt-x", effort: "xhigh" }, claude: { model: "c", effort: "max" } };
+    await sealLaunch(
+      wt,
+      launchFor(wt, { kitDir: kit, roleSettings: roleSettingsFiles(kit), tiers, ...over }),
+    );
+    const env: Env = { HOME: home, WINGMATE_HOME: state, WINGMATE_ROLE: "coordinator" };
+    return { wt, home, kit, env };
   }
   const TRUST = { wait: { satisfied: false, status: "running", blockedReason: "agent-trust-workspace" } };
   const READY = { wait: { satisfied: true, status: "running" } };
   const NOT_READY = { wait: { satisfied: false, status: "running" } };
   function fakeOrca(
-    opts: { claude?: number; codex?: number; receipt?: unknown; waits?: unknown[]; startError?: Error } = {},
+    opts: {
+      claude?: number;
+      codex?: number;
+      receipt?: unknown;
+      /** `terminal wait` results in order; an Error is thrown instead */
+      waits?: unknown[];
+      startError?: Error;
+      /** `orca worktree current`'s result (C1); by default the worktree launch.json names */
+      current?: unknown;
+    } = {},
   ) {
     const calls: string[][] = [];
+    const cwds: (string | undefined)[] = [];
     const waits = [...(opts.waits ?? [])];
     let terminals = 0;
     const window = (used: number) => ({ usedPercent: used, windowMinutes: 10080, resetsAt: null });
-    const exec = async (args: string[]): Promise<unknown> => {
+    const exec = async (args: string[], o: OrcaOptions = {}): Promise<unknown> => {
       calls.push(args);
       const [verb, sub] = args;
       if (verb === "account")
@@ -670,13 +708,21 @@ describe("wingmate issue spawn (§8.1 amended: launch the role agent with the ki
             codex: { status: "ok", weekly: window(opts.codex ?? 10), updatedAt: Date.now() },
           },
         };
+      if (verb === "worktree" && sub === "current") {
+        cwds.push(o.cwd);
+        return opts.current ?? { worktree: { id: WT_ID, repoId: "repo1", path: "/wt/wm-jrf-404" } };
+      }
       if (sub === "run-create") return { run: { id: "run_new" } };
       if (verb === "terminal" && sub === "create") {
         terminals += 1;
         const n = terminals;
         return { terminal: { handle: `term_${n}`, tabId: `tab${n}`, paneKey: `tab${n}:leaf${n}` } };
       }
-      if (verb === "terminal" && sub === "wait") return waits.shift() ?? READY;
+      if (verb === "terminal" && sub === "wait") {
+        const w = waits.shift() ?? READY;
+        if (w instanceof Error) throw w;
+        return w;
+      }
       if (verb === "terminal" && (sub === "send" || sub === "close")) return {};
       if (sub === "worker-start") {
         if (opts.startError) throw opts.startError;
@@ -684,10 +730,11 @@ describe("wingmate issue spawn (§8.1 amended: launch the role agent with the ki
       }
       throw new Error(`unexpected orca ${args.join(" ")}`);
     };
-    return { calls, orca: { workerList: async () => [], exec } };
+    return { calls, cwds, orca: { workerList: async () => [], exec } };
   }
   const creates = (calls: string[][]) => calls.filter((c) => c[0] === "terminal" && c[1] === "create");
   const starts = (calls: string[][]) => calls.filter((c) => c[1] === "worker-start");
+  const closes = (calls: string[][]) => calls.filter((c) => c[0] === "terminal" && c[1] === "close");
   const commandOf = (c: string[] | undefined) => (c ? (c[c.indexOf("--command") + 1] ?? "") : "");
   const sessionOf = (cmd: string) => /--session-id ([0-9a-f-]{36})/.exec(cmd)?.[1] ?? "no-session-id";
   const wait = (ms: number) => [
@@ -714,12 +761,13 @@ describe("wingmate issue spawn (§8.1 amended: launch the role agent with the ki
     "--task-title",
     "JRF-404 plan-verifier",
   ];
+  const SPEC = ["--spec", ".wingmate/spec.md"];
 
-  test("a codex plan-verifier: account, run-create, terminal create with the role argv, tui-idle, worker-start --terminal (exact argv)", async () => {
-    const wt = await spawnWorktree();
+  test("a codex plan-verifier: account, worktree current, run-create, terminal create with the role argv, tui-idle, worker-start --terminal (exact argv)", async () => {
+    const { wt, kit, env } = await spawnWorktree();
     const f = fakeOrca();
-    const spawn = (args: string[]) => runVerb(wt, ["spawn", ...args], { orca: f.orca });
-    const dry = await spawn(["--role", "plan-verifier", "--spec", ".wingmate/spec.md", "--dry-run"]);
+    const spawn = (args: string[]) => runVerb(wt, ["spawn", ...args], { orca: f.orca, env });
+    const dry = await spawn(["--role", "plan-verifier", ...SPEC, "--dry-run"]);
     expect(JSON.parse(dry.out)).toEqual({
       ok: true,
       dryRun: true,
@@ -727,7 +775,7 @@ describe("wingmate issue spawn (§8.1 amended: launch the role agent with the ki
       tier: { model: "gpt-x", effort: "xhigh" },
     });
     expect(f.calls).toEqual([["account", "list"]]);
-    const real = await spawn(["--role", "plan-verifier", "--spec", ".wingmate/spec.md"]);
+    const real = await spawn(["--role", "plan-verifier", ...SPEC]);
     expect(JSON.parse(real.out)).toEqual({
       ok: true,
       provider: "codex",
@@ -738,13 +786,14 @@ describe("wingmate issue spawn (§8.1 amended: launch the role agent with the ki
     });
     const command = launchCommand(
       codexArgv({ model: "gpt-x", effort: "xhigh", worktreePath: wt, role: "plan-verifier" }),
-      agentEnv("/k"),
+      agentEnv(kit, "plan-verifier"),
     );
     expect(command).toStartWith("GH_TOKEN='' GITHUB_TOKEN='' ");
-    expect(command).toContain(" exec codex -C ");
+    expect(command).toContain(" WINGMATE_ROLE=plan-verifier exec codex -C ");
     expect(command).toEndWith(" --sandbox read-only");
     expect(f.calls.slice(1)).toEqual([
       ["account", "list"],
+      ["worktree", "current"],
       ["orchestration", "run-create", "--objective", "JRF-404 workers"],
       [
         "terminal",
@@ -759,23 +808,22 @@ describe("wingmate issue spawn (§8.1 amended: launch the role agent with the ki
       wait(120_000),
       verifierStart(WT_ID),
     ]);
+    expect(f.cwds).toEqual([wt]); // Orca resolves the worktree from the issue worktree itself
     expect((await listIntents(wt)).some((i) => i.kind === "run" && i.payload.runId === "run_new")).toBe(true);
     expect((await readLocal(wt)).run).toEqual({ childRunId: "run_new" });
     // the Run is created once; the next spawn reuses it and gets a terminal of its own
-    expect(
-      JSON.parse((await spawn(["--role", "plan-verifier", "--spec", ".wingmate/spec.md"])).out),
-    ).toMatchObject({
+    expect(JSON.parse((await spawn(["--role", "plan-verifier", ...SPEC])).out)).toMatchObject({
       terminalHandle: "term_2",
     });
     expect(f.calls.filter((c) => c[1] === "run-create")).toHaveLength(1);
   });
 
   test("Claude roles run with their role's kit settings file and agentEnv: tier best for a reviewer, provider default for a worker", async () => {
-    const wt = await spawnWorktree({ provider: "codex", workers: ["cursor", "claude"] });
+    const { wt, kit, env } = await spawnWorktree({ provider: "codex", workers: ["cursor", "claude"] });
     const f = fakeOrca();
-    const spawn = (args: string[]) => runVerb(wt, ["spawn", ...args], { orca: f.orca });
+    const spawn = (args: string[]) => runVerb(wt, ["spawn", ...args], { orca: f.orca, env });
     // coordinator codex → the cross-provider reviewer is Claude, at its tier best
-    const review = await spawn(["--role", "code-reviewer", "--spec", ".wingmate/spec.md"]);
+    const review = await spawn(["--role", "code-reviewer", ...SPEC]);
     expect(JSON.parse(review.out)).toMatchObject({ ok: true, provider: "claude", terminalHandle: "term_1" });
     const rc = commandOf(creates(f.calls)[0]);
     expect(rc).toBe(
@@ -791,14 +839,14 @@ describe("wingmate issue spawn (§8.1 amended: launch the role agent with the ki
           "--permission-mode",
           "bypassPermissions",
           "--settings",
-          "/k/claude-settings.code-reviewer.json",
+          roleSettingsFile(kit, "code-reviewer"),
           "--strict-mcp-config",
         ],
-        agentEnv("/k"),
+        agentEnv(kit, "code-reviewer"),
       ),
     );
     // workers: cursor cannot be launched under the kit, so the next listed provider runs, at tier standard
-    const worker = await spawn(["--role", "worker", "--spec", ".wingmate/spec.md"]);
+    const worker = await spawn(["--role", "worker", ...SPEC]);
     expect(JSON.parse(worker.out)).toMatchObject({ ok: true, provider: "claude", terminalHandle: "term_2" });
     const wc = commandOf(creates(f.calls)[1]);
     expect(wc).toBe(
@@ -810,10 +858,10 @@ describe("wingmate issue spawn (§8.1 amended: launch the role agent with the ki
           "--permission-mode",
           "bypassPermissions",
           "--settings",
-          "/k/claude-settings.worker.json",
+          roleSettingsFile(kit, "worker"),
           "--strict-mcp-config",
         ],
-        agentEnv("/k"),
+        agentEnv(kit, "worker"),
       ),
     );
     expect(sessionOf(wc)).not.toBe(sessionOf(rc));
@@ -832,11 +880,9 @@ describe("wingmate issue spawn (§8.1 amended: launch the role agent with the ki
   });
 
   test("the folder-trust dialog is answered with Down then Enter and waited out again; the spec never goes into the terminal", async () => {
-    const wt = await spawnWorktree();
+    const { wt, env } = await spawnWorktree();
     const f = fakeOrca({ waits: [TRUST, READY] });
-    const r = await runVerb(wt, ["spawn", "--role", "plan-verifier", "--spec", ".wingmate/spec.md"], {
-      orca: f.orca,
-    });
+    const r = await runVerb(wt, ["spawn", "--role", "plan-verifier", ...SPEC], { orca: f.orca, env });
     expect(JSON.parse(r.out)).toMatchObject({ ok: true, dispatchId: "ctx_7", terminalHandle: "term_1" });
     const created = f.calls.findIndex((c) => c[0] === "terminal" && c[1] === "create");
     expect(f.calls.slice(created + 1)).toEqual([
@@ -852,9 +898,9 @@ describe("wingmate issue spawn (§8.1 amended: launch the role agent with the ki
   });
 
   test("a terminal that never gets ready is closed and spawn refuses spawn_not_ready; the trust answer is sent once", async () => {
-    const wt = await spawnWorktree();
+    const { wt, env } = await spawnWorktree();
     const spawn = (orca: ReturnType<typeof fakeOrca>["orca"]) =>
-      runVerb(wt, ["spawn", "--role", "plan-verifier", "--spec", ".wingmate/spec.md"], { orca });
+      runVerb(wt, ["spawn", "--role", "plan-verifier", ...SPEC], { orca, env });
     const slow = fakeOrca({ waits: [NOT_READY, NOT_READY] });
     const r = refusal(await spawn(slow.orca));
     expect(r.code).toBe("spawn_not_ready");
@@ -876,38 +922,78 @@ describe("wingmate issue spawn (§8.1 amended: launch the role agent with the ki
     expect(starts(stuck.calls)).toEqual([]);
   });
 
+  test("C5: a terminal wait that throws still closes the terminal it created; nothing is bound", async () => {
+    const { wt, env } = await spawnWorktree();
+    const spawn = (orca: ReturnType<typeof fakeOrca>["orca"]) =>
+      runVerb(wt, ["spawn", "--role", "plan-verifier", ...SPEC], { orca, env });
+    const timedOut = fakeOrca({ waits: [new OrcaError("orca_timeout", "orca terminal wait timed out")] });
+    const r = refusal(await spawn(timedOut.orca));
+    expect(r.code).toBe("spawn_not_ready");
+    expect(r.message).toContain("term_1");
+    expect(r.message).toContain("orca_timeout");
+    expect(r.message).toContain("closed");
+    expect(timedOut.calls.at(-1)).toEqual(["terminal", "close", "--terminal", "term_1"]);
+    expect(starts(timedOut.calls)).toEqual([]);
+    // an unparseable wait result is an Orca error too; so is a failing trust answer
+    const garbled = fakeOrca({ waits: [{ wait: { status: "running" } }] });
+    expect(refusal(await spawn(garbled.orca)).message).toContain("orca_shape");
+    expect(closes(garbled.calls)).toEqual([["terminal", "close", "--terminal", "term_1"]]);
+    const keys = fakeOrca({ waits: [TRUST, new OrcaError("orca_unreachable", "no envelope")] });
+    expect(refusal(await spawn(keys.orca)).code).toBe("spawn_not_ready");
+    expect(closes(keys.calls)).toHaveLength(1);
+    expect(starts(keys.calls)).toEqual([]);
+  });
+
   test("new-child, --task and a --prefer spawn cannot launch are refused before Orca is touched; --deps travels with --spec", async () => {
-    const wt = await spawnWorktree();
+    const { wt, env } = await spawnWorktree();
     const f = fakeOrca();
-    const spawn = (args: string[]) => runVerb(wt, ["spawn", ...args], { orca: f.orca });
-    const spec = ["--spec", ".wingmate/spec.md"];
-    const child = refusal(await spawn(["--role", "worker", ...spec, "--worktree", "new-child"]));
+    const spawn = (args: string[]) => runVerb(wt, ["spawn", ...args], { orca: f.orca, env });
+    const child = refusal(await spawn(["--role", "worker", ...SPEC, "--worktree", "new-child"]));
     expect(child.code).toBe("new_child_unsupported");
     expect(child.nextStep).toContain("--worktree current");
     const task = refusal(await spawn(["--role", "worker", "--task", "t1"]));
     expect(task.code).toBe("task_unsupported");
     expect(task.nextStep).toContain("--spec <file>");
-    expect(refusal(await spawn(["--role", "worker", ...spec, "--task", "t1"])).code).toBe("task_unsupported");
-    expect(refusal(await spawn(["--role", "worker", ...spec, "--worktree", "elsewhere"])).code).toBe("usage");
-    expect(refusal(await spawn(["--role", "worker", ...spec, "--prefer", "cursor"])).code).toBe("usage");
-    expect(refusal(await spawn(["--role", "code-reviewer", ...spec, "--prefer", "codex"])).code).toBe(
+    expect(refusal(await spawn(["--role", "worker", ...SPEC, "--task", "t1"])).code).toBe("task_unsupported");
+    expect(refusal(await spawn(["--role", "worker", ...SPEC, "--worktree", "elsewhere"])).code).toBe("usage");
+    expect(refusal(await spawn(["--role", "worker", ...SPEC, "--prefer", "cursor"])).code).toBe("usage");
+    expect(refusal(await spawn(["--role", "code-reviewer", ...SPEC, "--prefer", "codex"])).code).toBe(
       "usage",
     );
-    expect(refusal(await spawn(["--role", "worker", ...spec, "--deps", "nope"])).code).toBe("usage");
+    expect(refusal(await spawn(["--role", "worker", ...SPEC, "--deps", "nope"])).code).toBe("usage");
     expect(refusal(await spawn(["--role", "worker"])).code).toBe("usage");
     expect(f.calls).toEqual([]);
-    const ok = await spawn(["--role", "worker", ...spec, "--prefer", "codex", "--deps", '["task_1"]']);
+    const ok = await spawn(["--role", "worker", ...SPEC, "--prefer", "codex", "--deps", '["task_1"]']);
     expect(JSON.parse(ok.out)).toMatchObject({ ok: true, provider: "codex" });
     expect(starts(f.calls)[0]?.slice(-2)).toEqual(["--deps", '["task_1"]']);
     expect(commandOf(creates(f.calls)[0])).toContain("--sandbox workspace-write");
   });
 
-  test("a cross-provider fallback is reported, not silent; with no provider available nothing starts", async () => {
-    const wt = await spawnWorktree();
-    const f = fakeOrca({ codex: 95 });
-    const review = await runVerb(wt, ["spawn", "--role", "code-reviewer", "--spec", ".wingmate/spec.md"], {
-      orca: f.orca,
+  test("C3: --prefer names only a provider of the configured workers list (the pilot keeps Codex to review roles, §13.3 c)", async () => {
+    const { wt, env } = await spawnWorktree({ workers: ["claude"] });
+    const f = fakeOrca();
+    const spawn = (args: string[]) => runVerb(wt, ["spawn", ...args], { orca: f.orca, env });
+    const codex = refusal(await spawn(["--role", "worker", ...SPEC, "--prefer", "codex"]));
+    expect(codex.code).toBe("provider_not_allowed");
+    expect(codex.message).toContain("codex");
+    expect(f.calls).toEqual([]);
+    expect(JSON.parse((await spawn(["--role", "worker", ...SPEC, "--prefer", "claude"])).out)).toMatchObject({
+      ok: true,
+      provider: "claude",
     });
+    expect(JSON.parse((await spawn(["--role", "worker", ...SPEC])).out)).toMatchObject({
+      provider: "claude",
+    });
+    // review roles are not bounded by the workers list: the cross-provider plan verifier is still Codex
+    expect(JSON.parse((await spawn(["--role", "plan-verifier", ...SPEC, "--dry-run"])).out)).toMatchObject({
+      provider: "codex",
+    });
+  });
+
+  test("a cross-provider fallback is reported, not silent; with no provider available nothing starts", async () => {
+    const { wt, env } = await spawnWorktree();
+    const f = fakeOrca({ codex: 95 });
+    const review = await runVerb(wt, ["spawn", "--role", "code-reviewer", ...SPEC], { orca: f.orca, env });
     expect(JSON.parse(review.out)).toMatchObject({ ok: true, provider: "claude" });
     expect((JSON.parse(review.out) as { fallback: string }).fallback).toContain("codex unavailable (quota");
     expect(
@@ -916,19 +1002,15 @@ describe("wingmate issue spawn (§8.1 amended: launch the role agent with the ki
       ),
     ).toBe(true);
     const none = fakeOrca({ codex: 95, claude: 99 });
-    const out = refusal(
-      await runVerb(wt, ["spawn", "--role", "worker", "--spec", ".wingmate/spec.md"], { orca: none.orca }),
-    );
+    const out = refusal(await runVerb(wt, ["spawn", "--role", "worker", ...SPEC], { orca: none.orca, env }));
     expect(out.code).toBe("provider_unavailable");
     expect(none.calls.map((c) => c[0])).toEqual(["account"]);
   });
 
   test("a review provider without tier best is model_unresolved (§9.2): the fallback is reported, never a tierless start", async () => {
-    const wt = await spawnWorktree({ tiers: { claude: { model: "c", effort: "max" } } });
+    const { wt, env } = await spawnWorktree({ tiers: { claude: { model: "c", effort: "max" } } });
     const f = fakeOrca();
-    const review = await runVerb(wt, ["spawn", "--role", "code-reviewer", "--spec", ".wingmate/spec.md"], {
-      orca: f.orca,
-    });
+    const review = await runVerb(wt, ["spawn", "--role", "code-reviewer", ...SPEC], { orca: f.orca, env });
     const o = JSON.parse(review.out) as { ok: boolean; provider: string; fallback: string };
     expect(o).toMatchObject({ ok: true, provider: "claude" });
     expect(o.fallback).toContain("codex unavailable (model_unresolved");
@@ -940,19 +1022,21 @@ describe("wingmate issue spawn (§8.1 amended: launch the role agent with the ki
       ),
     ).toBe(true);
     // no candidate has a tier → refused before anything starts; workers (tier standard) are unaffected
-    const wt2 = await spawnWorktree({ tiers: {} });
+    const second = await spawnWorktree({ tiers: {} });
     const g = fakeOrca();
     const none = refusal(
-      await runVerb(wt2, ["spawn", "--role", "plan-verifier", "--spec", ".wingmate/spec.md"], {
+      await runVerb(second.wt, ["spawn", "--role", "plan-verifier", ...SPEC], {
         orca: g.orca,
+        env: second.env,
       }),
     );
     expect(none.code).toBe("provider_unavailable");
     expect(none.message).toContain("codex model_unresolved");
     expect(none.message).toContain("claude model_unresolved");
     expect(g.calls.map((c) => c[0])).toEqual(["account"]);
-    const worker = await runVerb(wt2, ["spawn", "--role", "worker", "--spec", ".wingmate/spec.md"], {
+    const worker = await runVerb(second.wt, ["spawn", "--role", "worker", ...SPEC], {
       orca: g.orca,
+      env: second.env,
     });
     expect(JSON.parse(worker.out)).toMatchObject({ ok: true, provider: "claude" });
   });
@@ -981,7 +1065,10 @@ describe("wingmate issue spawn (§8.1 amended: launch the role agent with the ki
       gitCommonDir: join(wt, ".git"),
       gitdirName: "wm",
     };
-    const kitDir = mkdtempSync(join(tmpdir(), "wm-kit-"));
+    // the dispatcher installs the kit at `<state>/kit/<identifier>`, where spawn looks for it (C1)
+    const home = mkdtempSync(join(tmpdir(), "wm-home-"));
+    const state = join(home, "state");
+    const kitDir = join(state, "kit", "JRF-404");
     await installKit({
       worktreePath: wt,
       kitDir,
@@ -1003,9 +1090,9 @@ describe("wingmate issue spawn (§8.1 amended: launch the role agent with the ki
       toolchainPaths: [],
     });
     writeFileSync(join(wt, ".wingmate", "spec.md"), "review the diff");
-    const f = fakeOrca();
-    const spawn = (role: string) =>
-      runVerb(wt, ["spawn", "--role", role, "--spec", ".wingmate/spec.md"], { orca: f.orca });
+    const env: Env = { HOME: home, WINGMATE_HOME: state, WINGMATE_ROLE: "coordinator" };
+    const f = fakeOrca({ current: { worktree: { id: `r::${wt}`, path: wt } } });
+    const spawn = (role: string) => runVerb(wt, ["spawn", "--role", role, ...SPEC], { orca: f.orca, env });
     expect(JSON.parse((await spawn("code-reviewer")).out)).toMatchObject({
       ok: true,
       provider: "codex",
@@ -1017,7 +1104,7 @@ describe("wingmate issue spawn (§8.1 amended: launch the role agent with the ki
     expect(commandOf(c)).toBe(
       launchCommand(
         codexArgv({ model: "gpt-x", effort: "xhigh", worktreePath: wt, role: "code-reviewer" }),
-        agentEnv(kitDir),
+        agentEnv(kitDir, "code-reviewer"),
       ),
     );
     expect(starts(f.calls)[0]?.slice(0, 8)).toEqual([
@@ -1033,29 +1120,133 @@ describe("wingmate issue spawn (§8.1 amended: launch the role agent with the ki
     expect(JSON.parse((await spawn("worker")).out)).toMatchObject({ ok: true, provider: "claude" });
     const settings = join(kitDir, "claude-settings.worker.json");
     expect(commandOf(creates(f.calls)[1])).toContain(` --settings ${settings} --strict-mcp-config`);
-    expect(
-      (JSON.parse(readFileSync(settings, "utf8")) as { permissions: { deny: string[] } }).permissions.deny,
-    ).toContain("Bash(orca orchestration worker-start *)");
+    const workerDeny = (JSON.parse(readFileSync(settings, "utf8")) as { permissions: { deny: string[] } })
+      .permissions.deny;
+    expect(workerDeny).toContain("Bash(orca orchestration worker-start *)");
+    expect(workerDeny).toContain("Bash(wingmate issue * spawn*)"); // C2: a worker never spawns
     for (const s of starts(f.calls))
       for (const flag of ["--agent", "--model", "--effort"]) expect(s).not.toContain(flag);
   });
 
+  test("C1: the kit dir is derived from the state root and the identifier; a launch.json naming another kit or a role settings file that resolves elsewhere is refused", async () => {
+    const s = await spawnWorktree();
+    const f = fakeOrca();
+    const spawn = (role = "worker") =>
+      runVerb(s.wt, ["spawn", "--role", role, ...SPEC], { orca: f.orca, env: s.env });
+    // launch.json is agent-writable: pointing it at a kit the agent prepared is refused, never followed
+    const evil = join(s.home, "evil-kit");
+    mkdirSync(evil, { recursive: true });
+    for (const role of SPAWN_ROLES) writeFileSync(roleSettingsFile(evil, role), "{}\n");
+    const good = launchFor(s.wt, {
+      kitDir: s.kit,
+      roleSettings: roleSettingsFiles(s.kit),
+      tiers: { codex: { model: "gpt-x", effort: "xhigh" }, claude: { model: "c", effort: "max" } },
+    });
+    await sealLaunch(s.wt, { ...good, kitDir: evil, roleSettings: roleSettingsFiles(evil) });
+    const other = refusal(await spawn());
+    expect(other.code).toBe("kit_path_invalid");
+    expect(other.message).toContain(s.kit);
+    await sealLaunch(s.wt, {
+      ...good,
+      roleSettings: { ...good.roleSettings, worker: roleSettingsFile(evil, "worker") },
+    });
+    expect(refusal(await spawn()).code).toBe("kit_path_invalid");
+    await sealLaunch(s.wt, good);
+    // a role file that is a symlink — out of the kit, or to another role's file in it — or that is missing is refused
+    const workerFile = roleSettingsFile(s.kit, "worker");
+    rmSync(workerFile);
+    symlinkSync(join(evil, "claude-settings.worker.json"), workerFile);
+    expect(refusal(await spawn()).code).toBe("kit_path_invalid");
+    rmSync(workerFile);
+    symlinkSync(roleSettingsFile(s.kit, "code-reviewer"), workerFile);
+    expect(refusal(await spawn()).code).toBe("kit_path_invalid");
+    rmSync(workerFile);
+    const missing = refusal(await spawn());
+    expect(missing.code).toBe("kit_path_invalid");
+    expect(missing.message).toContain("claude-settings.worker.json");
+    expect(f.calls).toEqual([]);
+    // with the role's own regular file back, the kit spawn derived is the one the agent is launched with
+    writeFileSync(workerFile, "{}\n");
+    expect(JSON.parse((await spawn()).out)).toMatchObject({ ok: true, provider: "claude" });
+    expect(commandOf(creates(f.calls)[0])).toContain(`GIT_CONFIG_GLOBAL=${join(s.kit, "gitconfig")} `);
+    expect(commandOf(creates(f.calls)[0])).toContain(` --settings ${workerFile} `);
+    // a record whose identifier is not an identifier never becomes a path (the id is optional on the command line)
+    const local = await readLocal(s.wt);
+    local.record.identifier = "../evil";
+    await writeLocal(s.wt, local);
+    const g = fakeOrca();
+    const bad = refusal(
+      await capture(() =>
+        issueCommand(parseArgv(["issue", "spawn", "--role", "worker", ...SPEC]), {
+          cwd: s.wt,
+          orca: g.orca,
+          env: s.env,
+        }),
+      ),
+    );
+    expect(bad.code).toBe("kit_path_invalid");
+    expect(g.calls).toEqual([]);
+  });
+
+  test("C1: the worktree a role agent starts in is the one Orca resolves from the issue worktree; a launch.json naming another is refused", async () => {
+    const { wt, env } = await spawnWorktree();
+    const spawn = (orca: ReturnType<typeof fakeOrca>["orca"]) =>
+      runVerb(wt, ["spawn", "--role", "plan-verifier", ...SPEC], { orca, env });
+    const other = fakeOrca({
+      current: { worktree: { id: "repo1::/wt/wm-jrf-999", path: "/wt/wm-jrf-999" } },
+    });
+    const r = refusal(await spawn(other.orca));
+    expect(r.code).toBe("worktree_mismatch");
+    expect(r.message).toContain("repo1::/wt/wm-jrf-999");
+    expect(r.message).toContain(WT_ID);
+    expect(other.calls).toEqual([
+      ["account", "list"],
+      ["worktree", "current"],
+    ]); // no Run, no terminal
+    expect(other.cwds).toEqual([wt]);
+    const garbled = fakeOrca({ current: { id: WT_ID } });
+    expect(refusal(await spawn(garbled.orca)).code).toBe("orca_shape");
+    expect(creates(garbled.calls)).toEqual([]);
+  });
+
+  test("C2: only the coordinator spawns (WINGMATE_ROLE); the role agents it launches carry their own role", async () => {
+    const { wt, kit, env } = await spawnWorktree();
+    const f = fakeOrca();
+    const spawn = (e: Env) => runVerb(wt, ["spawn", "--role", "worker", ...SPEC], { orca: f.orca, env: e });
+    const { WINGMATE_ROLE: _role, ...unset } = env;
+    for (const e of [
+      unset,
+      { ...env, WINGMATE_ROLE: "worker" },
+      { ...env, WINGMATE_ROLE: "plan-verifier" },
+    ]) {
+      const r = refusal(await spawn(e));
+      expect(r.code).toBe("role_not_allowed");
+    }
+    expect(f.calls).toEqual([]);
+    expect(JSON.parse((await spawn(env)).out)).toMatchObject({ ok: true });
+    const cmd = commandOf(creates(f.calls)[0]);
+    expect(cmd).toContain(" WINGMATE_ROLE=worker exec claude ");
+    expect(agentEnv(kit, "worker").WINGMATE_ROLE).toBe("worker");
+  });
+
   test("a tampered kit and a missing runner are refused; a failed or unparsed worker-start leaves the possibly bound terminal alone", async () => {
-    const wt = await spawnWorktree();
+    const { wt, kit, env } = await spawnWorktree();
     const f = fakeOrca();
     writeFileSync(
       join(wt, ".wingmate", "launch.json"),
-      JSON.stringify(launchFor(wt, { verifyCross: false })),
+      JSON.stringify(
+        launchFor(wt, { kitDir: kit, roleSettings: roleSettingsFiles(kit), verifyCross: false }),
+      ),
     );
     const tampered = refusal(
-      await runVerb(wt, ["spawn", "--role", "worker", "--spec", ".wingmate/spec.md"], { orca: f.orca }),
+      await runVerb(wt, ["spawn", "--role", "worker", ...SPEC], { orca: f.orca, env }),
     );
     expect(tampered.code).toBe("kit_tampered");
     expect(tampered.message).toContain(".wingmate/launch.json");
     expect(f.calls).toEqual([]);
-    const wt2 = await spawnWorktree();
+    const second = await spawnWorktree();
     const spawn2 = (orca?: ReturnType<typeof fakeOrca>["orca"]) =>
-      runVerb(wt2, ["spawn", "--role", "worker", "--spec", ".wingmate/spec.md"], orca ? { orca } : {});
+      runVerb(second.wt, ["spawn", "--role", "worker", ...SPEC], orca ? { orca, env: second.env } : {});
     expect(refusal(await spawn2()).code).toBe("orca_unavailable");
     const g = fakeOrca({ receipt: { status: "ready" } });
     const unparsed = refusal(await spawn2(g.orca));
@@ -1068,7 +1259,6 @@ describe("wingmate issue spawn (§8.1 amended: launch the role agent with the ki
     expect(failed.message).toContain("term_1");
     expect(failed.message).toContain("invalid_argument");
     expect(failed.nextStep).toContain("worker-list --run run_new");
-    for (const calls of [g.calls, h.calls])
-      expect(calls.some((c) => c[0] === "terminal" && c[1] === "close")).toBe(false);
+    for (const calls of [g.calls, h.calls]) expect(closes(calls)).toEqual([]);
   });
 });

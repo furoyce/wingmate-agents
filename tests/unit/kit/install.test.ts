@@ -241,11 +241,20 @@ describe("installKit", () => {
     const spawnVerbs = ["worker-start", "run-create", "task-create", "dispatch"].map(
       (v) => `Bash(orca orchestration ${v} *)`,
     );
-    for (const v of spawnVerbs) expect(coordinator.permissions.deny).not.toContain(v);
+    // C4: the coordinator starts workers only through `wingmate issue spawn` (a subprocess), so its own kit settings deny
+    // worker-start and dispatch; run-create and task-create (graph DAGs) stay allowed
+    const [workerStart, runCreate, taskCreate, dispatch] = spawnVerbs;
+    expect(coordinator.permissions.deny).toEqual(expect.arrayContaining([workerStart, dispatch]));
+    expect(coordinator.permissions.deny).not.toContain(runCreate);
+    expect(coordinator.permissions.deny).not.toContain(taskCreate);
+    // C2: only the coordinator spawns
+    expect(coordinator.permissions.deny).not.toContain("Bash(wingmate issue * spawn*)");
     for (const role of SPAWN_ROLES) {
       const s = readSettings(launch.roleSettings[role]);
       expect(s.sandbox).toEqual(coordinator.sandbox); // same filesystem paths, network and sandbox switches
       for (const v of spawnVerbs) expect(s.permissions.deny).toContain(v);
+      expect(s.permissions.deny).toContain("Bash(wingmate issue * spawn*)");
+      expect(s.permissions.deny).toContain("Bash(*/wingmate issue * spawn*)");
       if (role === "ui-reviewer") expect(s.permissions.deny).not.toContain("Bash(orca goto *)");
       else expect(s.permissions.deny).toContain("Bash(orca goto *)");
       expect(s.permissions.deny).toContain("Bash(git push *)");
@@ -305,6 +314,9 @@ describe("installKit", () => {
     expect((await run(["git", "-C", repo, "status", "--porcelain", "--", ".claude"])).stdout).toBe("");
     expect(await verifyIntegrity(repo, join(repo, ".git"), hashes)).toEqual([]);
     expect(existsSync(join(kitDir, "claude-settings.json"))).toBe(true);
+    // C4: the denies the courtesy file used to carry hold anyway — they are in the coordinator's kit settings
+    const deny = readSettings(join(kitDir, "claude-settings.json")).permissions.deny;
+    for (const v of ["worker-start", "dispatch"]) expect(deny).toContain(`Bash(orca orchestration ${v} *)`);
     // untracked (the usual case): still merged
     expect((await install(await gitRepo())).courtesySettings).toBe("written");
   });
@@ -487,6 +499,90 @@ describe("installKit", () => {
     await expect(
       refreshSiblingDenies(join(root, "no-kit"), common, "wm-jrf-404", "furoyce/wm-jrf-404"),
     ).rejects.toThrow(/claude-settings\.json/);
+  });
+
+  test("C9: refreshSiblingDenies skips sibling HEADs that name no valid branch and never denies the own branch, its lock or its directory", async () => {
+    const root = mkdtempSync(join(tmpdir(), "wm-c9-"));
+    const main = join(root, "main");
+    await run(["git", "init", "-q", "-b", "main", main]);
+    await run(["git", "-C", main, ...GIT_ID, "commit", "-q", "--allow-empty", "-m", "init"]);
+    const common = join(main, ".git");
+    for (const n of ["wm-jrf-404", "wm-jrf-405", "wm-jrf-406"])
+      expect(
+        (await run(["git", "-C", main, "worktree", "add", "-q", "-b", `furoyce/${n}`, join(root, n)])).code,
+      ).toBe(0);
+    const kitDir = mkdtempSync(join(tmpdir(), "wm-kit-"));
+    const { cfg, project } = await bouncr();
+    const record = newRecord({
+      identifier: "JRF-404",
+      linearId: "l",
+      project: "bouncr",
+      repo: "api",
+      provider: "claude",
+      autonomy: "ask-first",
+      now: "2026-10-06T10:00:00.000Z",
+    });
+    const wt = join(root, "wm-jrf-404");
+    record.worktree = {
+      id: `r::${wt}`,
+      path: wt,
+      branch: "furoyce/wm-jrf-404",
+      baseSha: "abc",
+      gitCommonDir: common,
+      gitdirName: "wm-jrf-404",
+    };
+    await installKit({
+      worktreePath: wt,
+      kitDir,
+      record,
+      cfg,
+      project,
+      issue: {
+        identifier: "JRF-404",
+        title: "t",
+        description: null,
+        url: "u",
+        comments: [],
+        parent: null,
+        children: [],
+      },
+      nonce: "n",
+      launch: { model: "m", effort: "max" },
+      toolchainPaths: [],
+    });
+    const files = ["claude-settings.json", ...SPAWN_ROLES.map((r) => `claude-settings.${r}.json`)].map((f) =>
+      join(kitDir, f),
+    );
+    const heads = `${common}/refs/heads/`;
+    const head = (n: string, ref: string) =>
+      writeFileSync(join(common, "worktrees", n, "HEAD"), `ref: refs/heads/${ref}\n`);
+    const refresh = () => refreshSiblingDenies(kitDir, common, "wm-jrf-404", "furoyce/wm-jrf-404");
+    const expected = [
+      `${common}/worktrees/wm-jrf-405`,
+      `${common}/worktrees/wm-jrf-406`,
+      `${heads}main`,
+      `${heads}main.lock`,
+    ];
+    // a sibling HEAD naming the own ref's lock (no branch git could create) or the own ref's directory adds no deny: either
+    // would make the own branch's next ref update fail
+    head("wm-jrf-405", "furoyce/wm-jrf-404.lock");
+    head("wm-jrf-406", "furoyce");
+    expect(await refresh()).toEqual(expected);
+    for (const f of files)
+      for (const p of [`${heads}furoyce/wm-jrf-404`, `${heads}furoyce/wm-jrf-404.lock`, `${heads}furoyce`])
+        expect(readSettings(f).sandbox.filesystem.denyWrite).not.toContain(p);
+    // names git rejects anyway (here ones the sandbox would read as patterns) are skipped instead of failing the refresh
+    head("wm-jrf-405", "wip/[1]");
+    head("wm-jrf-406", "a//b");
+    expect(await refresh()).toEqual(expected);
+    // a valid sibling branch is denied again as soon as its HEAD names it
+    head("wm-jrf-406", "furoyce/wm-jrf-406");
+    expect(await refresh()).toEqual([
+      ...expected.slice(0, 2),
+      `${heads}furoyce/wm-jrf-406`,
+      `${heads}furoyce/wm-jrf-406.lock`,
+      ...expected.slice(2),
+    ]);
   });
 
   test("an unreadable courtesy settings file fails the install with context; integrity outside git is unverifiable", async () => {

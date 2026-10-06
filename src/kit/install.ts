@@ -190,12 +190,11 @@ const CourtesyZ = z
   .passthrough();
 
 /**
- * Every Claude session that loads the worktree's settings — the coordinator and any worker or reviewer `worker-start` places in
- * it — is denied the spawn verbs: the coordinator reaches them only through `wingmate issue spawn`, a subprocess the permission
- * layer never sees. `task-create` stays allowed (graph-method DAGs).
+ * §5.4 step 4: the courtesy copy of the coordinator's deny list. Every Claude session started in the worktree loads it on top of its
+ * own `--settings` file — the coordinator, and the verifiers, reviewers and workers `spawn` launches under their per-role kit
+ * settings files (§8.1) — and a deny from either applies. The kit dir's files are authoritative; the coordinator's already deny
+ * worker-start and dispatch (C4), so nothing is lost when a repo tracks this file and it is left alone (F15).
  */
-const COURTESY_DENY = ["Bash(orca orchestration worker-start *)", "Bash(orca orchestration dispatch *)"];
-
 const COURTESY_FILE = ".claude/settings.local.json";
 
 /** Whether git tracks `rel` in the worktree; a failing `git ls-files` is an error, never "untracked". */
@@ -320,8 +319,9 @@ async function readKitSettings(file: string): Promise<{ text: string; s: z.infer
  * Re-lists the other worktrees' gitdirs and checked-out branches (F7, F10) into every settings file of the kit — the coordinator's
  * and each spawned role's — and returns the denied paths. `installKit` lists them at claim; the tick calls this before every
  * (re)launch and after a claim or cleanup in the same repo, with the record's `gitCommonDir`, `gitdirName` and `branch` (the own
- * branch comes from the record: the agent can rewrite its own HEAD). Claude Code pins a `--settings` file's content at launch
- * (2.1.292), so a running session keeps the lists it started with until it is relaunched.
+ * branch comes from the record: the agent can rewrite its own HEAD). A sibling HEAD naming no valid branch adds nothing, and no deny
+ * ever names the own branch, its lock or their directories (C9, `siblingBranchDenyWrite`). Claude Code pins a `--settings` file's
+ * content at launch (2.1.292), so a running session keeps the lists it started with until it is relaunched.
  */
 export async function refreshSiblingDenies(
   kitDir: string,
@@ -494,10 +494,10 @@ export async function installKit(i: InstallInput): Promise<InstallResult> {
   // authoritative settings are the kit dir's
   const tracked = await isTracked(wt, COURTESY_FILE);
   if (!tracked)
-    await writeCourtesySettings(wt, [
-      ...(settings.coordinator as { permissions: { deny: string[] } }).permissions.deny,
-      ...COURTESY_DENY,
-    ]);
+    await writeCourtesySettings(
+      wt,
+      (settings.coordinator as { permissions: { deny: string[] } }).permissions.deny,
+    );
   const created = await writeInstallPolicy(wt, repo.packageRoots);
   // Kit-created `.npmrc` files are excluded (anchored) so a `git add -A` cannot commit them into the path guard.
   await appendExclude(common, [".wingmate/", COURTESY_FILE, ...created.map((f) => `/${f}`)]);

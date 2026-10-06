@@ -19,8 +19,11 @@ import { readAgentContext, uiSmoke } from "./issue/uiSmoke";
 
 /** Signature of `orca()`, the envelope runner behind `spawn` and `ui-smoke`. */
 export type OrcaExec = typeof orca;
+export type Env = Record<string, string | undefined>;
 export interface IssueDeps {
   cwd?: string;
+  /** The process environment (absent → `process.env`): `spawn` reads WINGMATE_ROLE and derives the kit dir from `homeDirs()`. */
+  env?: Env;
   /**
    * Orca access. Absent → the real Orca. Injected (tests) → exactly what is given, never the real binary: `workerList` backs the
    * `workers_live` check of `ask`/`finish`; `exec` runs the Orca verbs of `spawn` (`account list`, `run-create`, `terminal
@@ -35,7 +38,14 @@ export interface IssueDeps {
 }
 export type Refuse = (code: string, message: string, nextStep?: string) => number;
 export type Out = (o: unknown) => void;
-type Ctx = { argv: Argv; cwd: string; local: Local; id: string; orca: NonNullable<IssueDeps["orca"]> };
+type Ctx = {
+  argv: Argv;
+  cwd: string;
+  local: Local;
+  id: string;
+  orca: NonNullable<IssueDeps["orca"]>;
+  env: Env;
+};
 
 const out: Out = (o) => {
   process.stdout.write(`${JSON.stringify(o)}\n`);
@@ -249,6 +259,9 @@ async function showVerb(c: Ctx): Promise<number> {
     record: c.local.record,
     gates: c.local.gates,
     questions: c.local.questions,
+    // the child Run `spawn` or `run` recorded, before the dispatcher mirrors it into `record` (PROTOCOL: a timed-out spawn is
+    // checked here before it is retried)
+    run: c.local.run,
     pendingIntents: (await listIntents(c.cwd)).map((i) => ({ id: i.id, kind: i.kind })),
   });
   return 0;
@@ -276,7 +289,15 @@ const VERBS = new Map<string, (c: Ctx) => Promise<number>>([
     "spawn",
     async (c) => {
       if (!c.orca.exec) return noRunner("spawn");
-      return spawnVerb(c.argv, { cwd: c.cwd, local: c.local, id: c.id, refuse, out, exec: c.orca.exec });
+      return spawnVerb(c.argv, {
+        cwd: c.cwd,
+        local: c.local,
+        id: c.id,
+        refuse,
+        out,
+        exec: c.orca.exec,
+        env: c.env,
+      });
     },
   ],
   ["run", runVerb],
@@ -324,7 +345,7 @@ async function dispatch(argv: Argv, deps: IssueDeps): Promise<number> {
       `--${repeated.join(", --")} may be given only once`,
       `wingmate issue ${id} ${name} …`,
     );
-  return verb({ argv: a, cwd, local, id, orca: deps.orca ?? realOrca() });
+  return verb({ argv: a, cwd, local, id, orca: deps.orca ?? realOrca(), env: deps.env ?? process.env });
 }
 
 export async function issueCommand(argv: Argv, deps: IssueDeps = {}): Promise<number> {

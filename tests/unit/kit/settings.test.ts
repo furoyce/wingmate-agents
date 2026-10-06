@@ -3,14 +3,17 @@ import { existsSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  SPAWN_ROLES,
   agentEnv,
   claudeSettings,
   codexArgv,
   coordinatorArgv,
+  isValidBranchName,
   launchCommand,
   roleArgv,
   roleSettingsFile,
   shellQuote,
+  siblingBranchDenyWrite,
   siblingBranches,
   siblingDenyWrite,
 } from "../../../src/kit/settings";
@@ -298,11 +301,91 @@ describe("settings", () => {
       expect(fs.denyWrite).not.toContain(`/repo/.git/refs/heads/${b}.lock`);
     }
     for (const p of COMMIT_WRITES) expect(coveredBy(fs.denyWrite, `/repo/.git/${p}`, "deny")).toEqual([]);
-    // a name the sandbox would read as a pattern cannot be denied exactly
-    for (const b of ["wip/[1]", "a{b}", "x/*", "a//b", "../x"])
+    // C9: a name git cannot give a branch points at no ref git writes — skipped, never a reason to refuse the whole kit
+    const branchDenies = (b: string) =>
+      (claudeSettings({ ...input, siblingBranches: [b] }) as Settings).sandbox.filesystem.denyWrite.filter(
+        (p) => p.startsWith("/repo/.git/refs/heads/") && !p.includes("*"),
+      );
+    for (const b of ["wip/[1]", "x/*", "a//b", "../x", "x.lock", "a b", "-x", "a@{1}"])
+      expect({ b, denies: branchDenies(b) }).toEqual({ b, denies: [] });
+    // a valid branch name the sandbox would read as a pattern still cannot be denied exactly
+    for (const b of ["a{b}", "a]b"])
       expect(() => claudeSettings({ ...input, siblingBranches: [b] })).toThrow(/cannot be denied exactly/);
     for (const b of ["", "*", "a//b", "../x"])
       expect(() => claudeSettings({ ...input, branch: b })).toThrow(/branch/);
+  });
+  test("C9: isValidBranchName follows `git check-ref-format --branch`", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "wm-ref-")); // outside any repository
+    const corpus = [
+      "main",
+      "furoyce/wm-jrf-404",
+      "a{b}",
+      "a]b",
+      "é/ü",
+      "a./b",
+      "a.lockx",
+      "a.lock.b",
+      "x-",
+      "head",
+      "a/HEAD",
+      "@",
+      "a@b",
+      "refs/heads/x",
+      "a.",
+      ".a",
+      "a/.b",
+      "a..b",
+      "x.lock",
+      "x.lock/y",
+      "furoyce/wm-jrf-404.lock",
+      "-x",
+      "HEAD",
+      "a@{b",
+      "a b",
+      "a~1",
+      "a^",
+      "a:b",
+      "a?b",
+      "a*b",
+      "a[b",
+      "a\\b",
+      "/a",
+      "a/",
+      "a//b",
+      "a\tb",
+      "a\x7fb",
+      "a\x01b",
+      "",
+    ];
+    for (const name of corpus) {
+      const git = await run(["git", "check-ref-format", "--branch", name], { cwd });
+      expect({ name, valid: isValidBranchName(name) }).toEqual({ name, valid: git.code === 0 });
+    }
+  });
+  test("C9: a sibling branch deny never names the own branch, its lock or an ancestor directory of the own ref", () => {
+    const heads = "/repo/.git/refs/heads/";
+    const own = "furoyce/wm-jrf-404";
+    // the own ref's lock as a "branch" (a sibling HEAD can name it), its parent directory, and the own branch itself
+    expect(siblingBranchDenyWrite("/repo/.git", own, [`${own}.lock`, "furoyce", own, `${own}/x`])).toEqual(
+      [],
+    );
+    // whatever the own branch is spelled like, no emitted path touches its ref, its lock or their ancestors
+    expect(siblingBranchDenyWrite("/repo/.git", "x.lock", ["x", "y"])).toEqual([
+      `${heads}y`,
+      `${heads}y.lock`,
+    ]);
+    expect(siblingBranchDenyWrite("/repo/.git", "a.lock/b", ["a", "a.lock"])).toEqual([]);
+    const denied = siblingBranchDenyWrite("/repo/.git", own, ["furoyce/wm-jrf-405", "main", "furoyce-x"]);
+    expect(denied).toEqual([
+      `${heads}furoyce-x`,
+      `${heads}furoyce-x.lock`,
+      `${heads}furoyce/wm-jrf-405`,
+      `${heads}furoyce/wm-jrf-405.lock`,
+      `${heads}main`,
+      `${heads}main.lock`,
+    ]);
+    for (const p of [`${heads}${own}`, `${heads}${own}.lock`])
+      expect(coveredBy(denied, p, "deny")).toEqual([]);
   });
   test("F10: the main checkout's MERGE_HEAD/ORIG_HEAD/FETCH_HEAD, submodule hooks and config, and legacy remotes/branches are denied", () => {
     const fs = (claudeSettings(input) as Settings).sandbox.filesystem;
@@ -385,9 +468,32 @@ describe("settings", () => {
     expect(ui.permissions.deny).toContain("Bash(orca orchestration worker-start *)");
     expect(w.permissions.deny).toContain("Bash(orca orchestration dispatch *)");
     expect(w.permissions.deny).toContain("Bash(orca goto *)");
+    // C4: the coordinator's own kit settings deny starting or dispatching workers directly — `wingmate issue spawn` runs
+    // worker-start as a subprocess the permission layer never sees — while run-create and task-create stay allowed
     const c = claudeSettings(input) as Settings;
-    expect(c.permissions.deny).not.toContain("Bash(orca orchestration worker-start *)");
-    expect(c.permissions.deny).not.toContain("Bash(orca orchestration dispatch *)");
+    expect(c.permissions.deny).toContain("Bash(orca orchestration worker-start *)");
+    expect(c.permissions.deny).toContain("Bash(orca orchestration dispatch *)");
+    expect(c.permissions.deny).not.toContain("Bash(orca orchestration run-create *)");
+    expect(c.permissions.deny).not.toContain("Bash(orca orchestration task-create *)");
+  });
+  test("C2: agentEnv names the role; every role but the coordinator is denied `wingmate issue … spawn`", () => {
+    expect(agentEnv(input.kitDir).WINGMATE_ROLE).toBe("coordinator");
+    expect(agentEnv(input.kitDir, "worker").WINGMATE_ROLE).toBe("worker");
+    expect(launchCommand(["claude"], agentEnv(input.kitDir, "plan-verifier"))).toEndWith(
+      " WINGMATE_ROLE=plan-verifier exec claude",
+    );
+    const spawnDeny = [
+      "Bash(wingmate issue * spawn*)",
+      "Bash(*/wingmate issue * spawn*)",
+      "Bash(wingmate issue spawn*)",
+      "Bash(*/wingmate issue spawn*)",
+    ];
+    for (const role of SPAWN_ROLES) {
+      const deny = (claudeSettings({ ...input, role }) as Settings).permissions.deny;
+      for (const d of spawnDeny) expect({ role, has: deny.includes(d) }).toEqual({ role, has: true });
+    }
+    const coordinator = (claudeSettings(input) as Settings).permissions.deny;
+    for (const d of spawnDeny) expect(coordinator).not.toContain(d);
   });
   test("Orca 1.4.220 verbs that bypass the sandbox through the Orca app are denied for every role", () => {
     for (const role of ["coordinator", "worker", "ui-reviewer", "plan-verifier"] as const) {
@@ -479,6 +585,7 @@ describe("settings", () => {
       GIT_CONFIG_NOSYSTEM: "1",
       GIT_CONFIG_GLOBAL: "/home/.local/share/wingmate/kit/JRF-404/gitconfig",
       GIT_TERMINAL_PROMPT: "0",
+      WINGMATE_ROLE: "coordinator",
     });
     expect(shellQuote(["it's"])).toBe("'it'\\''s'");
     expect(launchCommand(["claude", "--model", "a[1m]"], { GH_TOKEN: "", A: "b c" })).toBe(
@@ -563,8 +670,17 @@ describe("settings", () => {
 });
 
 describe("F13: shell quoting survives the login shell", () => {
-  const shells = ["/bin/zsh", "/bin/bash", "/bin/sh"].filter((s) => existsSync(s));
-  const shellArgv = (sh: string, line: string) => [sh, ...(sh.endsWith("zsh") ? ["-f"] : []), "-c", line];
+  /**
+   * The owner's login shell runs the launch line with their options, so zsh also runs with MAGIC_EQUAL_SUBST (C6): it expands `~` and
+   * `=cmd` after the `=` of any unquoted `anything=value` argument and after each `:` in it (`x==ls` → `x=/bin/ls`).
+   */
+  const shells = ["/bin/zsh", "/bin/zsh+magicequalsubst", "/bin/bash", "/bin/sh"].filter((s) =>
+    existsSync(s.split("+")[0] ?? s),
+  );
+  const shellArgv = (sh: string, line: string) => {
+    const [bin = sh, opt] = sh.split("+");
+    return [bin, ...(bin.endsWith("zsh") ? ["-f"] : []), ...(opt ? ["-o", opt] : []), "-c", line];
+  };
   /** mulberry32: a seeded PRNG, so the fuzz corpus is the same on every run. */
   const prng = (seed: number) => {
     let s = seed;
@@ -594,8 +710,16 @@ describe("F13: shell quoting survives the login shell", () => {
     expect(shellQuote(["=ls", "=", "~", "~/x", "=claude-fable-5-1[1m]"])).toBe(
       "'=ls' '=' '~' '~/x' '=claude-fable-5-1[1m]'",
     );
-    expect(shellQuote(["--model=x", "a=b", "model_reasoning_effort=xhigh", "/k/x.json", "a,b:c"])).toBe(
-      "--model=x a=b model_reasoning_effort=xhigh /k/x.json a,b:c",
+    expect(shellQuote(["/k/x.json", "a,b", "--sandbox", "read-only", "gpt-6.1_x"])).toBe(
+      "/k/x.json a,b --sandbox read-only gpt-6.1_x",
+    );
+  });
+  test("C6: any word containing ':' or '=' is quoted (zsh MAGIC_EQUAL_SUBST expands after both)", () => {
+    expect(shellQuote(["--model=x", "a=b", "model_reasoning_effort=xhigh", "a,b:c", "x==ls", "a:=ls"])).toBe(
+      "'--model=x' 'a=b' 'model_reasoning_effort=xhigh' 'a,b:c' 'x==ls' 'a:=ls'",
+    );
+    expect(launchCommand(["codex", "-c", "approval_policy=never"], { A: "x:y", B: "p=q" })).toBe(
+      "A='x:y' B='p=q' exec codex -c 'approval_policy=never'",
     );
   });
   test("fuzz: = and ~ prefixes, spaces, quotes, globs and [1m] suffixes come back verbatim from zsh, bash and sh", async () => {
@@ -613,6 +737,14 @@ describe("F13: shell quoting survives the login shell", () => {
       "it's",
       "x y",
       "",
+      // C6: assignment-shaped words, which MAGIC_EQUAL_SUBST (zsh) and bash's assignment-word tilde rule expand
+      "a:=ls",
+      "x=~/y",
+      "x==ls",
+      "x=a:=ls",
+      "--prefix==ls",
+      "PATH=/a:~/b",
+      "k=v:=w",
     ];
     const words = [...fixed, ...fuzz(300)];
     for (const sh of shells) {
@@ -623,7 +755,13 @@ describe("F13: shell quoting survives the login shell", () => {
   });
   test("launchCommand: env values with = and ~ prefixes arrive verbatim; the owner's exported tokens arrive blank (F9)", async () => {
     const home = mkdtempSync(join(tmpdir(), "wm-home-"));
-    const cmd = launchCommand(["/usr/bin/env"], { ...agentEnv("/k"), WM_A: "=x ~y", WM_B: "~/z" });
+    const cmd = launchCommand(["/usr/bin/env"], {
+      ...agentEnv("/k"),
+      WM_A: "=x ~y",
+      WM_B: "~/z",
+      WM_C: "x==ls",
+      WM_D: "k=v:=w",
+    });
     for (const sh of shells) {
       const r = await run(shellArgv(sh, cmd), {
         env: { HOME: home, GITHUB_TOKEN: "owner-token", GH_ENTERPRISE_TOKEN: "owner-token" },
@@ -632,7 +770,13 @@ describe("F13: shell quoting survives the login shell", () => {
       const env = new Map(
         r.stdout.split("\n").map((l) => [l.slice(0, l.indexOf("=")), l.slice(l.indexOf("=") + 1)]),
       );
-      expect([env.get("WM_A"), env.get("WM_B")]).toEqual(["=x ~y", "~/z"]);
+      expect([env.get("WM_A"), env.get("WM_B"), env.get("WM_C"), env.get("WM_D")]).toEqual([
+        "=x ~y",
+        "~/z",
+        "x==ls",
+        "k=v:=w",
+      ]);
+      expect(env.get("WINGMATE_ROLE")).toBe("coordinator");
       for (const k of ["GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"])
         expect(env.get(k)).toBe("");
     }

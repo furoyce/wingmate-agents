@@ -12,8 +12,9 @@ labels:
 defaults:
   timezone: America/New_York
   # D14 extension (spike 2026-10-06 §3.5): Codex sandboxes do not block reads outside the worktree, so Codex runs only as a
-  # read-only verifier/reviewer in the pilot; set coordinatorCascade: [claude, codex] only after the owner accepts the extension.
-  providers: { default: claude, coordinatorCascade: [claude], workers: [claude, codex, cursor, antigravity], verifyCross: true }
+  # read-only verifier/reviewer in the pilot (§13.3 c): coordinatorCascade and workers stay [claude]; add codex to either list
+  # (e.g. coordinatorCascade: [claude, codex]) only after the owner accepts the extension.
+  providers: { default: claude, coordinatorCascade: [claude], workers: [claude], verifyCross: true }
   autonomy: ask-first
   done: review
 projects:

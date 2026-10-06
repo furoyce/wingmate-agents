@@ -1,28 +1,39 @@
 // src/cli/commands/issue/spawn.ts — `wingmate issue <id> spawn` (§8.1 amended 2026-10-06, §9.1–9.3): the verb that drives Orca
-// orchestration. It re-checks the kit, resolves provider and tier, creates the child Run on first use, then launches the role agent
-// itself — a terminal in the issue worktree running the role argv with the kit's per-role settings and agentEnv (§13.3 b/c) — waits
-// it out (answering the folder-trust dialog, §4.4) and binds that terminal to the Run with `worker-start --terminal`.
+// orchestration. Only the coordinator runs it (WINGMATE_ROLE, §13.3 b). It re-checks the kit, resolves provider and tier, creates
+// the child Run on first use, then launches the role agent itself — a terminal in the issue worktree running the role argv with the
+// kit's per-role settings and agentEnv (§13.3 b/c) — waits it out (answering the folder-trust dialog, §4.4) and binds that terminal
+// to the Run with `worker-start --terminal`. What it hands the role agent never comes from the agent-writable `launch.json` alone
+// (C1): the kit dir is derived from the state root and the identifier, the worktree id is the one `orca worktree current` reports.
 //
 // Orca 1.4.220 (`orca agent-context --json`): worker-start takes `(--task | --spec)` and `(--agent | --terminal)`; `--model/--effort`
 // cannot be combined with `--terminal` (they travel in the role argv instead); "when reusing --terminal, pass --worktree for that
 // terminal" — the same `id:<worktreeId>` selector the terminal was created with.
-import { join } from "node:path";
+import { realpath, stat } from "node:fs/promises";
+import { basename, join, resolve } from "node:path";
 import { z } from "zod";
 import { IntegrityFileSchema, verifyIntegrity } from "../../../kit/install";
 import { writeIntent } from "../../../kit/intents";
 import { type Launch, type Local, readLaunch, worktreeFile, writeLocal } from "../../../kit/local";
-import { SPAWN_ROLES, type SpawnRole, agentEnv, launchCommand, roleArgv } from "../../../kit/settings";
+import {
+  SPAWN_ROLES,
+  type SpawnRole,
+  agentEnv,
+  launchCommand,
+  roleArgv,
+  roleSettingsFile,
+} from "../../../kit/settings";
 import { OrcaError } from "../../../orca/cli";
 import { OrcaClient } from "../../../orca/client";
 import { parseRateLimits } from "../../../orca/fleet";
 import { type Availability, availability } from "../../../policy/quota";
 import { WingmateError } from "../../../shared/errors";
-import { newUuid } from "../../../shared/ids";
+import { IDENTIFIER_RE, newUuid } from "../../../shared/ids";
+import { homeDirs } from "../../../shared/paths";
 import { readText } from "../../../state/fs";
 import type { Argv } from "../../index";
-import type { OrcaExec, Out, Refuse } from "../issue";
+import type { Env, OrcaExec, Out, Refuse } from "../issue";
 
-type Deps = { cwd: string; local: Local; id: string; refuse: Refuse; out: Out; exec: OrcaExec };
+type Deps = { cwd: string; local: Local; id: string; refuse: Refuse; out: Out; exec: OrcaExec; env: Env };
 const PROMPT_FILE: Record<SpawnRole, string> = {
   "plan-verifier": "planVerifier",
   "code-reviewer": "codeReviewer",
@@ -40,6 +51,8 @@ const DepsList = z.array(z.string().min(1));
 const NestedRun = z.object({ run: z.object({ id: z.string().min(1) }) });
 const FlatRun = z.object({ id: z.string().min(1) });
 const WorkerReceipt = z.object({ dispatchId: z.string().min(1), taskId: z.string().min(1).optional() });
+/** `orca worktree current` (spike §4: `result.worktree.{id, repoId, branch, path, …}`). */
+const CurrentWorktree = z.object({ worktree: z.object({ id: z.string().min(1) }) });
 type Check =
   | Availability
   | { available: false; reason: "model_unresolved" | "launch_unsupported"; detail: string };
@@ -187,6 +200,64 @@ async function pickProvider(d: Deps, plan: Plan, launch: Launch): Promise<Pick> 
   return { provider, tier: isReview ? (launch.tiers[provider] ?? null) : null, fallback };
 }
 
+type Kit = { kitDir: string; settingsFile: string };
+
+/**
+ * C1: the kit paths a role agent is launched with. The kit dir is `<state>/kit/<identifier>` (§13.3 a), never `launch.json`'s word
+ * for it, and the role's settings file must resolve to that dir's own `claude-settings.<role>.json`: a symlink out of the kit — or
+ * to another role's file — would launch the role under denies the dispatcher never wrote. A `launch.json` naming other paths is
+ * refused as tampering rather than ignored.
+ */
+async function kitPaths(d: Deps, launch: Launch, role: SpawnRole): Promise<Kit | { refused: number }> {
+  const bad = (message: string) => ({
+    refused: d.refuse(
+      "kit_path_invalid",
+      message,
+      "do not modify the kit; ask the owner to re-queue the issue",
+    ),
+  });
+  if (!IDENTIFIER_RE.test(d.id))
+    return bad(`${JSON.stringify(d.id.slice(0, 40))} is not an issue identifier`);
+  const kitDir = resolve(homeDirs(d.env).kit, d.id);
+  const settingsFile = roleSettingsFile(kitDir, role);
+  if (resolve(launch.kitDir) !== kitDir)
+    return bad(`.wingmate/launch.json names the kit ${launch.kitDir}, not this issue's ${kitDir}`);
+  if (resolve(launch.roleSettings[role]) !== settingsFile)
+    return bad(`.wingmate/launch.json names ${launch.roleSettings[role]} for ${role}, not ${settingsFile}`);
+  const real = await Promise.all([realpath(kitDir), realpath(settingsFile)]).catch(
+    (e: unknown) => (e as NodeJS.ErrnoException).code ?? String(e),
+  );
+  if (typeof real === "string") return bad(`${settingsFile} does not resolve (${real})`);
+  const [realKit, realFile] = real;
+  if (realFile !== join(realKit, basename(settingsFile)) || !(await stat(realFile)).isFile())
+    return bad(`${settingsFile} resolves to ${realFile}, not to its own regular file in ${kitDir}`);
+  return { kitDir, settingsFile };
+}
+
+/** C1: the worktree id Orca resolves from the issue worktree itself; `launch.json` naming another is refused. */
+async function currentWorktree(d: Deps, launch: Launch): Promise<{ id: string } | { refused: number }> {
+  const raw = await d.exec(["worktree", "current"], { cwd: d.cwd, timeoutMs: 15_000 });
+  const cur = CurrentWorktree.safeParse(raw);
+  if (!cur.success)
+    throw new OrcaError("orca_shape", "worktree current: missing or invalid worktree.id", raw);
+  const id = cur.data.worktree.id;
+  if (id !== launch.worktreeId)
+    return {
+      refused: d.refuse(
+        "worktree_mismatch",
+        `Orca resolves this worktree to ${id}, but .wingmate/launch.json names ${launch.worktreeId}`,
+        "run spawn from the issue worktree and do not modify the kit; if it persists, ask the owner",
+      ),
+    };
+  return { id };
+}
+
+/** Closes a terminal spawn created and reports the outcome (never throws: the caller is already failing). */
+const closeTerminal = (exec: OrcaExec, handle: string): Promise<string> =>
+  exec(["terminal", "close", "--terminal", handle], { timeoutMs: 60_000 })
+    .then(() => "closed")
+    .catch((e: unknown) => `close failed: ${e instanceof Error ? e.message : String(e)}`);
+
 /**
  * §4.4's wait, as the dispatcher's own launch does it: tui-idle; on the folder-trust dialog (default option "No, exit") answer Down
  * then Enter once — never the spec — and wait again; still not ready → once more with the longer timeout.
@@ -209,44 +280,61 @@ async function waitReady(
   return { ready: w.satisfied, blockedReason: w.blockedReason ?? null };
 }
 
-/** Starts the role agent in its own terminal of the issue worktree; a terminal that never gets ready is closed again. */
+/**
+ * Starts the role agent in its own terminal of the issue worktree, under its role (agentEnv, C2). A terminal that never gets ready
+ * is closed again — and so is one whose wait fails in any way (C5): its agent never got a task, and the coordinator cannot close
+ * terminals.
+ */
 async function launchRole(
   d: Deps,
   plan: Plan,
-  launch: Launch,
   pick: { provider: Launchable; tier: Tier | null },
+  kit: Kit,
+  worktreeId: string,
 ): Promise<{ handle: string } | { refused: number }> {
   const argv = roleArgv({
     provider: pick.provider,
     role: plan.role,
     tier: pick.tier,
     sessionId: newUuid(),
-    settingsFile: launch.roleSettings[plan.role],
+    settingsFile: kit.settingsFile,
     worktreePath: d.cwd,
   });
   const create = ARGV.terminalCreate(
-    launch.worktreeId,
+    worktreeId,
     `wingmate ${d.id} ${plan.role}`,
-    launchCommand(argv, agentEnv(launch.kitDir)),
+    launchCommand(argv, agentEnv(kit.kitDir, plan.role)),
   );
   const { handle } = OrcaClient.mapTerminalCreate(rec(await d.exec(create, { timeoutMs: 60_000 })));
-  const w = await waitReady(d.exec, handle);
-  if (w.ready) return { handle };
-  // it never got its task, and the coordinator cannot close terminals: do not leave an idle agent behind
-  const closed = await d
-    .exec(["terminal", "close", "--terminal", handle], { timeoutMs: 60_000 })
-    .then(() => "closed")
-    .catch((e: unknown) => `close failed: ${e instanceof Error ? e.message : String(e)}`);
-  return {
+  const notReady = (why: string, closed: string) => ({
     refused: d.refuse(
       "spawn_not_ready",
-      `the ${pick.provider} ${plan.role} terminal ${handle} never reached tui-idle${w.blockedReason ? ` (${w.blockedReason})` : ""}; ${closed}`,
+      `the ${pick.provider} ${plan.role} terminal ${handle} ${why}; ${closed}`,
       "spawn again once; if it stays unready, ask the owner",
     ),
-  };
+  });
+  let w: { ready: boolean; blockedReason: string | null };
+  try {
+    w = await waitReady(d.exec, handle);
+  } catch (e) {
+    const closed = await closeTerminal(d.exec, handle);
+    if (!(e instanceof OrcaError)) throw e;
+    return notReady(`could not be waited for (${e.code}: ${e.message.slice(0, 200)})`, closed);
+  }
+  if (w.ready) return { handle };
+  const why = `never reached tui-idle${w.blockedReason ? ` (${w.blockedReason})` : ""}`;
+  return notReady(why, await closeTerminal(d.exec, handle));
 }
 
 export async function spawnVerb(argv: Argv, d: Deps): Promise<number> {
+  // §13.3(b): only the coordinator spawns; role agents run with their own WINGMATE_ROLE (agentEnv) and deny-list the verb too
+  const role = d.env.WINGMATE_ROLE;
+  if (role !== "coordinator")
+    return d.refuse(
+      "role_not_allowed",
+      `only the coordinator spawns; this session's WINGMATE_ROLE is ${role === undefined ? "unset" : JSON.stringify(role.slice(0, 40))}`,
+      "report to the coordinator instead; verifiers, reviewers and workers never spawn",
+    );
   const plan = await readPlan(argv, d);
   if ("refused" in plan) return plan.refused;
   const launch = await readLaunch(d.cwd);
@@ -257,6 +345,15 @@ export async function spawnVerb(argv: Argv, d: Deps): Promise<number> {
       changed.slice(0, 10).join(","),
       "do not modify the kit; the dispatcher will block the issue",
     );
+  // §13.3(c), D14: --prefer stays inside the configured workers list (the pilot's is [claude]: Codex only verifies and reviews)
+  if (plan.prefer !== null && !launch.workers.includes(plan.prefer))
+    return d.refuse(
+      "provider_not_allowed",
+      `${plan.prefer} is not in this project's workers list (${launch.workers.join(",") || "empty"})`,
+      `wingmate issue ${d.id} spawn --role worker --spec <file> (without --prefer)`,
+    );
+  const kit = await kitPaths(d, launch, plan.role);
+  if ("refused" in kit) return kit.refused;
   const pick = await pickProvider(d, plan, launch);
   if ("refused" in pick) return pick.refused;
   const { provider, tier, fallback } = pick;
@@ -264,13 +361,15 @@ export async function spawnVerb(argv: Argv, d: Deps): Promise<number> {
     d.out({ ok: true, dryRun: true, provider, tier, ...(fallback ? { fallback } : {}) });
     return 0;
   }
+  const wt = await currentWorktree(d, launch);
+  if ("refused" in wt) return wt.refused;
   const runId = await ensureRun(d);
-  const term = await launchRole(d, plan, launch, pick);
+  const term = await launchRole(d, plan, pick, kit, wt.id);
   if ("refused" in term) return term.refused;
   const unconfirmed = `orca orchestration worker-list --run ${runId} --json (check before spawning again)`;
   const header = `Role: ${plan.role} for ${d.id}. Read .wingmate/prompts/${PROMPT_FILE[plan.role]}.md first.\n\n`;
   const args = [
-    ...["orchestration", "worker-start", "--run", runId, "--worktree", `id:${launch.worktreeId}`],
+    ...["orchestration", "worker-start", "--run", runId, "--worktree", `id:${wt.id}`],
     ...["--terminal", term.handle, "--spec", header + plan.spec, "--task-title", `${d.id} ${plan.role}`],
     ...(plan.deps !== null ? ["--deps", plan.deps] : []),
   ];
