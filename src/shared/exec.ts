@@ -15,6 +15,7 @@ export async function run(argv: string[], opts: RunOptions = {}): Promise<RunRes
     env: { ...process.env, ...(opts.env ?? {}) },
     stdout: "pipe",
     stderr: "pipe",
+    detached: true,
   };
   if (opts.cwd !== undefined) spawnOpts.cwd = opts.cwd;
   if (opts.stdin !== undefined) spawnOpts.stdin = new TextEncoder().encode(opts.stdin);
@@ -23,14 +24,39 @@ export async function run(argv: string[], opts: RunOptions = {}): Promise<RunRes
   const timer = opts.timeoutMs
     ? setTimeout(() => {
         timedOut = true;
-        proc.kill("SIGKILL");
+        try {
+          process.kill(-proc.pid, "SIGKILL");
+        } catch {
+          proc.kill("SIGKILL");
+        }
       }, opts.timeoutMs)
     : null;
-  const [stdout, stderr] = await Promise.all([
-    new Response(proc.stdout as unknown as ReadableStream<Uint8Array>).text(),
-    new Response(proc.stderr as unknown as ReadableStream<Uint8Array>).text(),
-  ]);
-  const code = await proc.exited;
-  if (timer) clearTimeout(timer);
-  return { code: timedOut ? 124 : code, stdout, stderr, timedOut };
+  try {
+    const drainPromise = Promise.all([
+      new Response(proc.stdout as unknown as ReadableStream<Uint8Array>).text(),
+      new Response(proc.stderr as unknown as ReadableStream<Uint8Array>).text(),
+    ]);
+    const graceTimer = timedOut
+      ? new Promise<[string, string]>((resolve) => {
+          const grace = setTimeout(() => {
+            resolve(["", ""]);
+          }, 2000);
+          drainPromise.then(
+            (result) => {
+              clearTimeout(grace);
+              resolve(result);
+            },
+            () => {
+              clearTimeout(grace);
+              resolve(["", ""]);
+            },
+          );
+        })
+      : drainPromise;
+    const [stdout, stderr] = await graceTimer;
+    const code = await proc.exited;
+    return { code: timedOut ? 124 : code, stdout, stderr, timedOut };
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }

@@ -3,18 +3,39 @@ import { join } from "node:path";
 import pino from "pino";
 import { homeDirs } from "./paths";
 let cached: pino.Logger | null = null;
-export function logger(): pino.Logger {
-  if (cached) return cached;
+export function logger(logDir?: string): pino.Logger {
+  if (cached && logDir === undefined) return cached;
   const dirs = homeDirs();
-  mkdirSync(dirs.logs, { recursive: true });
-  const dest = pino.destination({ dest: join(dirs.logs, "wingmate.log"), sync: false, mkdir: true });
-  cached = pino(
+  const resolvedLogDir = logDir ?? dirs.logs;
+  mkdirSync(resolvedLogDir, { recursive: true });
+  const dest = pino.destination({ dest: join(resolvedLogDir, "wingmate.log"), sync: false, mkdir: true });
+  const log = pino(
     {
       level: process.env.WINGMATE_LOG_LEVEL ?? "info",
       base: { pid: process.pid },
-      redact: { paths: ["*.token", "*.secret", "*.clientSecret", "*.accessToken"], censor: "[redacted]" },
+      redact: {
+        paths: [
+          "token",
+          "accessToken",
+          "clientSecret",
+          "password",
+          "authorization",
+          "*.token",
+          "*.accessToken",
+          "*.clientSecret",
+          "*.password",
+          "*.authorization",
+          "*.*.token",
+          "*.*.accessToken",
+          "*.*.clientSecret",
+          "*.*.password",
+          "*.*.authorization",
+        ],
+        censor: "[redacted]",
+      },
     },
     dest,
   );
-  return cached;
+  if (logDir === undefined) cached = log;
+  return log;
 }
