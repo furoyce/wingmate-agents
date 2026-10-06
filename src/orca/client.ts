@@ -1,7 +1,8 @@
+import { z } from "zod";
 // src/orca/client.ts — OrcaPort over the `orca` CLI. argv builders live in `argvFor` and result mappers are static so
 // tests cover both without spawning Orca. Result shapes follow spike results §4 (nested result.worktree/terminal/wait/send.prompt).
 import type { FleetSnapshot, OrcaPort, RateLimits, SendReceipt, TerminalRow, WorkerRow } from "../ports";
-import { type OrcaOptions, orca } from "./cli";
+import { OrcaError, type OrcaOptions, orca } from "./cli";
 import { parseFleet, parseRateLimits, parseTerminals } from "./fleet";
 
 type R = Record<string, unknown>;
@@ -9,6 +10,14 @@ const rec = (v: unknown): R | undefined =>
   v && typeof v === "object" && !Array.isArray(v) ? (v as R) : undefined;
 const str = (v: unknown): string => (v == null ? "" : String(v));
 const shortBranch = (b: unknown) => str(b).replace(/^refs\/heads\//, "");
+/** Validate the identity fields of an `ok:true` result: an unexpected shape is an error with context, never a silent default. */
+function shape<T>(verb: string, schema: z.ZodType<T>, value: unknown): T {
+  const parsed = schema.safeParse(value);
+  if (parsed.success) return parsed.data;
+  const fields = parsed.error.issues.map((i) => i.path.join(".") || "(root)").join(", ");
+  throw new OrcaError("orca_shape", `${verb}: missing or invalid ${fields}`, value);
+}
+const PANE_KEY = /^[^:]+:[^:]+$/;
 
 export class OrcaClient implements OrcaPort {
   constructor(private opts: OrcaOptions = {}) {}
@@ -69,14 +78,17 @@ export class OrcaClient implements OrcaPort {
       String(waitSubmit),
       ...(retry ? ["--retry-request", retry] : []),
     ],
-    terminalKeys: (h: string, k: { text?: string; enter?: boolean }) => [
-      "terminal",
-      "send",
-      "--terminal",
-      h,
-      ...(k.text !== undefined ? ["--text", k.text] : []),
-      ...(k.enter ? ["--enter"] : []),
-    ],
+    terminalKeys: (h: string, k: { text?: string; enter?: boolean }) => {
+      if (k.text === undefined && !k.enter) throw new Error("terminalKeys needs text and/or enter");
+      return [
+        "terminal",
+        "send",
+        "--terminal",
+        h,
+        ...(k.text !== undefined ? ["--text", k.text] : []),
+        ...(k.enter ? ["--enter"] : []),
+      ];
+    },
     orchestrationSend: (to: string, subject: string, body: string) => {
       if (!to.startsWith("run:"))
         throw new Error(`orchestrationSend only targets run:<id> mailboxes, got ${to}`);
@@ -86,30 +98,60 @@ export class OrcaClient implements OrcaPort {
 
   // --- result mappers (spike results §4) ---
   static mapTerminalCreate(r: R): { handle: string; tabId: string; leafId: string } {
-    const t = rec(r.terminal) ?? r;
-    const pane = str(t.paneKey).split(":");
-    return { handle: str(t.handle), tabId: str(t.tabId ?? pane[0]), leafId: str(t.leafId ?? pane[1]) };
+    const t = shape(
+      "terminal create",
+      z.object({
+        handle: z.string().min(1),
+        tabId: z.string().min(1).optional(),
+        leafId: z.string().min(1).optional(),
+        paneKey: z.string().regex(PANE_KEY).optional(),
+      }),
+      rec(r.terminal) ?? r,
+    );
+    const pane = t.paneKey?.split(":") ?? [];
+    const tabId = t.tabId ?? pane[0];
+    const leafId = t.leafId ?? pane[1];
+    if (!tabId || !leafId)
+      throw new OrcaError("orca_shape", "terminal create: missing paneKey or tabId/leafId", r);
+    return { handle: t.handle, tabId, leafId };
+  }
+  static mapWorktreeCreate(r: R): { id: string; path: string } {
+    const w = shape(
+      "worktree create",
+      z.object({ id: z.string().min(1), path: z.string().min(1) }),
+      rec(r.worktree) ?? r,
+    );
+    return { id: w.id, path: w.path };
   }
   static mapWait(r: R): { satisfied: boolean; blockedReason?: string } {
-    const w = rec(r.wait) ?? r;
+    const w = shape(
+      "terminal wait",
+      z.object({ satisfied: z.boolean(), blockedReason: z.string().nullish() }),
+      rec(r.wait) ?? r,
+    );
     return {
-      satisfied: w.satisfied === true,
+      satisfied: w.satisfied,
       ...(typeof w.blockedReason === "string" ? { blockedReason: w.blockedReason } : {}),
     };
   }
   static mapSend(r: R): SendReceipt {
-    const pr = rec(rec(r.send)?.prompt) ?? r;
-    const stages = Array.isArray(pr.stages)
-      ? pr.stages.filter((s): s is string => typeof s === "string")
-      : [];
+    const pr = shape(
+      "terminal send",
+      z.object({ stages: z.array(z.string()), requestId: z.string().nullish() }),
+      rec(rec(r.send)?.prompt) ?? r,
+    );
     return {
-      stage: stages.includes("turn_started") ? "turn_started" : "input_accepted",
-      requestId: typeof pr.requestId === "string" ? pr.requestId : null,
+      stage: pr.stages.includes("turn_started") ? "turn_started" : "input_accepted",
+      requestId: pr.requestId ?? null,
     };
   }
   static mapWorktreeShow(id: string, r: R): { id: string; path: string; branch: string; head: string } {
-    const w = rec(r.worktree) ?? r;
-    return { id, path: str(w.path), branch: shortBranch(w.branch), head: str(w.head) };
+    const w = shape(
+      "worktree show",
+      z.object({ path: z.string().min(1) }).passthrough(),
+      rec(r.worktree) ?? r,
+    );
+    return { id, path: w.path, branch: shortBranch(w.branch), head: str(w.head) };
   }
   static mapPreview(r: R): string {
     const t = rec(r.terminal) ?? r;
@@ -151,9 +193,7 @@ export class OrcaClient implements OrcaPort {
   async worktreeCreate(
     a: Parameters<OrcaClient["argvFor"]["worktreeCreate"]>[0],
   ): Promise<{ id: string; path: string }> {
-    const r = await this.call(this.argvFor.worktreeCreate(a), 120_000);
-    const w = rec(r.worktree) ?? r;
-    return { id: str(w.id), path: str(w.path) };
+    return OrcaClient.mapWorktreeCreate(await this.call(this.argvFor.worktreeCreate(a), 120_000));
   }
   async worktreeShow(id: string): Promise<{ id: string; path: string; branch: string; head: string }> {
     return OrcaClient.mapWorktreeShow(id, await this.call(["worktree", "show", "--worktree", `id:${id}`]));

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { OrcaError } from "../../../src/orca/cli";
 import { OrcaClient } from "../../../src/orca/client";
 
 const client = () => new OrcaClient({ bin: "/bin/true" });
@@ -168,5 +169,71 @@ describe("OrcaClient result mapping (spike results §4 shapes)", () => {
         workers: [{ dispatchId: "ctx_2", taskId: "t", projection: { liveness: { verdict: "bogus" } } }],
       })[0]?.verdict,
     ).toBeNull();
+  });
+});
+
+describe("OrcaClient result mappers reject unexpected shapes (orca_shape, never a silent default)", () => {
+  const shapeError = (fn: () => unknown, verb: string) => {
+    try {
+      fn();
+    } catch (e) {
+      expect(e).toBeInstanceOf(OrcaError);
+      expect((e as OrcaError).code).toBe("orca_shape");
+      expect((e as OrcaError).message).toContain(verb);
+      return;
+    }
+    throw new Error(`expected orca_shape for ${verb}`);
+  };
+  test("terminal create without a handle or without pane identity", () => {
+    shapeError(
+      () => OrcaClient.mapTerminalCreate({ terminal: { tabId: "tab", paneKey: "tab:leaf" } }),
+      "terminal create",
+    );
+    shapeError(() => OrcaClient.mapTerminalCreate({ terminal: { handle: "term_1" } }), "terminal create");
+    shapeError(
+      () => OrcaClient.mapTerminalCreate({ terminal: { handle: "term_1", paneKey: "no-colon" } }),
+      "terminal create",
+    );
+  });
+  test("worktree create without id or path; worktree show without path", () => {
+    shapeError(() => OrcaClient.mapWorktreeCreate({ worktree: { path: "/p" } }), "worktree create");
+    shapeError(
+      () => OrcaClient.mapWorktreeCreate({ worktree: { id: "r::/p", path: "" } }),
+      "worktree create",
+    );
+    shapeError(
+      () => OrcaClient.mapWorktreeShow("wt", { worktree: { branch: "refs/heads/x" } }),
+      "worktree show",
+    );
+  });
+  test("terminal wait without a boolean satisfied; terminal send without stages", () => {
+    shapeError(
+      () => OrcaClient.mapWait({ wait: { blockedReason: "agent-trust-workspace" } }),
+      "terminal wait",
+    );
+    shapeError(() => OrcaClient.mapWait({ wait: { satisfied: "yes" } }), "terminal wait");
+    shapeError(() => OrcaClient.mapSend({ send: { prompt: { requestId: "req_1" } } }), "terminal send");
+  });
+  test("valid shapes still map: worktree create, empty stages, null requestId", () => {
+    expect(OrcaClient.mapWorktreeCreate({ worktree: { id: "r::/p", path: "/p" } })).toEqual({
+      id: "r::/p",
+      path: "/p",
+    });
+    expect(OrcaClient.mapSend({ send: { prompt: { stages: [], requestId: null } } })).toEqual({
+      stage: "input_accepted",
+      requestId: null,
+    });
+    expect(OrcaClient.mapTerminalCreate({ terminal: { handle: "term_2", tabId: "t", leafId: "l" } })).toEqual(
+      {
+        handle: "term_2",
+        tabId: "t",
+        leafId: "l",
+      },
+    );
+  });
+  test("terminalKeys with neither text nor enter throws instead of sending a bare command", () => {
+    expect(() => new OrcaClient({ bin: "/bin/true" }).argvFor.terminalKeys("term_1", {})).toThrow(
+      /text|enter/,
+    );
   });
 });
