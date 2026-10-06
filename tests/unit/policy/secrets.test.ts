@@ -46,6 +46,13 @@ describe("secrets", () => {
       "long hex hash without key context",
       "etag: 9f8e7d6c5b4a39281706f5e4d3c2b1a0ffeeddccbbaa99887766554433221100",
     ],
+    [
+      "gcp secret resource name",
+      'secretVersion: "projects/123456789012/secrets/database-password/versions/3"',
+    ],
+    ["secret manager path", 'const secretPath = "/projects/my-project/secrets/db-password/versions/latest"'],
+    ["keyof over a long constant", "type K = keyof typeof DEFAULT_CONFIGURATION_VALUES_MAP;"],
+    ["screaming constant after a key word", "const key = DEFAULT_SIGNING_KEY_ROTATION_POLICY_V2;"],
   ];
   for (const [name, text] of clean)
     test(`ignores ${name}`, () => {
@@ -55,6 +62,21 @@ describe("secrets", () => {
     const f = scanText("GH_TOKEN=ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij12");
     expect(f[0]?.excerpt).toBe("ghp_AB…");
     expect(JSON.stringify(f)).not.toContain("ghij12");
+  });
+  test("one secret yields one finding even when several detectors match it", () => {
+    expect(scanText("key=sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJ")).toEqual([
+      { pattern: "anthropic", excerpt: "sk-ant…" },
+    ]);
+    expect(scanText("GH_TOKEN=ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij12")).toHaveLength(1);
+    expect(
+      scanText(
+        "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U",
+      ),
+    ).toEqual([{ pattern: "jwt", excerpt: "eyJhbG…" }]);
+  });
+  test("two different secrets on separate lines are both reported", () => {
+    const f = scanText("A=AKIAIOSFODNN7EXAMPLE\nB=xoxb-123456789012-123456789012-AbCdEfGhIjKlMnOpQrStUvWx");
+    expect(f.map((x) => x.pattern).sort()).toEqual(["aws", "slack"]);
   });
   test("added lines carry the path and skip examples and docs", () => {
     const f = scanAddedLines([

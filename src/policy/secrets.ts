@@ -22,8 +22,15 @@ const PATTERNS: [string, RegExp][] = [
 const HEX_ONLY = /^[0-9a-f]+$/i;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ENTROPY_CANDIDATE = /\b[A-Za-z0-9+/=_-]{32,}\b/g;
-const KEY_CONTEXT = /(token|secret|key|password|passwd|pwd|credential|auth)[^\n]{0,20}$/i;
+// A key-like word must end right before the value (word boundary): `GH_TOKEN=`, `SECRET_KEY =`, `token:`,
+// `Authorization: Bearer` qualify; `keyof`, `secretVersion:`, `authorizationHeaderName` do not.
+const KEY_CONTEXT =
+  /(token|secret|key|password|passwd|pwd|credential|authorization|auth|bearer)\b[^\n]{0,20}$/i;
 const PLACEHOLDER_LINE = /ci-not-a-real-key|example\.invalid|sha256|sha1|md5/i;
+// Shapes that are long and keyed but are code, not credentials.
+const PATH_LIKE = /^[A-Za-z0-9_.-]+(\/[A-Za-z0-9_.-]+){2,}$/;
+const SCREAMING_SNAKE = /^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$/;
+const HAS_DIGIT = /\d/;
 
 function entropy(s: string): number {
   const freq = new Map<string, number>();
@@ -36,26 +43,39 @@ function entropy(s: string): number {
   return h;
 }
 
-/** Findings carry a six-character prefix only — a finding is itself written to Linear and logs (§11.2). */
+/**
+ * Findings carry a six-character prefix only — a finding is itself written to Linear and logs (§11.2).
+ * One secret yields one finding: a match whose span overlaps an earlier finding is not reported again.
+ */
 export function scanText(text: string, path?: string): Finding[] {
   const out: Finding[] = [];
-  const add = (pattern: string, m: string) =>
+  const spans: [number, number][] = [];
+  const overlaps = (s: number, e: number) => spans.some(([a, b]) => s < b && e > a);
+  const add = (pattern: string, m: string, start: number) => {
+    const end = start + m.length;
+    if (overlaps(start, end)) return;
+    spans.push([start, end]);
     out.push({ pattern, ...(path ? { path } : {}), excerpt: `${m.slice(0, 6)}…` });
+  };
   for (const [name, re] of PATTERNS) {
     const m = re.exec(text);
-    if (m) add(name, m[0]);
+    if (m) add(name, m[0], m.index);
   }
+  let offset = 0;
   for (const line of text.split("\n")) {
+    const lineStart = offset;
+    offset += line.length + 1;
     if (PLACEHOLDER_LINE.test(line)) continue;
     for (const m of line.matchAll(ENTROPY_CANDIDATE)) {
       const tok = m[0];
-      if (UUID.test(tok)) continue;
+      if (UUID.test(tok) || PATH_LIKE.test(tok) || SCREAMING_SNAKE.test(tok) || !HAS_DIGIT.test(tok))
+        continue;
       const before = line.slice(0, m.index ?? 0);
       const keyed = KEY_CONTEXT.test(before);
       // A bare 40+ hex digest (git SHA, checksum) is noise unless a key-like name introduces it.
       if (HEX_ONLY.test(tok) && tok.length >= 40 && !keyed) continue;
       if (keyed && entropy(tok) >= 3.5) {
-        add("high_entropy", tok);
+        add("high_entropy", tok, lineStart + (m.index ?? 0));
         break;
       }
     }

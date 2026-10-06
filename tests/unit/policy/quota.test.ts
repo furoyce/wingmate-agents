@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import type { ProviderLimits, RateLimits } from "../../../src/ports";
 import { availability } from "../../../src/policy/quota";
+import type { ProviderLimits, RateLimits } from "../../../src/ports";
 
 const now = Date.parse("2026-10-06T10:00:00Z");
 const q = { weeklyMax: 80, sessionMax: 90, maxSnapshotAgeMin: 360 };

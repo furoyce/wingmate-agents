@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { ConfigSchema, withDefaults } from "../../../src/config/schema";
 import { slots } from "../../../src/policy/concurrency";
-import { newRecord, type Stage } from "../../../src/state/records";
+import { type Stage, newRecord } from "../../../src/state/records";
 
 const cfg = withDefaults(
   ConfigSchema.parse(JSON.parse(readFileSync("tests/fixtures/config.min.json", "utf8"))),
