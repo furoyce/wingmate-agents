@@ -1,0 +1,135 @@
+import { readFile, rename, unlink } from "node:fs/promises";
+import { join } from "node:path";
+import { newUlid } from "../shared/ids";
+import type { Dirs } from "../shared/paths";
+import type { Clock } from "../shared/time";
+import { iso, minutesBetween } from "../shared/time";
+import { createExclusive, writeAtomic } from "./fs";
+
+interface LockFile {
+  pid: number;
+  startedAt: string;
+  token: string;
+  heartbeatAt: string;
+}
+const STALE_MIN = 15;
+const HEARTBEAT_MS = 30_000;
+
+const pidAlive = (pid: number): boolean => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === "EPERM";
+  }
+};
+
+export interface AcquiredLock {
+  kind: "acquired" | "reclaimed";
+  release(): Promise<void>;
+}
+export type AcquireResult = AcquiredLock | { kind: "held" };
+
+/**
+ * The single tick lock (§6.0): O_EXCL create; a stale lock (dead pid, or a heartbeat older than
+ * STALE_MIN minutes) is reclaimed by writing a fresh token and confirming it survived the rename.
+ */
+export const TickLock = {
+  path: (dirs: Dirs) => join(dirs.state, "tick.lock"),
+  async acquire(dirs: Dirs, clock: Clock): Promise<AcquireResult> {
+    const path = TickLock.path(dirs);
+    const mine: LockFile = {
+      pid: process.pid,
+      startedAt: iso(clock.now()),
+      token: newUlid(),
+      heartbeatAt: iso(clock.now()),
+    };
+    let kind: "acquired" | "reclaimed" = "acquired";
+    if (!(await createExclusive(path, JSON.stringify(mine)))) {
+      let existing: LockFile | null = null;
+      try {
+        existing = JSON.parse(await readFile(path, "utf8")) as LockFile;
+      } catch {
+        existing = null;
+      }
+      const stale =
+        !existing ||
+        !pidAlive(existing.pid) ||
+        minutesBetween(existing.heartbeatAt, iso(clock.now())) > STALE_MIN;
+      if (!stale) return { kind: "held" };
+      const tmp = `${path}.${mine.token}.tmp`;
+      await writeAtomic(tmp, JSON.stringify(mine));
+      await rename(tmp, path);
+      const check = JSON.parse(await readFile(path, "utf8")) as LockFile;
+      if (check.token !== mine.token) return { kind: "held" };
+      kind = "reclaimed";
+    }
+    const timer = setInterval(() => {
+      void writeAtomic(path, JSON.stringify({ ...mine, heartbeatAt: iso(clock.now()) }));
+    }, HEARTBEAT_MS);
+    timer.unref();
+    return {
+      kind,
+      release: async () => {
+        clearInterval(timer);
+        try {
+          const cur = JSON.parse(await readFile(path, "utf8")) as LockFile;
+          if (cur.token === mine.token) await unlink(path);
+        } catch {
+          /* already gone */
+        }
+      },
+    };
+  },
+};
+
+/** Same-process callers queue in call order per identifier; the file lock below still protects across processes. */
+const inProcessChains = new Map<string, Promise<unknown>>();
+
+/** Per-record mutex (§6.0): an O_EXCL lock file next to the record; stale (dead pid or > 60 s) locks are broken. */
+export async function withRecordLock<T>(
+  dirs: Dirs,
+  identifier: string,
+  fn: () => Promise<T>,
+  waitMs = 10_000,
+): Promise<T> {
+  const prev = inProcessChains.get(identifier) ?? Promise.resolve();
+  const run = prev.catch(() => undefined).then(() => withFileLock(dirs, identifier, fn, waitMs));
+  inProcessChains.set(identifier, run);
+  try {
+    return await run;
+  } finally {
+    if (inProcessChains.get(identifier) === run) inProcessChains.delete(identifier);
+  }
+}
+
+async function withFileLock<T>(
+  dirs: Dirs,
+  identifier: string,
+  fn: () => Promise<T>,
+  waitMs: number,
+): Promise<T> {
+  const path = join(dirs.records, `${identifier}.lock`);
+  const started = Date.now();
+  for (;;) {
+    if (await createExclusive(path, JSON.stringify({ pid: process.pid, at: new Date().toISOString() })))
+      break;
+    try {
+      const cur = JSON.parse(await readFile(path, "utf8")) as { pid: number; at: string };
+      if (!pidAlive(cur.pid) || Date.now() - Date.parse(cur.at) > 60_000) {
+        await unlink(path).catch(() => undefined);
+        continue;
+      }
+    } catch {
+      await unlink(path).catch(() => undefined);
+      continue;
+    }
+    if (Date.now() - started > waitMs) throw new Error(`record lock timeout for ${identifier}`);
+    await Bun.sleep(25);
+  }
+  try {
+    return await fn();
+  } finally {
+    await unlink(path).catch(() => undefined);
+  }
+}
