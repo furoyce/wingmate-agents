@@ -1,0 +1,284 @@
+{
+  "id": "57f6d3e0-16f0-4f9a-8920-ad5c8237ab9b",
+  "ok": true,
+  "_meta": {
+    "runtimeId": "c75f606e-8651-49ea-afcd-1514da5b1aa5"
+  },
+  "result": {
+    "claude": {
+      "accounts": [],
+      "activeAccountId": null,
+      "activeAccountIdsByRuntime": {
+        "host": null,
+        "wsl": {}
+      }
+    },
+    "codex": {
+      "accounts": [],
+      "activeAccountId": null,
+      "activeAccountIdsByRuntime": {
+        "host": null,
+        "wsl": {}
+      },
+      "systemDefault": {
+        "hasAuth": true,
+        "authKind": "oauth",
+        "email": "user@example.invalid",
+        "providerAccountId": "REDACTED",
+        "workspaceLabel": "Personal (Pro)"
+      }
+    },
+    "rateLimits": {
+      "claude": {
+        "provider": "claude",
+        "session": {
+          "usedPercent": 25,
+          "windowMinutes": 300,
+          "resetsAt": 1791290399778,
+          "resetDescription": "8:39 AM"
+        },
+        "weekly": {
+          "usedPercent": 34,
+          "windowMinutes": 10080,
+          "resetsAt": 1791327599778,
+          "resetDescription": "6:59 PM"
+        },
+        "fableWeekly": {
+          "usedPercent": 67,
+          "windowMinutes": 10080,
+          "resetsAt": 1791327599778,
+          "resetDescription": "6:59 PM"
+        },
+        "updatedAt": 1791289937931,
+        "error": null,
+        "status": "ok",
+        "usageMetadata": {
+          "source": "oauth",
+          "attemptedSources": [
+            "oauth"
+          ],
+          "credentialSource": "legacy-keychain",
+          "authProvenance": "system",
+          "lastSuccessfulSource": "oauth"
+        }
+      },
+      "codex": {
+        "provider": "codex",
+        "session": null,
+        "weekly": {
+          "usedPercent": 8,
+          "windowMinutes": 10080,
+          "resetsAt": 1791580423000,
+          "resetDescription": "Fri 5:13 PM"
+        },
+        "rateLimitResetCredits": {
+          "availableCount": 2,
+          "totalEarnedCount": 0,
+          "nextExpiresAt": 1792702798281,
+          "credits": [
+            {
+              "status": "available",
+              "expiresAt": 1792702798281,
+              "grantedAt": 1790110798281
+            },
+            {
+              "status": "available",
+              "expiresAt": 1793301043023,
+              "grantedAt": 1790709043023
+            }
+          ]
+        },
+        "updatedAt": 1791289938454,
+        "error": null,
+        "status": "ok",
+        "usageMetadata": {}
+      },
+      "gemini": {
+        "provider": "gemini",
+        "session": {
+          "usedPercent": 0,
+          "windowMinutes": 60,
+          "resetsAt": 1791376340000,
+          "resetDescription": null
+        },
+        "weekly": null,
+        "buckets": [
+          {
+            "name": "Pro",
+            "usedPercent": 0,
+            "windowMinutes": 60,
+            "resetsAt": 1791376340000,
+            "resetDescription": null
+          }
+        ],
+        "updatedAt": 1791289940116,
+        "error": null,
+        "status": "ok",
+        "usageMetadata": {}
+      },
+      "opencodeGo": {
+        "provider": "opencode-go",
+        "session": null,
+        "weekly": null,
+        "monthly": null,
+        "updatedAt": 1791289937436,
+        "error": "No OpenCode Go API key or session cookie configured",
+        "status": "unavailable",
+        "usageMetadata": {
+          "failureKind": "missing-credentials"
+        }
+      },
+      "kimi": {
+        "provider": "kimi",
+        "session": null,
+        "weekly": null,
+        "updatedAt": 1791289937439,
+        "error": "Not signed in to Kimi Code",
+        "status": "unavailable"
+      },
+      "antigravity": {
+        "provider": "antigravity",
+        "session": {
+          "usedPercent": 0,
+          "windowMinutes": 300,
+          "resetsAt": 1791307943000,
+          "resetDescription": null
+        },
+        "weekly": {
+          "usedPercent": 0,
+          "windowMinutes": 10080,
+          "resetsAt": 1791293002000,
+          "resetDescription": null
+        },
+        "buckets": [
+          {
+            "name": "Gemini Models · Weekly Limit Remaining",
+            "usedPercent": 0,
+            "windowMinutes": 10080,
+            "resetsAt": 1791293002000,
+            "resetDescription": null
+          },
+          {
+            "name": "Gemini Models · Five Hour Limit Remaining",
+            "usedPercent": 0,
+            "windowMinutes": 300,
+            "resetsAt": 1791307943000,
+            "resetDescription": null
+          },
+          {
+            "name": "Claude and GPT models · Weekly Limit Remaining",
+            "usedPercent": 0,
+            "windowMinutes": 10080,
+            "resetsAt": 1791894743000,
+            "resetDescription": null
+          },
+          {
+            "name": "Claude and GPT models · Five Hour Limit Remaining",
+            "usedPercent": 0,
+            "windowMinutes": 300,
+            "resetsAt": 1791307943000,
+            "resetDescription": null
+          }
+        ],
+        "updatedAt": 1791289944337,
+        "error": null,
+        "status": "ok",
+        "usageMetadata": {
+          "source": "cli",
+          "attemptedSources": [
+            "cli"
+          ],
+          "lastSuccessfulSource": "cli",
+          "credentialSource": "antigravity-cli"
+        }
+      },
+      "minimax": {
+        "provider": "minimax",
+        "session": null,
+        "weekly": null,
+        "updatedAt": 1791289937433,
+        "error": "MiniMax session cookie not configured",
+        "status": "unavailable",
+        "usageMetadata": {
+          "failureKind": "missing-credentials",
+          "source": "web"
+        }
+      },
+      "grok": {
+        "provider": "grok",
+        "session": null,
+        "weekly": null,
+        "updatedAt": 1791289937431,
+        "error": "Grok sign-in expired — run grok on the computer running Orca; sign in if prompted. No chat message is needed.",
+        "status": "error",
+        "usageMetadata": {
+          "failureKind": "delegated-refresh-required",
+          "source": "oauth"
+        }
+      },
+      "cursor": {
+        "provider": "cursor",
+        "session": null,
+        "weekly": null,
+        "updatedAt": 1791289937931,
+        "error": null,
+        "status": "ok",
+        "monthly": {
+          "usedPercent": 53.78571428571428,
+          "windowMinutes": 43200,
+          "resetsAt": 1792604572000,
+          "resetDescription": "Oct 21"
+        },
+        "buckets": [
+          {
+            "name": "Cursor Models",
+            "usedPercent": 0.745,
+            "windowMinutes": 43200,
+            "resetsAt": 1792604572000,
+            "resetDescription": "Oct 21"
+          },
+          {
+            "name": "Other Models",
+            "usedPercent": 100,
+            "windowMinutes": 43200,
+            "resetsAt": 1792604572000,
+            "resetDescription": "Oct 21"
+          }
+        ],
+        "planType": "pro_plus",
+        "usageMetadata": {
+          "source": "cli",
+          "credentialSource": "keychain",
+          "authProvenance": "921fd14a8f51",
+          "lastSuccessfulSource": "cli"
+        }
+      },
+      "zcode": {
+        "provider": "zcode",
+        "session": null,
+        "weekly": null,
+        "monthly": null,
+        "updatedAt": 1791289937431,
+        "error": "ZCode Coding Plan credentials are not configured",
+        "status": "unavailable",
+        "usageMetadata": {
+          "source": "web",
+          "failureKind": "missing-credentials"
+        }
+      },
+      "minimaxCookieConfigured": false,
+      "grokAuthConfigured": true,
+      "cursorAuthConfigured": true,
+      "claudeTarget": {
+        "runtime": "host",
+        "wslDistro": null
+      },
+      "codexTarget": {
+        "runtime": "host",
+        "wslDistro": null
+      },
+      "inactiveClaudeAccounts": [],
+      "inactiveCodexAccounts": []
+    }
+  }
+}

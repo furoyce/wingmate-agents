@@ -1,0 +1,258 @@
+{
+  "id": "9e926b9d-aac8-4c35-a587-e306681f29fc",
+  "ok": true,
+  "_meta": {
+    "runtimeId": "c75f606e-8651-49ea-afcd-1514da5b1aa5"
+  },
+  "result": {
+    "hostScope": {
+      "hostIds": [
+        "local"
+      ],
+      "omittedHostIds": []
+    },
+    "truncated": false,
+    "worktrees": [
+      {
+        "workspaceKind": "git",
+        "worktreeId": "1f1e7f87-e283-4432-beaf-92efba56ddb9::/Users/jujufugh/orca/workspaces/wingmate-agents/orca-linear-wingmate-agents",
+        "repoId": "1f1e7f87-e283-4432-beaf-92efba56ddb9",
+        "hostId": "local",
+        "terminalPlatform": "darwin",
+        "repo": "wingmate-agents",
+        "path": "/Users/jujufugh/orca/workspaces/wingmate-agents/orca-linear-wingmate-agents",
+        "branch": "refs/heads/orca-linear-wingmate-agents",
+        "isArchived": false,
+        "isMainWorktree": false,
+        "hasHostSidebarActivity": true,
+        "worktreeInstanceId": "5e47bf14-4070-4d90-bc43-10fedcbbee19",
+        "parentWorktreeId": null,
+        "childWorktreeIds": [],
+        "displayName": "orca-linear-wingmate-agents",
+        "workspaceStatus": "in-progress",
+        "sortOrder": 1791289914356,
+        "lastActivityAt": 1791289413307,
+        "createdAt": 1791227879203,
+        "creatorProvenance": {
+          "kind": "host"
+        },
+        "linkedIssue": null,
+        "linkedPR": null,
+        "linkedLinearIssue": null,
+        "linkedGitLabMR": null,
+        "linkedGitLabIssue": null,
+        "comment": "",
+        "isPinned": true,
+        "isActive": false,
+        "unread": false,
+        "liveTerminalCount": 3,
+        "hasAttachedPty": true,
+        "lastOutputAt": 1791290152312,
+        "preview": "✳",
+        "status": "working",
+        "agents": [
+          {
+            "paneKey": "4ed0a1a5-a1d5-4135-85bc-e89586112001:e5d4ba72-6561-4e5f-b8b0-4b7797f1bd83",
+            "parentPaneKey": null,
+            "state": "done",
+            "agentType": "claude",
+            "prompt": "",
+            "taskTitle": null,
+            "displayName": null,
+            "lastAssistantMessage": "REDACTED",
+            "toolName": "SendMessage",
+            "toolInput": null,
+            "interrupted": false,
+            "mainAgent": {
+              "state": "done",
+              "stateStartedAt": 1791234913515
+            },
+            "stateStartedAt": 1791234913516,
+            "updatedAt": 1791235099392
+          },
+          {
+            "paneKey": "4ed0a1a5-a1d5-4135-85bc-e89586112001:465c84d4-f550-46ee-a986-776c1df996fb",
+            "parentPaneKey": null,
+            "state": "working",
+            "agentType": "claude",
+            "prompt": "",
+            "taskTitle": null,
+            "displayName": null,
+            "lastAssistantMessage": null,
+            "toolName": "Bash",
+            "toolInput": "S=/private/tmp/claude-501/-Users-jujufugh-orca-workspaces-wingmate-agents-orca-l…",
+            "interrupted": false,
+            "mainAgent": {
+              "state": "working",
+              "stateStartedAt": 1791289386986
+            },
+            "stateStartedAt": 1791289386987,
+            "updatedAt": 1791290151897
+          },
+          {
+            "paneKey": "4ed0a1a5-a1d5-4135-85bc-e89586112001:ecaa1fac-9dc4-4de8-86b4-b89f9408eb14",
+            "parentPaneKey": null,
+            "state": "done",
+            "agentType": "claude",
+            "prompt": "approve the plan. yes to all proposed decisions.  please continue for the next s…",
+            "taskTitle": null,
+            "displayName": null,
+            "lastAssistantMessage": "Plan phase is done and implementation has started. Status for you:\n\n- **Plan com…",
+            "toolName": "Bash",
+            "toolInput": "SK=/Users/jujufugh/.claude/plugins/cache/claude-plugins-official/superpowers/6.4…",
+            "interrupted": false,
+            "mainAgent": {
+              "state": "done",
+              "stateStartedAt": 1791289411099
+            },
+            "stateStartedAt": 1791289411099,
+            "updatedAt": 1791289416358
+          }
+        ]
+      },
+      {
+        "workspaceKind": "git",
+        "worktreeId": "7b0ddfa8-7ef0-4be6-b4ef-38013c099fb8::/Users/jujufugh/orca/workspaces/bouncr.lol/bouncr-auto-JRF-404-api",
+        "repoId": "7b0ddfa8-7ef0-4be6-b4ef-38013c099fb8",
+        "hostId": "local",
+        "terminalPlatform": "darwin",
+        "repo": "bouncr.lol",
+        "path": "/Users/jujufugh/orca/workspaces/bouncr.lol/bouncr-auto-JRF-404-api",
+        "branch": "refs/heads/furoyce/bouncr-auto-JRF-404-api",
+        "isArchived": false,
+        "isMainWorktree": false,
+        "hasHostSidebarActivity": true,
+        "worktreeInstanceId": "fb402129-075f-4ab4-88d7-4201d28643d1",
+        "parentWorktreeId": null,
+        "childWorktreeIds": [],
+        "displayName": "bouncr-auto-JRF-404-api",
+        "workspaceStatus": "in-progress",
+        "sortOrder": 1791289896356,
+        "lastActivityAt": 1790949248638,
+        "createdAt": 1790942603542,
+        "creatorProvenance": {
+          "kind": "host"
+        },
+        "linkedIssue": null,
+        "linkedPR": null,
+        "linkedLinearIssue": "JRF-404",
+        "linkedGitLabMR": null,
+        "linkedGitLabIssue": null,
+        "comment": "",
+        "isPinned": false,
+        "isActive": false,
+        "unread": true,
+        "liveTerminalCount": 1,
+        "hasAttachedPty": true,
+        "lastOutputAt": null,
+        "preview": "",
+        "status": "active",
+        "agents": []
+      },
+      {
+        "workspaceKind": "git",
+        "worktreeId": "d2386ea3-2a51-46b2-93b4-7f36da9e673d::/Users/jujufugh/orca/workspaces/ehr-dispatch.smartdispatcher.io/jrf-397-smart-dispatcher-add-permit-scanning-rea",
+        "repoId": "d2386ea3-2a51-46b2-93b4-7f36da9e673d",
+        "hostId": "local",
+        "terminalPlatform": "darwin",
+        "repo": "ehr-dispatch.smartdispatcher.io",
+        "path": "/Users/jujufugh/orca/workspaces/ehr-dispatch.smartdispatcher.io/jrf-397-smart-dispatcher-add-permit-scanning-rea",
+        "branch": "refs/heads/chore/jrf-397-rollout",
+        "isArchived": false,
+        "isMainWorktree": false,
+        "hasHostSidebarActivity": true,
+        "worktreeInstanceId": "9b4aada2-d050-4c0d-945a-c433da123285",
+        "parentWorktreeId": null,
+        "childWorktreeIds": [
+          "d2386ea3-2a51-46b2-93b4-7f36da9e673d::/Users/jujufugh/orca/workspaces/ehr-dispatch.smartdispatcher.io/jrf397-permit-api",
+          "d2386ea3-2a51-46b2-93b4-7f36da9e673d::/Users/jujufugh/orca/workspaces/ehr-dispatch.smartdispatcher.io/jrf397-permit-web"
+        ],
+        "displayName": "JRF-397 smart dispatcher add permit scanning/reading/truck routing",
+        "workspaceStatus": "in-progress",
+        "sortOrder": 1791289912356,
+        "lastActivityAt": 1791285365282,
+        "createdAt": 1790732251926,
+        "creatorProvenance": {
+          "kind": "host"
+        },
+        "linkedIssue": null,
+        "linkedPR": {
+          "number": 1086,
+          "state": "merged"
+        },
+        "linkedLinearIssue": "JRF-397",
+        "linkedGitLabMR": null,
+        "linkedGitLabIssue": null,
+        "comment": "",
+        "isPinned": true,
+        "isActive": true,
+        "unread": false,
+        "liveTerminalCount": 4,
+        "hasAttachedPty": true,
+        "lastOutputAt": 1791286565517,
+        "preview": "REDACTED",
+        "status": "active",
+        "agents": [
+          {
+            "paneKey": "ca98b0d0-bfd2-46e5-b591-d37a8f6ef848:a70d9385-472d-41e2-9955-17fa134ed2a0",
+            "parentPaneKey": null,
+            "state": "done",
+            "agentType": "claude",
+            "prompt": "REDACTED",
+            "taskTitle": null,
+            "displayName": null,
+            "lastAssistantMessage": "REDACTED",
+            "toolName": "Bash",
+            "toolInput": "REDACTED",
+            "interrupted": false,
+            "mainAgent": {
+              "state": "done",
+              "stateStartedAt": 1790732520417
+            },
+            "stateStartedAt": 1790732520417,
+            "updatedAt": 1790733345014
+          },
+          {
+            "paneKey": "b07d77cc-2613-4a06-bc52-00e3ef794b2e:09610423-29cd-4fa4-b0b0-05fb431eeb46",
+            "parentPaneKey": null,
+            "state": "done",
+            "agentType": "claude",
+            "prompt": "REDACTED",
+            "taskTitle": null,
+            "displayName": null,
+            "lastAssistantMessage": "REDACTED",
+            "toolName": "Bash",
+            "toolInput": "REDACTED",
+            "interrupted": false,
+            "mainAgent": {
+              "state": "done",
+              "stateStartedAt": 1791255215493
+            },
+            "stateStartedAt": 1791255215493,
+            "updatedAt": 1791255401018
+          },
+          {
+            "paneKey": "f3226228-4993-40e8-86e6-7c30e9d8f457:bb8c1390-5c68-4391-91c2-6182b9fd3f8f",
+            "parentPaneKey": null,
+            "state": "done",
+            "agentType": "claude",
+            "prompt": "REDACTED",
+            "taskTitle": null,
+            "displayName": null,
+            "lastAssistantMessage": "REDACTED",
+            "toolName": "mcp__claude_ai_Linear__save_comment",
+            "toolInput": null,
+            "interrupted": false,
+            "mainAgent": {
+              "state": "done",
+              "stateStartedAt": 1791256480206
+            },
+            "stateStartedAt": 1791256480206,
+            "updatedAt": 1791256666137
+          }
+        ]
+      }
+    ],
+    "totalCount": 3
+  }
+}

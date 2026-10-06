@@ -1,0 +1,78 @@
+{
+  "id": "cca93302-22b2-4ba2-804f-8346383e88c2",
+  "ok": true,
+  "_meta": {
+    "runtimeId": "c75f606e-8651-49ea-afcd-1514da5b1aa5"
+  },
+  "result": {
+    "hostScope": {
+      "hostIds": [
+        "local"
+      ],
+      "omittedHostIds": []
+    },
+    "truncated": false,
+    "worktrees": [
+      {
+        "workspaceKind": "git",
+        "worktreeId": "1f1e7f87-e283-4432-beaf-92efba56ddb9::/Users/jujufugh/orca/workspaces/wingmate-agents/wm-spike-3a04789d",
+        "repoId": "1f1e7f87-e283-4432-beaf-92efba56ddb9",
+        "hostId": "local",
+        "terminalPlatform": "darwin",
+        "repo": "wingmate-agents",
+        "path": "/Users/jujufugh/orca/workspaces/wingmate-agents/wm-spike-3a04789d",
+        "branch": "refs/heads/wm-spike-3a04789d",
+        "isArchived": false,
+        "isMainWorktree": false,
+        "hasHostSidebarActivity": true,
+        "worktreeInstanceId": "3b6ac381-72e1-4685-a99e-2544ba515a68",
+        "parentWorktreeId": null,
+        "childWorktreeIds": [],
+        "displayName": "wm-spike-3a04789d",
+        "workspaceStatus": "in-progress",
+        "sortOrder": 1791290723553,
+        "lastActivityAt": 1791290724471,
+        "createdAt": 1791290724471,
+        "creatorProvenance": {
+          "kind": "host"
+        },
+        "linkedIssue": null,
+        "linkedPR": null,
+        "linkedLinearIssue": null,
+        "linkedGitLabMR": null,
+        "linkedGitLabIssue": null,
+        "comment": "wingmate spike",
+        "isPinned": false,
+        "isActive": false,
+        "unread": false,
+        "liveTerminalCount": 2,
+        "hasAttachedPty": true,
+        "lastOutputAt": 1791290733796,
+        "preview": "thinking with max effort)",
+        "status": "working",
+        "agents": [
+          {
+            "paneKey": "e083d10d-a29a-4df3-ad5b-5ed5d669cea2:08c64aea-f680-4d69-8899-eeb9d7cf0a4c",
+            "parentPaneKey": null,
+            "state": "working",
+            "agentType": "claude",
+            "prompt": "Run the shell command \"sleep 25\", then reply with the single word READY and then…",
+            "taskTitle": null,
+            "displayName": null,
+            "lastAssistantMessage": null,
+            "toolName": null,
+            "toolInput": null,
+            "interrupted": false,
+            "mainAgent": {
+              "state": "working",
+              "stateStartedAt": 1791290728696
+            },
+            "stateStartedAt": 1791290728696,
+            "updatedAt": 1791290728696
+          }
+        ]
+      }
+    ],
+    "totalCount": 1
+  }
+}

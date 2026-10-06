@@ -1,0 +1,313 @@
+{
+  "id": "226fce06-266d-4558-aa97-7b2fcea4d793",
+  "ok": true,
+  "_meta": {
+    "runtimeId": "c75f606e-8651-49ea-afcd-1514da5b1aa5"
+  },
+  "result": {
+    "counts": {
+      "retained": 11,
+      "released": 243
+    },
+    "page": {
+      "limit": 100,
+      "total": 254,
+      "hasMore": true,
+      "nextCursor": "REDACTED"
+    },
+    "warnings": [
+      "Showing 100 of 254 Dispatches, newest first; more are on later pages. Follow page.nextCursor with --cursor."
+    ],
+    "scope": {
+      "source": "all"
+    },
+    "workers": [
+      {
+        "dispatchId": "ctx_7ffd641283d2",
+        "taskId": "task_4b056db11a96",
+        "runId": "run_56629e93bcb2",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_74154334-fbd7-4b34-83b6-c09258283fa4",
+        "terminalState": "released",
+        "resource": {
+          "id": "wtr_4e862347147d",
+          "ownershipState": "released",
+          "releaseState": "released",
+          "retainedReason": null,
+          "terminalHandle": "term_74154334-fbd7-4b34-83b6-c09258283fa4",
+          "worktreeId": "d2386ea3-2a51-46b2-93b4-7f36da9e673d::/Users/jujufugh/orca/workspaces/ehr-dispatch.smartdispatcher.io/rv-1088",
+          "endpointId": "c75f606e-8651-49ea-afcd-1514da5b1aa5",
+          "endpointIncarnation": "d2386ea3-2a51-46b2-93b4-7f36da9e673d::/Users/jujufugh/orca/workspaces/ehr-dispatch.smartdispatcher.io/rv-1088@@903aeb6f:0c27d1b1-f426-40e8-8376-bcb6ba5c9bd6",
+          "originDispatchId": "ctx_7ffd641283d2",
+          "ownerDispatchId": "ctx_7ffd641283d2",
+          "releaseRequestedAt": "2026-10-06 03:52:17",
+          "releaseCompletedAt": "2026-10-06 03:52:19",
+          "releaseError": null,
+          "recoveryAttemptCount": 0,
+          "lastRecoveryAt": null,
+          "archive": {
+            "source": "transcript",
+            "status": "captured"
+          }
+        },
+        "projection": {
+          "id": "ctx_7ffd641283d2",
+          "dispatchId": "ctx_7ffd641283d2",
+          "taskId": "task_4b056db11a96",
+          "runId": "run_56629e93bcb2",
+          "role": "worker",
+          "parent": null,
+          "provider": null,
+          "host": {
+            "kind": "local",
+            "id": "local"
+          },
+          "workspace": {
+            "id": "d2386ea3-2a51-46b2-93b4-7f36da9e673d::/Users/jujufugh/orca/workspaces/ehr-dispatch.smartdispatcher.io/rv-1088",
+            "kind": "folder_or_worktree"
+          },
+          "stage": {
+            "worker": "succeeded",
+            "dispatch": "completed",
+            "detail": "settled",
+            "activity": "unknown"
+          },
+          "outcome": "succeeded",
+          "liveness": {
+            "verdict": "exited",
+            "source": "resource_release"
+          },
+          "evidence": {
+            "durable": true,
+            "liveStatus": "unavailable",
+            "lastObservedAt": null
+          },
+          "resource": {
+            "state": "released"
+          },
+          "nextAction": {
+            "kind": "none",
+            "argv": []
+          },
+          "attention": {
+            "categories": [
+              "root_completion"
+            ],
+            "requiresAction": false
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_67920c7bc80a",
+        "taskId": "task_d5ca6b918962",
+        "runId": "run_56629e93bcb2",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_b6c4345f-da32-420a-8678-ad9f40454ec2",
+        "terminalState": "retained",
+        "resource": null,
+        "projection": {
+          "id": "ctx_67920c7bc80a",
+          "dispatchId": "ctx_67920c7bc80a",
+          "taskId": "task_d5ca6b918962",
+          "runId": "run_56629e93bcb2",
+          "role": "worker",
+          "parent": null,
+          "provider": null,
+          "host": {
+            "kind": "local",
+            "id": "local"
+          },
+          "workspace": {
+            "id": "d2386ea3-2a51-46b2-93b4-7f36da9e673d::/Users/jujufugh/orca/workspaces/ehr-dispatch.smartdispatcher.io/fix-1088-codex",
+            "kind": "folder_or_worktree"
+          },
+          "stage": {
+            "worker": "succeeded",
+            "dispatch": "completed",
+            "detail": "settled",
+            "activity": "unknown"
+          },
+          "outcome": "succeeded",
+          "liveness": {
+            "verdict": "unverifiable",
+            "reason": "missing_status"
+          },
+          "evidence": {
+            "durable": true,
+            "liveStatus": "unavailable",
+            "lastObservedAt": null
+          },
+          "resource": {
+            "state": "absent",
+            "reason": "not_materialized"
+          },
+          "nextAction": {
+            "kind": "none",
+            "argv": []
+          },
+          "attention": {
+            "categories": [
+              "unverifiable",
+              "root_completion"
+            ],
+            "requiresAction": true
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_2b4e24253cba",
+        "taskId": "task_ae9f3fef3d1e",
+        "runId": "run_56629e93bcb2",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_b6c4345f-da32-420a-8678-ad9f40454ec2",
+        "terminalState": "released",
+        "resource": {
+          "id": "wtr_ef7019e6f97c",
+          "ownershipState": "released",
+          "releaseState": "released",
+          "retainedReason": null,
+          "terminalHandle": "term_b6c4345f-da32-420a-8678-ad9f40454ec2",
+          "worktreeId": "d2386ea3-2a51-46b2-93b4-7f36da9e673d::/Users/jujufugh/orca/workspaces/ehr-dispatch.smartdispatcher.io/fix-1088-codex",
+          "endpointId": "c75f606e-8651-49ea-afcd-1514da5b1aa5",
+          "endpointIncarnation": "d2386ea3-2a51-46b2-93b4-7f36da9e673d::/Users/jujufugh/orca/workspaces/ehr-dispatch.smartdispatcher.io/fix-1088-codex@@9819aff1:8d2011eb-96b9-4149-b288-9e669e4f6191",
+          "originDispatchId": "ctx_67920c7bc80a",
+          "ownerDispatchId": "ctx_2b4e24253cba",
+          "releaseRequestedAt": "2026-10-06 03:45:31",
+          "releaseCompletedAt": "2026-10-06 03:45:34",
+          "releaseError": null,
+          "recoveryAttemptCount": 0,
+          "lastRecoveryAt": null,
+          "archive": {
+            "source": "transcript",
+            "status": "captured"
+          }
+        },
+        "projection": {
+          "id": "ctx_2b4e24253cba",
+          "dispatchId": "ctx_2b4e24253cba",
+          "taskId": "task_ae9f3fef3d1e",
+          "runId": "run_56629e93bcb2",
+          "role": "worker",
+          "parent": null,
+          "provider": null,
+          "host": {
+            "kind": "local",
+            "id": "local"
+          },
+          "workspace": {
+            "id": "d2386ea3-2a51-46b2-93b4-7f36da9e673d::/Users/jujufugh/orca/workspaces/ehr-dispatch.smartdispatcher.io/fix-1088-codex",
+            "kind": "folder_or_worktree"
+          },
+          "stage": {
+            "worker": "succeeded",
+            "dispatch": "completed",
+            "detail": "settled",
+            "activity": "unknown"
+          },
+          "outcome": "succeeded",
+          "liveness": {
+            "verdict": "exited",
+            "source": "resource_release"
+          },
+          "evidence": {
+            "durable": true,
+            "liveStatus": "unavailable",
+            "lastObservedAt": null
+          },
+          "resource": {
+            "state": "released"
+          },
+          "nextAction": {
+            "kind": "none",
+            "argv": []
+          },
+          "attention": {
+            "categories": [
+              "root_completion"
+            ],
+            "requiresAction": false
+          }
+        }
+      },
+      {
+        "dispatchId": "ctx_8f26df3e605b",
+        "taskId": "task_7d99721d7d1a",
+        "runId": "run_02a4544fd371",
+        "workerState": "succeeded",
+        "dispatchStatus": "completed",
+        "agentTerminalHandle": "term_4857e14f-7ac0-4280-8668-fb2f66525e90",
+        "terminalState": "released",
+        "resource": {
+          "id": "wtr_7298c01dbcbd",
+          "ownershipState": "released",
+          "releaseState": "released",
+          "retainedReason": null,
+          "terminalHandle": "term_4857e14f-7ac0-4280-8668-fb2f66525e90",
+          "worktreeId": "d2386ea3-2a51-46b2-93b4-7f36da9e673d::/Users/jujufugh/orca/workspaces/ehr-dispatch.smartdispatcher.io/rv-1087-mobile-2",
+          "endpointId": "c75f606e-8651-49ea-afcd-1514da5b1aa5",
+          "endpointIncarnation": "d2386ea3-2a51-46b2-93b4-7f36da9e673d::/Users/jujufugh/orca/workspaces/ehr-dispatch.smartdispatcher.io/rv-1087-mobile-2@@a09715d2:9583cbbb-a524-4c6f-9dbc-8aaf0c2f7b01",
+          "originDispatchId": "ctx_8f26df3e605b",
+          "ownerDispatchId": "ctx_8f26df3e605b",
+          "releaseRequestedAt": "2026-10-06 03:44:01",
+          "releaseCompletedAt": "2026-10-06 03:44:03",
+          "releaseError": null,
+          "recoveryAttemptCount": 0,
+          "lastRecoveryAt": null,
+          "archive": {
+            "source": "transcript",
+            "status": "captured"
+          }
+        },
+        "projection": {
+          "id": "ctx_8f26df3e605b",
+          "dispatchId": "ctx_8f26df3e605b",
+          "taskId": "task_7d99721d7d1a",
+          "runId": "run_02a4544fd371",
+          "role": "worker",
+          "parent": null,
+          "provider": null,
+          "host": {
+            "kind": "local",
+            "id": "local"
+          },
+          "workspace": {
+            "id": "d2386ea3-2a51-46b2-93b4-7f36da9e673d::/Users/jujufugh/orca/workspaces/ehr-dispatch.smartdispatcher.io/rv-1087-mobile-2",
+            "kind": "folder_or_worktree"
+          },
+          "stage": {
+            "worker": "succeeded",
+            "dispatch": "completed",
+            "detail": "settled",
+            "activity": "unknown"
+          },
+          "outcome": "succeeded",
+          "liveness": {
+            "verdict": "exited",
+            "source": "resource_release"
+          },
+          "evidence": {
+            "durable": true,
+            "liveStatus": "unavailable",
+            "lastObservedAt": null
+          },
+          "resource": {
+            "state": "released"
+          },
+          "nextAction": {
+            "kind": "none",
+            "argv": []
+          },
+          "attention": {
+            "categories": [
+              "root_completion"
+            ],
+            "requiresAction": false
+          }
+        }
+      }
+    ]
+  }
+}
