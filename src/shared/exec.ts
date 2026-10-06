@@ -12,6 +12,10 @@ export interface RunOptions {
 }
 
 const MAX_CAPTURE = 8 * 1024 * 1024;
+/** After a timeout kill, how long to keep waiting for the pipes to reach EOF before cancelling the readers. */
+const GRACE_MS = 2000;
+
+/** Chunk-wise capture: partial output survives a timeout, reads continue past the cap so the child never blocks, and the reader can be cancelled. */
 function collect(stream: ReadableStream<Uint8Array> | null) {
   const chunks: Uint8Array[] = [];
   let bytes = 0;
@@ -48,24 +52,24 @@ function collect(stream: ReadableStream<Uint8Array> | null) {
     },
   };
 }
+
 export async function run(argv: string[], opts: RunOptions = {}): Promise<RunResult> {
-  // detached: true creates a process group so timeout can kill the entire tree, not just the direct child.
-  // Detached children do not receive the terminal's Ctrl-C (acceptable: run() is used by the dispatcher
-  // and by issue verbs, not by interactive humans).
-  const spawnOpts: Parameters<typeof Bun.spawn>[1] = {
+  // detached: true puts the child in its own process group so a timeout can kill the whole tree,
+  // not just the direct child. Detached children do not receive the terminal's Ctrl-C; that is
+  // acceptable because run() serves the dispatcher and the `issue` verbs, not interactive humans.
+  const proc = Bun.spawn(argv, {
     env: { ...process.env, ...(opts.env ?? {}) },
     stdout: "pipe",
     stderr: "pipe",
     detached: true,
-  };
-  if (opts.cwd !== undefined) spawnOpts.cwd = opts.cwd;
-  if (opts.stdin !== undefined) spawnOpts.stdin = new TextEncoder().encode(opts.stdin);
-  const proc = Bun.spawn(argv, spawnOpts);
+    ...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}),
+    ...(opts.stdin !== undefined ? { stdin: new TextEncoder().encode(opts.stdin) } : {}),
+  });
   let timedOut = false;
   let graceTimer: ReturnType<typeof setTimeout> | null = null;
-  let graceSettled: ((output: [string, string]) => void) | null = null;
-  const gracePromise = new Promise<[string, string]>((resolve) => {
-    graceSettled = resolve;
+  let settleGrace: (() => void) | null = null;
+  const gracePromise = new Promise<void>((resolve) => {
+    settleGrace = resolve;
   });
   const timer = opts.timeoutMs
     ? setTimeout(() => {
@@ -75,22 +79,24 @@ export async function run(argv: string[], opts: RunOptions = {}): Promise<RunRes
         } catch {
           proc.kill("SIGKILL");
         }
-        // Start the grace timer after the kill: race the drain against 2s grace period
-        graceTimer = setTimeout(() => {
-          if (graceSettled) graceSettled(["", ""]);
-        }, 2000);
+        // The grace starts only after the kill: the pipes normally reach EOF at once, but a
+        // descendant that left the process group (setsid) may still hold them open.
+        graceTimer = setTimeout(() => settleGrace?.(), GRACE_MS);
       }, opts.timeoutMs)
     : null;
+  const out = collect(proc.stdout);
+  const err = collect(proc.stderr);
   try {
-    const out = collect(proc.stdout as unknown as ReadableStream<Uint8Array>);
-    const err = collect(proc.stderr as unknown as ReadableStream<Uint8Array>);
-    const drain = Promise.all([out.done, err.done]);
-    const resultPromise = opts.timeoutMs ? Promise.race([drain, gracePromise]) : drain;
-    const code = await Promise.race([resultPromise.then(() => proc.exited), proc.exited]);
+    // Without a timeout, wait for EOF on both pipes (a backgrounded late writer is still read).
+    // With a timeout, wait for EOF or the post-kill grace, whichever comes first.
+    const drain = Promise.all([out.done, err.done]).then(() => undefined);
+    await (opts.timeoutMs ? Promise.race([drain, gracePromise]) : drain);
     if (timedOut) {
+      // Grace won or EOF arrived after the kill: release the readers (and their fds) either way.
       out.cancel();
       err.cancel();
     }
+    const code = await proc.exited;
     return { code: timedOut ? 124 : code, stdout: out.text(), stderr: err.text(), timedOut };
   } finally {
     if (timer) clearTimeout(timer);
