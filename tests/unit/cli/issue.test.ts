@@ -619,6 +619,20 @@ describe("wingmate issue", () => {
     );
     expect((await listIntents(wt)).filter((i) => i.kind !== "gate")).toHaveLength(1);
   });
+
+  test("C7: flags named like Object.prototype members are ordinary single flags, never inherited values", async () => {
+    const wt = await worktree();
+    for (const extra of [
+      ["--constructor", "a"],
+      ["--__proto__", "a"],
+      ["--hasOwnProperty", "x"],
+      ["--toString=y"],
+    ]) {
+      const r = await runVerb(wt, ["note", "half way", ...extra]);
+      expect({ extra, code: r.code, out: JSON.parse(r.out) }).toEqual({ extra, code: 0, out: { ok: true } });
+    }
+    expect((await listIntents(wt)).map((i) => i.kind)).toEqual(["note", "note", "note", "note"]);
+  });
 });
 
 describe("wingmate issue spawn (§8.1 amended: launch the role agent with the kit, then bind it with worker-start --terminal)", () => {

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { configCommand } from "../../../src/cli/commands/config";
 import { parseArgv } from "../../../src/cli/index";
 
 describe("parseArgv", () => {
@@ -28,5 +29,45 @@ describe("parseArgv", () => {
     // a valueless occurrence of a valued flag is malformed: the flag becomes `true`, which the verbs refuse
     expect(parseArgv(["x", "--repo", "a", "--repo"]).flags).toEqual({ repo: true });
     expect(parseArgv(["x", "--repo", "--repo", "a"]).flags).toEqual({ repo: true });
+  });
+  test("C7: flags named like Object.prototype members are ordinary own flags (no inherited value, no prototype change)", () => {
+    const { flags } = parseArgv([
+      "x",
+      "--constructor",
+      "a",
+      "--__proto__",
+      "b",
+      "--hasOwnProperty",
+      "c",
+      "--toString=d",
+      "--valueOf",
+    ]);
+    expect(Object.keys(flags)).toEqual(["constructor", "__proto__", "hasOwnProperty", "toString", "valueOf"]);
+    expect(Object.values(flags)).toEqual(["a", "b", "c", "d", true]);
+    expect(Object.getPrototypeOf(flags)).toBeNull();
+    // given twice, they accumulate like any other flag
+    expect(Object.values(parseArgv(["x", "--constructor", "a", "--constructor", "b"]).flags)).toEqual([
+      ["a", "b"],
+    ]);
+    expect(parseArgv(["x", "--title", "T"]).flags.constructor).toBeUndefined();
+  });
+});
+
+describe("config command", () => {
+  test("a repeated --file is refused before any file is read (F16, C7)", async () => {
+    const err: string[] = [];
+    const orig = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((s: string) => {
+      err.push(String(s));
+      return true;
+    }) as typeof process.stderr.write;
+    let code: number;
+    try {
+      code = await configCommand(parseArgv(["config", "validate", "--file", "a.yaml", "--file", "b.yaml"]));
+    } finally {
+      process.stderr.write = orig;
+    }
+    expect(code).toBe(2);
+    expect(err.join("")).toBe("usage: --file may be given only once\n");
   });
 });

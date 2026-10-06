@@ -15,7 +15,8 @@ function addFlag(flags: Record<string, FlagValue>, k: string, v: string | true):
 }
 export function parseArgv(args: string[]): Argv {
   const cmd: string[] = [];
-  const flags: Record<string, FlagValue> = {};
+  // C7: no prototype, so `--constructor`, `--__proto__` or `--hasOwnProperty` are ordinary flags, never inherited members
+  const flags: Record<string, FlagValue> = Object.create(null);
   for (let i = 0; i < args.length; i++) {
     const a = args[i] as string;
     if (a.startsWith("--")) {
