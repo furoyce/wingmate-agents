@@ -129,11 +129,11 @@ orchestrator in `ehr-dispatch`, and the Linear multi-agent conventions — and r
 | D11 | Budgets notify, never block, by default; optional per-project caps; the owner controls spend via the number of labeled issues |
 | D12 | Provider quota gating stays: no new start above 80 % of any weekly-class window / 90 % of a session window, evaluated at claim and at every worker launch |
 | D13 | The **Wingmate Console** is in scope: Linear-like, high-performance, with a human-input inbox, delivered as a loopback-only local web app usable inside Orca's embedded browser |
-|| D14 *proposed* || **Trust boundary risk acceptance.** Coordinators, verifiers and workers run unattended as the owner's macOS user; until phase-2 isolation (separate user/VM), file permissions protect nothing from a compromised agent and prompt rules are advisory. The pilot accepts the residual risk because the Linear team has one member, an issue reaches an agent only after the owner labels it, and the enforced controls in §13.3 reduce the blast radius of an injected ticket, comment, web page or dependency |
-|| D15 *proposed* || **The dispatcher never runs an LLM.** The Orca automation's precheck command *is* the tick; it always exits non-zero so Orca never starts the automation's agent; the tick summary lives in the run record's precheck output and in local state |
-|| D16 *proposed* || **The coordinator is an ordinary Orca terminal agent** launched by the dispatcher with explicit argv (model, effort, session id, sandbox and deny settings), not a supervised Dispatch; it owns one orchestration Run for its verifiers and workers, which are started only through `wingmate issue spawn` |
-|| D17 *proposed* || **Agents never hold credentials and never publish.** `issue` verbs write intents to a per-worktree outbox; the dispatcher performs every Linear and GitHub write after deterministic guards (path guard without a lift mechanism in the pilot, secret scan, dependency policy) |
-|| D18 *proposed* || Console v1 scope is Portfolio (with dispatcher tile and queue), List/Board, Issue detail, Inbox (answer, stop, continue, pause), a flat Fleet list and provenance-tagged cost; charts, saved filters, command palette and routing actions move to v1.1/v2 |
+|| D14 || **Trust boundary risk acceptance.** Coordinators, verifiers and workers run unattended as the owner's macOS user; until phase-2 isolation (separate user/VM), file permissions protect nothing from a compromised agent and prompt rules are advisory. The pilot accepts the residual risk because the Linear team has one member, an issue reaches an agent only after the owner labels it, and the enforced controls in §13.3 reduce the blast radius of an injected ticket, comment, web page or dependency. Residuals recorded 2026-10-06 from the Task 0/9 verification: Codex sandboxes do not block reads outside the worktree (Codex stays reviewer-only in the pilot; `verifyCross: false` excludes it); Claude pins the `--settings` file at launch, so deny lists refreshed for later sibling worktrees apply only at the agent's next launch; and while the `orca` CLI is reachable from inside the sandbox an agent can start processes outside it through Orca (the deny rules for those verbs are advisory) — `doctor` reports reachability and the phase-2 remedy is a dispatcher-executed spawn with Orca unreachable from agents |
+|| D15 || **The dispatcher never runs an LLM.** The Orca automation's precheck command *is* the tick; it always exits non-zero so Orca never starts the automation's agent; the tick summary lives in the run record's precheck output and in local state |
+|| D16 || **The coordinator is an ordinary Orca terminal agent** launched by the dispatcher with explicit argv (model, effort, session id, sandbox and deny settings), not a supervised Dispatch; it owns one orchestration Run for its verifiers and workers, which are started only through `wingmate issue spawn` |
+|| D17 || **Agents never hold credentials and never publish.** `issue` verbs write intents to a per-worktree outbox; the dispatcher performs every Linear and GitHub write after deterministic guards (path guard without a lift mechanism in the pilot, secret scan, dependency policy) |
+|| D18 || Console v1 scope is Portfolio (with dispatcher tile and queue), List/Board, Issue detail, Inbox (answer, stop, continue, pause), a flat Fleet list and provenance-tagged cost; charts, saved filters, command palette and routing actions move to v1.1/v2 |
 
 ## 4. Architecture
 
@@ -613,7 +613,8 @@ nextStep }` on refusal; every refusal is a ledger event; `<id>` defaults to the 
 - `ask` — §7.1; refuses on `workers_live` and `question_open`; `--recommend` must be one of `--options`.
 - `note "<text>"` — appends to the status comment's activity line (last 5 kept), secret-scanned.
 - `spawn --role plan-verifier|code-reviewer|security-reviewer|ui-reviewer|worker --spec <file> [--prefer
-  <provider>] [--worktree current|new-child] [--task <id>] [--deps <json>] [--dry-run]` — creates the child Run on
+  <provider>] [--worktree current] [--deps <json>] [--dry-run]` (`--worktree new-child` and `--task` are refused in the
+  pilot, see below) — creates the child Run on
   first use (`run-create` from the coordinator's terminal; records `childRunId`), resolves the provider by role
   (verifier/reviewer: the provider other than the coordinator's when `verifyCross`, else the coordinator's; worker:
   the project's `workers` list in order, `--prefer` first), applies §9.1 availability and §9.2 tier, then
@@ -625,8 +626,10 @@ nextStep }` on refusal; every refusal is a ledger event; `<id>` defaults to the 
   read-only` for verifier and reviewer roles, `workspace-write` without network for workers); waits for `tui-idle`
   (answering the folder-trust dialog, §4.4); then binds the terminal to the Run with `orca orchestration worker-start
   --run <childRunId> --terminal <handle> --spec <file content> --task-title … --json` (model and effort travel in the
-  argv because `--model/--effort` cannot be combined with `--terminal`), journals the receipt, and prints
-  `{ dispatchId, taskId }`. `--worktree new-child` is refused with `new_child_unsupported` in the pilot (a child
+  argv because `--model/--effort` cannot be combined with `--terminal`), and prints the receipt
+  `{ ok, provider, dispatchId, taskId, terminalHandle, runId }` (verbs write only `.wingmate/`; the dispatcher learns the
+  Run from the `run` intent). `--task` is refused with `task_unsupported` (worker-start takes `--task` or `--spec`,
+  never both, so an existing task cannot carry the role header; use `--spec` with `--deps`). `--worktree new-child` is refused with `new_child_unsupported` in the pilot (a child
   worktree needs its own settings file, which an agent cannot write into the dispatcher-owned kit); graph-method
   workers share the issue worktree with exclusive file ownership. `doctor` verifies that the `orca` CLI is reachable
   from inside the kit sandbox; if it is not, spawn becomes a dispatcher-executed outbox intent (phase 2 of this
@@ -667,7 +670,7 @@ nextStep }` on refusal; every refusal is a ledger event; `<id>` defaults to the 
 | 0 Intake | Read the full ticket from `.wingmate/ticket/` (fenced), repo `CLAUDE.md`/`AGENTS.md`; confirm routing (§10.3); choose **Agent Loop** (one component, uncertain investigation) or **Graph** (multi-component, multi-repo, ordering, separable tasks); list assumptions; **clarification gate**: any assumption affecting scope, acceptance or user-visible behavior → one batched question with numbered options and a recommendation | coordinator (best) |
 | 1 Plan | `.wingmate/plan.md`: expected behavior, files, invariants, tests, acceptance checks, risks | coordinator (best) |
 | 2 Plan verification | `spawn --role plan-verifier` (read-only, other provider, same worktree); verdict read from the Dispatch report | verifier (best) |
-| 3 Implement | Loop: coordinator implements with the repo's TDD conventions. Graph: `task-create` DAG with exclusive file ownership → `spawn --role worker` (`new-child` worktrees only when files could collide) | coordinator + workers (standard) |
+| 3 Implement | Loop: coordinator implements with the repo's TDD conventions. Graph: `task-create` DAG with exclusive file ownership → `spawn --role worker` (workers share the issue worktree with exclusive file ownership; `new-child` is refused in the pilot) | coordinator + workers (standard) |
 | 4 Validate | CLI runs the pinned gate commands (argv arrays, no shell) in the worktree and records exit codes and output digests; then `spawn --role code-reviewer` for an adversarial "name the claims" review; ≤ 2 fix rounds | CLI + reviewer (best) |
 | 5 UI / e2e check | Only when `ui.paths` changed: web → project dev command + Orca browser/Playwright smoke at desktop and mobile widths, console/network capture through the gate runner's redacting wrapper; iOS (Bouncr) → Expo on the iOS Simulator via Orca's emulator commands plus `npm verify`; screenshots stay in `.wingmate/evidence/`; UI checks run only while `orca browser identity get` reports `clean` | reviewer (best) |
 | 6 Security | CLI: secret scan over added lines, path guard, dependency policy, `pnpm audit --prod`/`npm audit` where applicable; plus `spawn --role security-reviewer` for untrusted-input/authorization review of touched routes; both must pass | CLI + reviewer (best) |
@@ -719,7 +722,7 @@ status comment (from the receipt's `launch.effective` for `worker-start`, from a
 
 ### 9.3 Workers
 Pool `[claude, codex, cursor, antigravity]`; Cursor and Antigravity are workers only (D9). Gemini is excluded until
-`worker-start --agent gemini` is verified. Workers inherit the coordinator's worktree unless `new-child`.
+`worker-start --agent gemini` is verified. Workers share the coordinator's worktree (`new-child` is refused in the pilot).
 
 ### 9.4 Mid-issue handoff (single rule; §5.2, §6.3, §9.6 and §13.1 cite it)
 Triggers: (a) the coordinator calls `handoff --reason …` and ends its turn; (b) a further `exited` of the current
@@ -1047,28 +1050,39 @@ are advisory; the controls below are enforced in code and verified by `wingmate 
   next tick (≤ 5 min, which `ask` and `finish` tolerate by design) or immediately for Console actions.
   **State ownership:** `~/.local/share/wingmate/` (records, journal, ledger, queue, heartbeat, evidence copies,
   `install.json`, `kit/`, `bin/`) and `~/.config/wingmate/` are dispatcher-owned — written only by `tick`, `ui`,
-  `install`, `doctor`, `stop`, `pause` — and sit in the agents' `denyRead`/`denyWrite` sets, with the single
-  exception of read-and-execute access to the compiled binary so `wingmate issue …` can run. `issue` verbs touch
+  `install`, `doctor`, `stop`, `pause` — and sit in the agents' `denyRead`/`denyWrite` sets, with two read
+  exceptions: read-and-execute access to the compiled binary so `wingmate issue …` can run, and read access to the
+  issue's own kit directory (`kit/<identifier>/`: gitconfig, empty gh config, settings files), which git and `spawn`
+  need. `issue` verbs touch
   only `<worktree>/.wingmate/`, and the dispatcher re-validates every intent it finds there against its own record
   and Orca (gate prerequisites from its record; `workers_live` from `worker-list`; `planVerify` from `worker-show`
   of the named Dispatch; `security` recomputed and `validate` verified at the pushed HEAD at publish; `nothing_to_publish` from git).
 - **(b) Claude sessions in `wm-` worktrees** run with explicit argv `claude --model <id> --effort max --session-id
   <uuid> --permission-mode bypassPermissions --settings ~/.local/share/wingmate/kit/<identifier>/claude-settings.json
-  --strict-mcp-config`, with the environment `GH_TOKEN=` (empty), `GH_CONFIG_DIR=<kit>/gh-empty`,
+  --strict-mcp-config`, with the environment `GH_TOKEN=`, `GITHUB_TOKEN=`, `GH_ENTERPRISE_TOKEN=`, `GITHUB_ENTERPRISE_TOKEN=` (all
+  empty), `GH_CONFIG_DIR=<kit>/gh-empty`,
   `GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL=<kit>/gitconfig` (sets `credential.helper=` and
   `core.hooksPath=<kit>/no-hooks`), `GIT_TERMINAL_PROMPT=0`. The settings file is dispatcher-owned (inside the
   agents' deny region) and contains `sandbox.enabled: true`, `sandbox.allowUnsandboxedCommands: false`,
   `sandbox.failIfUnavailable: true`, `sandbox.autoAllowBashIfSandboxed: true`; **filesystem:** `denyRead: ["~/"]`
-  with `allowRead` for the issue worktree, its child worktrees and the toolchain paths `doctor` discovers;
+  with `allowRead` for the issue worktree, its child worktrees, the toolchain paths `doctor` discovers, the issue's kit
+  directory and the compiled binary;
   `allowWrite`: the issue worktree, its child worktrees, `$TMPDIR`, and within the repo's git common dir only
   `objects/**`, `refs/heads/<worktree.branch>*`, `refs/heads/wm-*`, `logs/**`, `worktrees/<gitdirName>/**`,
-  `packed-refs*` and lock files under those paths; `denyWrite`: `<common>/config`, `<common>/hooks/**`,
-  `<common>/info/**`, `<common>/refs/heads/<base branch>*`, `<common>/refs/remotes/**`, every other
-  `<common>/worktrees/*/**`, `~/.local/share/wingmate/**`, `~/.config/wingmate/**`, `~/.claude/**`, `~/.codex/**`,
+  `packed-refs*` and lock files under those paths (Claude Code ≥ 2.1.291 also grants write access to the git common
+  dir itself, so `denyWrite` is the effective restriction there); `denyWrite`: `<common>/config`, `<common>/hooks/**`,
+  `<common>/info/**`, the common dir's top-level `HEAD`, `index`, `MERGE_HEAD`, `ORIG_HEAD` and `FETCH_HEAD`,
+  `<common>/refs/heads/<base branch>*`, `<common>/refs/remotes/**`, `<common>/remotes/**`, `<common>/branches/**`,
+  `<common>/modules/**/hooks/**`, `<common>/modules/**/config`, every other worktree's gitdir and branch ref by name
+  (enumerated by the dispatcher and refreshed before each launch, because Claude pins the settings file at launch),
+  `~/.local/share/wingmate/**`, `~/.config/wingmate/**`, `~/.claude/**`, `~/.codex/**`,
   `~/.gitconfig`, `~/.ssh/**`; **network:** `sandbox.network.allowedDomains` = `defaults.sandbox.allowedDomains` ∪
   the repo's list (registries and provider API hosts only — never `github.com`, `api.github.com`,
   `*.githubusercontent.com`, `gitlab.com`, `vercel.com`, `*.supabase.co`, `*.neon.tech`; a project needing a GitHub
-  read, e.g. a submodule, lists it explicitly with the reason); **`permissions.deny`:** `Read(~/.config/wingmate/**)`,
+  read, e.g. a submodule, lists it explicitly with the reason), with `sandbox.network.strictAllowlist: true` (without
+  it the list is advisory under `bypassPermissions` — verified 2026-10-06) and `sandbox.network.deniedDomains` = the
+  hosts just listed; **`permissions.deny`:** `WebFetch`, `WebSearch` (in-process tools sit outside the sandbox
+  filter), `Read(~/.config/wingmate/**)`,
   `Read(~/.ssh/**)`, `Read(~/.config/gh/**)`, `Read(~/.claude/**)`, `Read(~/.codex/**)`, `Read(**/.env*)`;
   `Bash(orca linear comment *)`, `status *`, `label *`, `save-issue *`, `assignee *`, `create *`, `attach *`,
   `relation *`, `priority *`, `estimate *`, `due-date *`; `Bash(orca eval *)`, `cookie *`, `tab *`, `automations *`,
@@ -1081,21 +1095,27 @@ are advisory; the controls below are enforced in code and verified by `wingmate 
   `Bash(gh pr merge *)`, `Bash(gh api *)`, `Bash(gh secret *)`, `Bash(gh workflow *)`, `Bash(gh release *)`,
   `Bash(gh repo *)`, `Bash(vercel *)`, `Bash(eas *)`, `Bash(neonctl *)`, `Bash(npx neonctl *)`, `Bash(git reset
   --hard *)`, `Bash(git branch -D *)`, `Bash(git switch *)`, `Bash(git checkout -b *)`, and the Linear MCP write
-  tools (`mcp__*Linear__save_*`, `create_*`, `delete_*`). Worker sessions additionally deny `Bash(orca orchestration
-  worker-start *)`, `run-create *`, `task-create *`. Deny rules are prefix matches on the command string and can be
+  tools (`mcp__*Linear__save_*`, `create_*`, `delete_*`). Every non-coordinator role (verifiers, reviewers, workers)
+  runs under its own dispatcher-written `claude-settings.<role>.json` and additionally denies `Bash(orca orchestration
+  worker-start *)`, `run-create *`, `task-create *`, `dispatch *` and `wingmate issue … spawn`. Deny rules are prefix matches on the command string and can be
   dodged by `sh -c`, absolute paths, `env`, `git -C` or a script file: they stop a well-behaved agent, not a
   compromised one. The sandbox is the hard layer because its policy is loaded from a file the agent cannot write and
   cannot opt out of per command; `doctor` runs a sandboxed probe from a `wm-` worktree that must fail `git
-  ls-remote origin`, `gh api user`, a read of `~/.config/wingmate/credentials.json` and a write to
-  `<common>/hooks/pre-commit`, and must succeed at `git commit` — any inverted result is a `doctor` failure.
-- **(c) Codex sessions** run `codex -C <worktree> --model <id> -c model_reasoning_effort=<e> --ask-for-approval
-  never -c project_doc_max_bytes=0` with `--sandbox read-only` for verifier and reviewer roles (they read a local
+  ls-remote origin`, `gh api user`, a read of `~/.config/wingmate/credentials.json`, a write to
+  `<common>/hooks/pre-commit`, a write to another worktree's gitdir and an HTTPS request to a host outside the
+  allowlist, and must succeed at `git commit`, `wingmate issue <id> show` and a request to an allowlisted registry —
+  any inverted result is a `doctor` failure. `doctor` also reports whether the `orca` CLI is reachable from inside
+  the sandbox (see D14).
+- **(c) Codex sessions** run `codex -C <worktree> --model <id> -c model_reasoning_effort=<e> -c
+  approval_policy=never -c project_doc_max_bytes=0` with `--sandbox read-only` for verifier and reviewer roles (they read a local
   diff and report through `orchestration send`) and `--sandbox workspace-write -c
   sandbox_workspace_write.network_access=false` for workers. Codex has no deny-rule mechanism: every `orca`, `gh`
   and `git` verb is callable from a Codex session, and its sandbox restricts writes and network but not reads
   outside the worktree. Therefore `doctor` verifies on the installed CLI that `network_access=false` blocks outbound
   TCP and whether reads of `~/.config/wingmate/credentials.json` are blocked; until verified, Codex is limited to
-  verifier and reviewer roles and the coordinator cascade is `[claude]`. If reads are not blocked, D14 records
+  verifier and reviewer roles and the coordinator cascade is `[claude]`. Verified 2026-10-06: reads are not blocked, so
+  the pilot keeps Codex to verifier/reviewer roles (`providers.coordinatorCascade: [claude]`, `providers.workers:
+  [claude]`) pending the owner's decision on the D14 extension. If reads are not blocked, D14 records
   explicitly that Codex sessions can read every file of the owner's user, and the owner may set `verifyCross:
   false` per project to keep Codex out entirely.
 - **(d) Publishing is a dispatcher action.** Agents never run `git push`, `gh pr create/merge`, `gh secret`, `gh
@@ -1274,7 +1294,7 @@ wingmate scan [--json]                               plan only; writes queue.jso
 wingmate issue <id> gate <stage> [--verdict PASS|FAIL|NA] [--evidence <path>] [--note …] [--method loop|graph] [--dispatch <id>]
 wingmate issue <id> ask --question-file <path> [--options a,b,c] [--recommend b] | --append <qid> | --reask <qid>
 wingmate issue <id> note "…"
-wingmate issue <id> spawn --role plan-verifier|code-reviewer|security-reviewer|ui-reviewer|worker --spec <file> [--prefer <p>] [--worktree current|new-child] [--task <id>] [--deps <json>] [--dry-run]
+wingmate issue <id> spawn --role plan-verifier|code-reviewer|security-reviewer|ui-reviewer|worker --spec <file> [--prefer <p>] [--worktree current] [--deps <json>] [--dry-run]
 wingmate issue <id> run --id <runId>
 wingmate issue <id> finish --summary-file <path> [--title …] [--draft] [--repo <name>]…
 wingmate issue <id> handoff --reason <code> [--repo <name>]
