@@ -16,6 +16,9 @@
 # --allow-empty` fail ("pathspec '.' did not match") in a repo without tracked files, sandbox or not.
 # One `claude -p` run: it spends quota.
 #
+# NOTE: check (7) FAILED on this machine: `allowedDomains` alone does not block github.com under bypassPermissions. Do not copy this
+# script's network block into a kit; claude-network-spike.sh found the settings that do (`strictAllowlist`, `deniedDomains`).
+#
 # Side effects: /tmp/wm-sandbox-spike.XXXX (main repo), /tmp/wm-sandbox-spike.XXXX-wt (linked worktree) and
 # /tmp/wm-kit.XXXX (kit + result files) are LEFT IN PLACE so the results can be read — delete them afterwards. A CANARY
 # ~/.config/wingmate/credentials.json is created only when that file is ABSENT and is removed again on exit; an existing

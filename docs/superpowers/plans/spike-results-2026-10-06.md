@@ -18,7 +18,7 @@ model (`gpt-6.1-sol` in the exec banner).
 | 1 | Terminal-agent launch (`terminal create --command`, `tui-idle`, `send --wait-submit`, `--effort max`, resume) | `bun spikes/orca-launch-spike.ts` | **Verified, with one new blocker.** `terminal create` ✓; `terminal wait --for tui-idle` returned `satisfied:true` — except on the first launches, before Claude's folder-trust dialog had ever been answered for this repo, where it returned `satisfied:false` with `blockedReason:"agent-trust-workspace"` (default option of the dialog: **"No, exit"**; §3.2 says what is and is not known about where trust is stored). After the dialog is answered (Down, Enter) `satisfied:true`; `send … --wait-submit 15` receipt `stages:["input_accepted","turn_started"]` in ~2 s; `--effort max` accepted; `claude --resume <id>` restores the transcript in the same worktree. | No default applied. **Task 8 must branch on `blockedReason`** (the spec's "wait once more with 180000" does not help: the wait returns early, not on timeout) and must never send the brief into the dialog (Enter selects "No, exit" and the agent exits). `result.terminal.handle` / `.paneKey` are nested (not `result.handle`). §3.1, §3.2. |
 | 2 | `worktree ps` / `terminal list` vocabulary: working, turn-ended, exited, unverifiable | same script; `bun spikes/orca-vocab-capture.ts` | **Verified for working / idle / exited.** working = `agents[].state:"working"`; turn ended = `state:"done"`; exited = handle absent from `terminal list` **and** the `agents[]` entry removed. **The spec's "`worktree ps` retains `done` entries for closed tabs" was NOT reproduced** (natural `/exit`, `terminal close --terminal`, `terminal close --worktree … --all` all remove the entry). Fixtures captured. `unverifiable` cannot be produced by a spike. | `exited` default holds ("absent from `terminal list`"); the "ignore retained entries" clause is harmless but moot. `unverifiable`: *default applied* (spec §5.5 definition). `agentIdentity` is **optional** on rows (absent on plain shells). §3.3, §4. |
 | 3 | `spawn` from a terminal coordinator (`run-create` binds the terminal; `worker-start --run <id> --worktree current` at depth 1) | — | **Not exercised.** Needs a coordinator agent turn, a Run and a worker (persistent orchestration records); outside Task 0's brief and its approved side effects. Only the vocabulary of existing workers was captured (`projection.liveness.verdict` ∈ `exited`, `unverifiable`; no `live` row among the newest 100). | *Default applied*: force method `loop`; verifiers run as unsupervised terminals (`terminal create --command` + `send`), ledgered as such. |
-| 4 | Claude sandbox via `--settings` outside the worktree | `bash spikes/claude-sandbox-spike.sh`; `claude sandbox status` | **Verified** for: settings load from outside the worktree (`claude sandbox status` with `--settings` → `enabled:true`, `strictMode:true`, `autoAllowBashIfSandboxed:true`, each with `source:"policy"`; without it `enabled:false`), `denyRead ~/` (`Operation not permitted`), `allowWrite`/`denyWrite` globs, worktree write, **`git commit` in a linked worktree under the §13.3(b) common-dir allow-list**, write to `<common>/hooks/pre-commit` blocked, `gh api user` fails. (`allowUnsandboxedCommands:false` is *not* separately proven: the CLI does not say what `strictMode` maps to, and no opt-out was attempted.) **NOT verified / failed: the network allowlist** — `git ls-remote https://github.com/git/git.git HEAD` (public) **returned a ref**, so `sandbox.network.allowedDomains: ["registry.npmjs.org"]` did **not** block `github.com` under `-p --permission-mode bypassPermissions`. The brief's private-repo check (2) failed only on auth (`could not read Username … terminal prompts disabled`), so it alone would have *looked* like a pass. | The §16.1 default applies **to the network control**: `doctor` fails and `install --enable` is refused until a remedy is verified (§3.4 lists untested candidates: `sandbox.network.deniedDomains`, `allowManagedDomainsOnly`, a non-bypass permission mode, host-level egress control). GitHub *credentials* are absent from the agent environment regardless (`GH_TOKEN=`, empty `GH_CONFIG_DIR`, empty `credential.helper`; checks 2 and 5 failed on auth), so authenticated GitHub actions fail; by inference the residual exposure is open egress (reads of public hosts, possible exfiltration). Other §13.3(b) facts for Task 9/12: `$(brew --prefix)` must be in `allowRead`; `GIT_CONFIG_GLOBAL` kit file is mandatory. |
+| 4 | Claude sandbox via `--settings` outside the worktree | `bash spikes/claude-sandbox-spike.sh`; `claude sandbox status`; follow-up `bash spikes/claude-network-spike.sh deny` and `… strict` | **Verified** for: settings load from outside the worktree (`claude sandbox status` with `--settings` → `enabled:true`, `strictMode:true`, `autoAllowBashIfSandboxed:true`, each with `source:"policy"`; without it `enabled:false`), `denyRead ~/` (`Operation not permitted`), `allowWrite`/`denyWrite` globs, worktree write, **`git commit` in a linked worktree under the §13.3(b) common-dir allow-list**, write to `<common>/hooks/pre-commit` blocked, `gh api user` fails. (`strictMode:true` appears exactly when the file sets `allowUnsandboxedCommands:false`: minimal probe files without it report `strictMode:false`; no per-command opt-out of the sandbox was attempted.) **`allowedDomains` alone does not block anything:** with only `allowedDomains: ["registry.npmjs.org"]`, `git ls-remote https://github.com/git/git.git HEAD` (public) **returned a ref** under `-p --permission-mode bypassPermissions` (the brief's private-repo check (2) failed only on auth, so it alone would have *looked* like a pass). **Follow-up (§3.4a, two more runs): `deniedDomains` and `strictAllowlist: true` are both enforced from the `--settings` file.** Listed hosts (exact and the `*.githubusercontent.com` wildcard) are refused with `CONNECT tunnel failed, response 403`; with `strictAllowlist` *every* unlisted host is (github.com, example.com, pypi.org), the allowed registry answers `200`, a per-command `allowed_domains` widening is refused and a proxy-ignoring client cannot resolve hosts. `allowManagedDomainsOnly` is read from managed settings only (a no-op from `--settings`: source reading, not run). | **Task 9 sets `sandbox.network.strictAllowlist: true`** with `allowedDomains` = registries/provider hosts, and puts the GitHub/GitLab/Vercel/Supabase/Neon hosts in `deniedDomains` as defense in depth (deny is evaluated first; this exact combination was not run as one probe). The §16.1 default (`doctor` fails, `install --enable` refused) therefore no longer applies to the network control. For `doctor` (Task 12): `claude --settings <file> doctor` must print no "Invalid settings" section (an invalid value silently drops the whole sandbox block), `claude sandbox status` must report `enabled:true, strictMode:true`, and a sandboxed probe must show `<sandbox_violations> deny network-outbound github.com:443 (host is not on the allow list)`. In-process tools (WebFetch/WebSearch, MCP) are **not** gated by the sandbox; deny them in `permissions.deny` if fetch-URL exfiltration matters. Other §13.3(b) facts for Task 9/12: `$(brew --prefix)` must be in `allowRead`; the `GIT_CONFIG_GLOBAL` kit file is mandatory. |
 | 5 | Codex flags and sandbox | `bash spikes/codex-flags-spike.sh` | **Verified.** `--sandbox read-only|workspace-write` ✓; `-c model_reasoning_effort=xhigh` ✓ (banner `reasoning effort: xhigh`); `-c project_doc_max_bytes=0` ✓ (AGENTS.md codeword did not reach the model; no control run); `-c sandbox_workspace_write.network_access=false` ✓ (`curl: (6) Could not resolve host`). **`codex exec` rejects `--ask-for-approval`/`-a`** (`error: unexpected argument '--ask-for-approval' found`); the interactive `codex` accepts it; the `exec` equivalent `-c approval_policy=never` works (banner `approval: never`). **Reads outside the worktree are NOT blocked** (credentials canary printed under `--sandbox read-only`). | **D14 extension: Codex sessions can read the owner's files** — for the owner's confirmation per §13.3(c). Until confirmed the §16.1 default holds: Codex limited to verifier/reviewer roles, cascade `[claude]`, `verifyCross:false` available per project. Task 9 builds the Codex argv for the **interactive** form (accepted: `codex -C <dir> --ask-for-approval never --sandbox … -c …`). |
 | 6 | Linear app actor / label group / mention markup / `client_credentials` / notification test | — | **Not exercised** (needs the owner's OAuth app; Task 0's brief defers it to Task 12's `doctor`). | *Default applied*: subscription as the only delivery path; plain-text names; `doctor` blocks `install --enable` until the notification test passes. |
 | 7 | Automation precheck running the whole tick (`--precheck-timeout 240` honored; stdout stored on skipped runs) | — (read-only: `orca automations list`, `agent-context`) | **Not exercised** (needs creating an automation). Facts: `--precheck` and `--precheck-timeout` exist on both `automations create` and `automations edit`; existing automations show `precheck: { command, timeoutSeconds }` with `timeoutSeconds` 60 and 120 (or `precheck: null`). | *Default applied*: `claimsPerTick` 1 and tick budget 50 s until Task 12/13 verifies 240. |
@@ -37,7 +37,8 @@ model (`gpt-6.1-sol` in the exec banner).
    '.' did not match any file(s) known to git` in a repo without tracked files, sandbox or not (verified offline). The
    trailing `.` reads as sentence punctuation; the spike drops it.
 3. **Check (2) cannot prove the network allowlist** (private repo ⇒ fails on auth either way). Controls (7) public
-   repo and (8) allowed domain were added; (7) is what exposed the failed allowlist.
+   repo and (8) allowed domain were added; (7) is what exposed the failed allowlist, and the follow-up in §3.4a found the settings that do
+   enforce a network control.
 4. **git dies under `denyRead ~/`** (`fatal: unable to access '/Users/jujufugh/.gitconfig': Operation not permitted`;
    verified offline with `sandbox-exec`). With `GIT_CONFIG_GLOBAL` pointing at a readable kit file git works (a
    warning remains: `unable to access '~/.config/git/ignore'`). The brief's script lacked the §13.3(b) environment.
@@ -202,23 +203,90 @@ Quota-free posture check (usable by `doctor` without a model call): `claude --se
 `{"enabled":true,"enabledSource":"policy","strictMode":true,"strictModeSource":"policy","filesystemPolicy":"strict",
 "autoAllowBashIfSandboxed":true,"autoAllowBashIfSandboxedSource":"policy",…}`; without `--settings`: `enabled:false,
 enabledSource:"off", strictMode:false, autoAllowBashIfSandboxedSource:"default"` (`filesystemPolicy:"strict"` appears
-either way, so it proves nothing about our file). The `policy` source on the three settings that `--settings` supplied
+either way, so it proves nothing about our file). `strictMode` is `true` only for files that set `allowUnsandboxedCommands: false`
+(minimal probe files without it reported `strictMode:false`). The `policy` source on the three settings that `--settings` supplied
 indicates the flag is a policy-tier source that user/project settings should not override (inference from the label).
-It reports only enabled/strict/Bash-auto-allow: it says nothing about the network allowlist.
+It reports only enabled/strict/Bash-auto-allow: it says nothing about the network allowlist (see §3.4a).
 
-**Why (7) matters and what to try (untested: only one `claude -p` run was approved).** The installed binary's strings show
-`sandbox.network.deniedDomains` (a bare `"*"` and `host:port` entries are accepted) and `network.allowManagedDomainsOnly`
-("only managed settings may set it"). Hypothesis, unconfirmed: domains outside `allowedDomains` trigger a permission ask
-that `bypassPermissions` auto-grants. Candidates for Task 9/12 to verify with one more `claude -p`: (a) add
-`"deniedDomains":["*"]` next to `allowedDomains`; (b) `allowManagedDomainsOnly:true` inside the `--settings` file (policy
-tier); (c) a permission mode that does not auto-grant network asks; (d) egress control outside Claude.
+**Check (7) showed that `allowedDomains` alone is not a network control; §3.4a (two follow-up runs) finds the settings that are.**
 
-Not tested here: an attempt to opt out of the sandbox per command (the probe told the model not to work around failures;
-the Bash tool's input had only `command` and `description` keys); a write outside every `allowWrite` path other than the
-denied hooks directory; production-like locations. The spike dirs live under `/tmp`, which `denyRead ~/` does not
+Not tested here: an attempt to opt out of the sandbox per command with `dangerouslyDisableSandbox` (the probe told the model
+not to work around failures); a write outside every `allowWrite` path other than the denied hooks directory;
+production-like locations. The spike dirs live under `/tmp`, which `denyRead ~/` does not
 cover, whereas real worktrees and the git common dir (`~/orca/projects/<repo>/.git`) are under `~/`: whether the common
 dir must be in `allowRead` (the spec lists only worktrees and toolchain paths) is **unverified** and is exactly what
 Task 12's `doctor` probe from a real `wm-` worktree will show.
+
+### 3.4a Network control follow-up (two more `claude -p` runs: `deny` and `strict`)
+
+**Question.** In §3.4 `allowedDomains: ["registry.npmjs.org"]` did not block github.com. Which `sandbox.network` setting, loaded
+from a dispatcher-owned `--settings` file, does? **Method.** `bash spikes/claude-network-spike.sh <variant>`; the harness is that
+of `claude-sandbox-spike.sh` (same filesystem lists, §13.3(b) environment, `-p --permission-mode bypassPermissions
+--strict-mcp-config --no-session-persistence`, linked scratch worktree, stream-json, canary credentials file) and only the
+`sandbox.network` block differs. The model ran each command as one Bash call.
+
+| run | `sandbox.network` | cost |
+|---|---|---|
+| A `deny` | `{"allowedDomains":["registry.npmjs.org"],"deniedDomains":["github.com","api.github.com","*.githubusercontent.com","example.com"]}` | $0.75, 8 turns |
+| B `strict` | `{"allowedDomains":["registry.npmjs.org"],"strictAllowlist":true}` | $0.76, 9 turns |
+
+Quota-free pre-checks, both runs: `claude --settings <file> sandbox status` → `enabled:true, enabledSource:"policy",
+strictMode:true`; `claude --settings <file> doctor` → no "Invalid settings" section. Run A used an earlier revision of the script
+(commands (1)–(7), `--debug-file` instead of `SRT_DEBUG`, a stricter output classifier); Run B the committed one (adds (8) and `SRT_DEBUG=1`).
+
+Results (*blocked* = exit 56 `curl: (56) CONNECT tunnel failed, response 403` / exit 128 for git, followed by a `<sandbox_violations>`
+block in the tool result; *reachable* = HTTP status printed, exit 0):
+
+| # | command | A: `deniedDomains` | B: `strictAllowlist` |
+|---|---|---|---|
+| 1 | `git ls-remote https://github.com/git/git.git HEAD` | **blocked** — `fatal: unable to access 'https://github.com/git/git.git/': CONNECT tunnel failed, response 403`; `deny network-outbound github.com:443 (host is on the deny list)` | **blocked** — same message; `deny network-outbound github.com:443 (host is not on the allow list)` |
+| 2 | `curl -sS -m 10 -o /dev/null -w "%{http_code}" https://api.github.com/zen` | **blocked** — exit 56, `000`; `api.github.com:443 (host is on the deny list)` | **blocked** — exit 56, `000`; `(host is not on the allow list)` |
+| 3 | same, `https://example.com/` | **blocked** — `example.com:443 (host is on the deny list)` | **blocked** — `(host is not on the allow list)` |
+| 4 | same, `https://pypi.org/` | **reachable — `200`** (not listed anywhere) | **blocked** — `pypi.org:443 (host is not on the allow list)` |
+| 5 | same, `https://registry.npmjs.org/` | reachable — `200` | reachable — `200 exit=0` |
+| 6 | same, `https://raw.githubusercontent.com/git/git/master/README.md` (extra) | **blocked** by the wildcard `*.githubusercontent.com` — `raw.githubusercontent.com:443 (host is on the deny list)` | **blocked** — `(host is not on the allow list)` |
+| 7 | (2) again with the Bash tool parameter `allowed_domains:["api.github.com"]` (extra) | **blocked** — the model did pass the parameter (the Bash tool has it); the deny list still won: same 403 | **refused before running** — `<tool_use_error>allowed_domains cannot widen network access in this session: the configured sandbox allowlist is the whole allowlist here (a managed-domains-only or strictAllowlist policy, or a confined evaluation run). Remove allowed_domains and use a host the configured allowlist already covers.</tool_use_error>` |
+| 8 | (2) again with `curl --noproxy "*"` (extra, run B only) | not run | **blocked** — `curl: (6) Could not resolve host: api.github.com`, `000 exit=6`: a client that ignores the sandbox proxy cannot resolve hosts |
+
+Run B's stderr with `SRT_DEBUG=1` (the sandbox runtime's own decision log, 44 lines): `[SandboxDebug] Mux proxy (HTTP+SOCKS) listening on
+localhost:62713`; 28 × `[Sandbox macOS] Applied restrictions - network: true, read: denyAllExcept, write: denyAllExcept` (one for each
+wrapped process); per blocked host `No matching config rule, denying: <host>:443` followed by `Connection blocked to <host>:443`
+(github.com, api.github.com, example.com, pypi.org, raw.githubusercontent.com); and `Allowed by config rule: registry.npmjs.org:443`.
+
+**Answers.**
+* **(a) Which key blocks github.com:** both `deniedDomains` (named hosts and the `*.githubusercontent.com` wildcard; it beat the per-command
+  `allowed_domains` grant in run A, and by the code's evaluation order it also beats `allowedDomains`) and `strictAllowlist: true` (closes the
+  allowlist: everything not in `allowedDomains` is denied). `allowedDomains` alone blocks nothing. `allowManagedDomainsOnly` was **not run**: the
+  binary reads it from managed/policy settings only (`Yu()`, which excludes the `--settings` source), so from a `--settings` file it is accepted
+  without error (`claude --settings <file> doctor` prints no "Invalid settings" section for it; `sandbox status` shows nothing) and, by the code,
+  ignored; honoring it would need a root-owned `/Library/Application Support/ClaudeCode/managed-settings.json` (absent here). The fallback
+  `deniedDomains:["*"]` was not needed; it would also block npm, because a denied host is refused even when `allowedDomains` lists it.
+* **(b) Hosts outside `allowedDomains` that are not GitHub:** in run A (no strict mode) **pypi.org is reachable** (example.com was blocked there
+  only because it is on the deny list), so the allowlist is **advisory** under `bypassPermissions`, and github.com is **not** a built-in allowed
+  domain: with `strictAllowlist` github.com, example.com and pypi.org are all blocked. Mechanism (source reading of Claude Code 2.1.291; the runtime's host filter): `deniedDomains` → `allowedDomains`
+  (merged across settings sources and `WebFetch(domain:X)` allow rules; the owner's `WebFetch(*)` does **not** merge) → if `strictAllowlist`: deny →
+  per-command `allowed_domains` → if there is no ask callback: deny → otherwise **ask the permission system**, which `bypassPermissions` grants
+  (inferred from the code and from run A's pypi.org; run A had no `SRT_DEBUG`, so the "asking" line itself was not captured).
+  Per the schema text and code (not exercised by a run), `strictAllowlist` is honored from user, managed or `--settings` sources only, and while it is
+  on, `WebFetch(domain:…)` allow rules are not merged into the sandbox allowlist and project/local `allowedDomains` are ignored.
+* **(c) Consequence for Task 9:** write `strictAllowlist: true` plus `allowedDomains` (registries and provider hosts per project) into the kit's
+  `claude-settings.json`, and list the GitHub/GitLab/Vercel/Supabase/Neon hosts (including wildcards such as `*.githubusercontent.com`) in
+  `deniedDomains` so a mistaken `allowedDomains` entry cannot re-open them. That combination follows from the verified evaluation order but was not run
+  as one probe. The sandbox filter applies to sandboxed commands only: the schema text says in-process tools such as WebFetch are **not** gated by
+  `strictAllowlist` (WebSearch and MCP servers also sit outside the Bash sandbox — inference), and the owner's user settings allow `WebFetch(*)`; Task 9
+  should add `WebFetch` and `WebSearch` to the kit's `permissions.deny` (deny wins) for roles that do not need them. Not tested in a run.
+
+**Also learned (quota-free).** `claude --settings <file> doctor </dev/null` prints an "Invalid settings" section naming the file and key path, e.g.
+`sandbox.network.strictAllowlist: Expected boolean, but received string`. An invalid value silently drops the **whole** sandbox block
+(`claude sandbox status` → `enabled:false, enabledSource:"off"`) and `sandbox status` prints no error, while unknown keys are tolerated; `doctor` must
+therefore check the Invalid-settings section and `enabled:true, strictMode:true`. The Bash tool of this version has an `allowed_domains` parameter
+(per-command network grants); with `strictAllowlist` it is refused (row 7). A blocked host is reported to the model as a `<sandbox_violations>`
+block (`deny network-outbound <host>:<port> (host is on the deny list | host is not on the allow list)`), a stable signature for `doctor`.
+
+**Limits.** One run per variant. The `managed-only` and `deny-all` variants exist in the script but were not run. Direct TCP to a literal IP address
+(not a host name) was not tried; the proxy-ignoring client failed at name resolution, and the runtime logs network restrictions as applied to each
+wrapped process (`network: true`), which I read as the OS-level profile blocking direct egress. The model appended `; echo "exit=$?"` to its commands in run B, so a failing command shows `is_error:false`
+there; the classifier in the script reads the content.
 
 ### 3.5 Codex (CLI 0.160.1)
 
@@ -331,8 +399,11 @@ in the uncommitted raw capture; no committed file contains it). Sampling: `workt
 
 ## 7. Concerns and recommendations
 
-1. **Network allowlist not enforced (blocking for `install --enable` as specified).** §3.4. Needs one more `claude -p`
-   run (approval was for one) to test `deniedDomains:["*"]` / `allowManagedDomainsOnly` / permission mode.
+1. **Network control: resolved by the follow-up (§3.4a).** `allowedDomains` alone does not block anything under `bypassPermissions`; `strictAllowlist: true`
+   and `deniedDomains` are enforced from the `--settings` file. Task 9 must write `strictAllowlist: true` (+ `allowedDomains`, + `deniedDomains` for the
+   GitHub/GitLab/Vercel/Supabase/Neon hosts); `doctor` must verify it (Invalid-settings section, `sandbox status`, a `<sandbox_violations>` probe). Still open:
+   the combined `strictAllowlist` + `deniedDomains` file was not run as one probe; WebFetch/WebSearch/MCP are not gated by the sandbox (deny them in
+   `permissions.deny`); `allowManagedDomainsOnly` (managed settings only) was not run.
 2. **Trust dialog.** §3.2. The launch step and `doctor` need an explicit design (park vs answer; per-repo trust check).
 3. **Codex reads are unrestricted** — D14 extension for the owner's confirmation (§3.5).
 4. **Spec §5.5 "retained `done` entries"** does not occur on Orca 1.4.220; the liveness code can rely on "handle absent
@@ -341,8 +412,9 @@ in the uncommitted raw capture; no committed file contains it). Sampling: `workt
    (`method loop` fallback); it needs a coordinator turn plus a Run and could be verified at the start of slice 2.
 6. **Side effects beyond the brief.** Three scratch worktrees (`wm-spike-a628dfa4`, `wm-spike-f3e64acb`,
    `wm-spike-3a04789d`) were created and removed (verified: none in `orca worktree ps`, no `wm-spike*` branch, no
-   directory); one `claude -p` run (`$0.84`); two Claude TUI sessions with one trivial turn each (the exploration's
-   turn showed `$1.37`) plus no-turn resumes; two `codex exec` runs. Claude Code itself updated `~/.claude.json` (trust for this repo and
-   `lastSessionId`/cost fields on the main-checkout entry; no scratch-path entry remains). Four small
-   temp directories remain under `/tmp` (`wm-kit.G1S0`, `wm-sandbox-spike.VIBo`, `wm-sandbox-spike.VIBo-wt`,
-   `wm-codex-spike.lZuY`; no secrets; the canary credentials file was removed and `~/.config/wingmate` does not exist).
+   directory); three `claude -p` runs (`$0.84` for §3.4, then `$0.75` and `$0.76` for the §3.4a follow-up, which created no Orca worktree); two Claude TUI
+   sessions with one trivial turn each (the exploration's turn showed `$1.37`) plus no-turn resumes; two `codex exec` runs. Claude Code itself updated
+   `~/.claude.json` (trust for this repo and `lastSessionId`/cost fields on the main-checkout entry; no scratch-path entry remains). Temp directories
+   under `/tmp` that the spikes leave in place (no secrets; the canary credentials file was removed after every run and `~/.config/wingmate` does not
+   exist): from §3.4 and §3.5 `wm-kit.G1S0`, `wm-sandbox-spike.VIBo`, `wm-sandbox-spike.VIBo-wt`, `wm-codex-spike.lZuY`; from §3.4a `wm-kit.irtk`,
+   `wm-sandbox-spike.8dOf`, `wm-sandbox-spike.8dOf-wt` (run A) and `wm-kit.lTLM`, `wm-sandbox-spike.OuYf`, `wm-sandbox-spike.OuYf-wt` (run B).
