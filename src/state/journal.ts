@@ -7,6 +7,12 @@ import type { Clock } from "../shared/time";
 import { iso } from "../shared/time";
 import { readText, writeAtomic } from "./fs";
 
+/**
+ * Appendix D's kinds. Slice 1 journals the Linear writes and the multi-step claim and publish (F9): the Orca mutation kinds are
+ * reserved — those writes are ledgered, made idempotent from the record (a handle persisted right after `terminal create`, the
+ * claim's terminal adopted from `terminal list`, a worktree the fleet no longer lists never removed twice, `terminal close --all`
+ * idempotent by construction), and `--retry-request` replay is not built yet.
+ */
 export const JOURNAL_KINDS = [
   "commentCreate",
   "commentUpdate",

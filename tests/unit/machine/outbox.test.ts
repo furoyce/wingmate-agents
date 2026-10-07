@@ -192,6 +192,40 @@ describe("executeOutbox: F7 — an agent-planted symlink never redirects an outb
   });
 });
 
+describe("executeOutbox: F8 — a `run` intent adopts only a Run this coordinator owns (§8.1, §13.3 a)", () => {
+  const runIntent = (wt: string, runId: string) =>
+    writeIntent(wt, { issue: ID, kind: "run", payload: { runId } });
+  const lastFailure = async (w: World) =>
+    (await w.ctx.ledger.readIssue(ID)).filter((e) => e.type === "intent_failed").at(-1)?.data;
+
+  test("a Run orca run-list does not know is refused (a counted failure); nothing is adopted", async () => {
+    const { w, wt } = await claimed();
+    await runIntent(wt, "run_ghost");
+    const { r, res } = await drain(w);
+    expect(res).toMatchObject({ executed: 0, failed: 1 });
+    expect(r.coordinator.childRunId).toBeNull();
+    expect(await lastFailure(w)).toMatchObject({ code: "run_unknown", counted: true });
+  });
+
+  test("another issue's Run (coordinated by another terminal) is refused; the coordinator's own Run is adopted", async () => {
+    const { w, wt, r: claimedRec } = await claimed();
+    w.orca.runs = [
+      { id: "run_foreign", coordinatorHandle: "term_99" },
+      { id: "run_mine", coordinatorHandle: claimedRec.coordinator.terminalHandle },
+    ];
+    await runIntent(wt, "run_foreign");
+    const foreign = await drain(w);
+    expect(foreign.r.coordinator.childRunId).toBeNull();
+    expect(await lastFailure(w)).toMatchObject({ code: "run_not_owned", counted: true });
+    const { w: w2, wt: wt2, r: r2 } = await claimed();
+    w2.orca.runs = [{ id: "run_mine", coordinatorHandle: r2.coordinator.terminalHandle }];
+    await runIntent(wt2, "run_mine");
+    const mine = await drain(w2);
+    expect(mine.res).toMatchObject({ executed: 1, failed: 0 });
+    expect(mine.r.coordinator.childRunId).toBe("run_mine");
+  });
+});
+
 describe("executeOutbox: agent-named files go through worktreeFile()", () => {
   test("a question file that is a symlink is refused (file_invalid) and never read or posted", async () => {
     const { w, wt } = await claimed();

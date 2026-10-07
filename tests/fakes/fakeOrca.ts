@@ -28,6 +28,10 @@ export class FakeOrca implements OrcaPort {
   rows = new Map<string, FleetRow>();
   terminals = new Map<string, TerminalRow[]>();
   workers = new Map<string, WorkerRow[]>();
+  /** `orchestration run-list` rows (F8: a `run` intent is adopted only for a Run listed here with the coordinator's handle). */
+  runs: { id: string; coordinatorHandle: string | null }[] = [];
+  /** Runs `worker-list` cannot list (a deleted or made-up Run): the call fails as the CLI wrapper reports it. */
+  failRuns = new Set<string>();
   rateLimits: RateLimits = {
     claude: {
       status: "ok",
@@ -154,7 +158,8 @@ export class FakeOrca implements OrcaPort {
   async worktreeRm(id: string) {
     await this.rec("worktreeRm", id);
     const row = this.rows.get(id);
-    if (this.root && row && existsSync(row.path)) {
+    if (!row) throw new OrcaError("orca_error", `fake orca: no worktree ${id}`); // as Orca reports an unknown id
+    if (this.root && existsSync(row.path)) {
       const main = join(this.root, "repos", row.repoId);
       await git(["-C", main, "worktree", "remove", "--force", row.path]);
       await git(["-C", main, "branch", "-D", row.branch]);
@@ -224,6 +229,7 @@ export class FakeOrca implements OrcaPort {
   }
   async workerList(runId: string) {
     await this.rec("workerList", runId);
+    if (this.failRuns.has(runId)) throw new OrcaError("orca_error", `fake orca: no run ${runId}`);
     return structuredClone(this.workers.get(runId) ?? []);
   }
   async workerStop(d: string, retry: string) {
@@ -248,7 +254,8 @@ export class FakeOrca implements OrcaPort {
     await this.rec("orchestrationSend", { to, subject, body });
   }
   async runList() {
-    return [];
+    await this.rec("runList", null);
+    return structuredClone(this.runs);
   }
   async automationsList() {
     return [];

@@ -1,7 +1,8 @@
 // src/machine/release.ts — the shared stop sequence (§7.4 release, §9.4 handoff, §13.3 i), release and block.
 import { z } from "zod";
 import { renderBlocked } from "../linear/templates";
-import type { LinearIssue } from "../ports";
+import { OrcaError } from "../orca/cli";
+import type { LinearIssue, WorkerRow } from "../ports";
 import { errorText } from "../shared/errors";
 import { newUlid } from "../shared/ids";
 import type { WRecord } from "../state/records";
@@ -29,13 +30,21 @@ export async function closeClaimEntries(ctx: Ctx, identifier: string, why: strin
 
 /**
  * §7.4: stop every unsettled Dispatch of the child Run (`worker-stop`, then `worker-abandon` when the stop is not proven `exited`),
- * close every terminal of the issue worktree, then sweep its processes. Returns what could not be verified: dispatch ids, and
- * `terminals:<worktreeId>` when the bulk close failed.
+ * close every terminal of the issue worktree, then sweep its processes. Returns what could not be verified: dispatch ids,
+ * `run:<runId>` when the Run's workers could not be listed, and `terminals:<worktreeId>` when the bulk close failed.
  */
 export async function stopAgents(ctx: Ctx, r: WRecord): Promise<{ unverifiable: string[] }> {
   const unverifiable: string[] = [];
   if (r.coordinator.childRunId) {
-    for (const w of await ctx.orca.workerList(r.coordinator.childRunId)) {
+    let rows: WorkerRow[] = [];
+    try {
+      rows = await ctx.orca.workerList(r.coordinator.childRunId);
+    } catch (e) {
+      // F8: a Run Orca cannot list never keeps a release, block or handoff from closing the terminals and sweeping the worktree
+      if (!(e instanceof OrcaError)) throw e;
+      unverifiable.push(`run:${r.coordinator.childRunId}`);
+    }
+    for (const w of rows) {
       if (w.verdict === "exited" || SETTLED.has(w.dispatchStatus)) continue;
       const s = await ctx.orca.workerStop(w.dispatchId, newUlid());
       if (s.verdict !== "exited") {

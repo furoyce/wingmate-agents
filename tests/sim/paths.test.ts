@@ -375,7 +375,56 @@ describe("F2: a block or handoff whose Linear write fails is never lost", () => 
   });
 });
 
+describe("F8: a Run Orca cannot list never halts the fleet or the kill switch", () => {
+  test("its record's liveness is unverifiable, the other issues advance, and the owner's `human` label still releases it", async () => {
+    const w = await world();
+    const smart = w.cfg.projects["smart-dispatcher"]?.repos.main;
+    if (!smart) throw new Error("smart-dispatcher repo missing");
+    smart.setup = "none";
+    await claimed(w);
+    const cur = await rec(w);
+    cur.coordinator.childRunId = "run_gone";
+    await writeRecord(w.dirs, cur);
+    w.orca.failRuns.add("run_gone");
+    labeledByOwner(w, todo("i2", "JRF-601", { projectId: "a0d17ec1-b237-4481-9efb-1eff9fe69efe" }));
+    advance(w, 5);
+    const s = await runTick(w);
+    expect(s.outcome).not.toBe("orca_unreachable");
+    expect(s.claims).toEqual(["JRF-601"]);
+    expect((await rec(w)).attention).toContain("liveness_unverifiable");
+    advance(w, 5);
+    w.linear.setLabels("i1", ["agent-ready", "In-Agent", "human"], OWNER, w.ctx.now());
+    advance(w, 5);
+    expect((await runTick(w)).released).toEqual(["JRF-501"]);
+    const after = await rec(w);
+    expect(after.stage).toBe("released");
+    expect(after.attention).toContain("release_unverifiable(run:run_gone)");
+  });
+});
+
 describe("§13.3(h) cleanup after Done", () => {
+  test("F9: a worktree remove that took effect but reported a failure is recorded next time, never removed twice", async () => {
+    const w = await world();
+    const r = await claimed(w);
+    idleNow(w, r);
+    advance(w, 5);
+    w.linear.setState("i1", "Done", OWNER, w.ctx.now());
+    advance(w, 5);
+    expect((await runTick(w)).done).toEqual(["JRF-501"]);
+    w.orca.failAfter = "worktreeRm";
+    advance(w, 25 * 60);
+    await runTick(w); // removed, but the call timed out: deferred (retried daily)
+    let after = await rec(w);
+    expect(after.worktree).not.toBeNull();
+    expect(after.attention).toContain("cleanup_failed");
+    advance(w, 24 * 60);
+    await runTick(w);
+    after = await rec(w);
+    expect(after.worktree).toBeNull();
+    expect(after.attention).not.toContain("cleanup_failed");
+    expect(w.orca.calls.filter((c) => c.verb === "worktreeRm")).toHaveLength(1);
+  });
+
   test("waits for the grace hours and for the PR to close (retried daily), then removes the worktree by its id", async () => {
     const w = await world();
     const r = await claimed(w);

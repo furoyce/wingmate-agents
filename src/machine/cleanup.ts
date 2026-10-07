@@ -37,16 +37,26 @@ async function cleanupOne(ctx: Ctx, rec: Reconciled, identifier: string): Promis
     }
   }
   if (r.prs.some((p) => p.state === "OPEN")) return defer("open_pr");
-  try {
-    await ctx.orca.worktreeRm(old.id);
-  } catch (e) {
-    if (isTickAbort(e)) throw e;
-    ctx.log.warn({ issue: identifier, code: errorCode(e), err: errorText(e) }, "worktree remove failed");
-    return defer(errorCode(e));
+  // F9 (Appendix D: `worktree ps` proves the effect): a worktree a complete fleet read no longer lists was already removed — by an
+  // earlier remove that took effect but reported a failure, or by the owner — so it is recorded as removed, never removed twice
+  const listed = rec.partial || rec.fleet.worktrees.some((x) => x.worktreeId === old.id);
+  if (listed) {
+    try {
+      await ctx.orca.worktreeRm(old.id);
+    } catch (e) {
+      if (isTickAbort(e)) throw e;
+      ctx.log.warn({ issue: identifier, code: errorCode(e), err: errorText(e) }, "worktree remove failed");
+      return defer(errorCode(e));
+    }
   }
   r.worktree = null;
   dropAttention(r, "cleanup_failed");
-  await ctx.ledger.append({ at: ctx.now(), issue: identifier, type: "cleanup", data: { worktree: old.id } });
+  await ctx.ledger.append({
+    at: ctx.now(),
+    issue: identifier,
+    type: "cleanup",
+    data: { worktree: old.id, removed: listed ? "now" : "already" },
+  });
   await saveRecord(ctx, r);
   await refreshRepoSiblings(ctx, rec.records, old.gitCommonDir, identifier); // R22/R24: the repo lost a sibling
 }

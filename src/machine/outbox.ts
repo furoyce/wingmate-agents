@@ -216,6 +216,19 @@ async function finish(x: Run, i: Of<"finish">): Promise<void> {
   x.res.finished = await publish(ctx, r, x.issue, i, x.rec);
 }
 
+/**
+ * F8 (§8.1, §13.3 a): a `run` intent names the child Run by an agent-written id, so it is adopted only when Orca lists that Run
+ * with this record's coordinator terminal as its `coordinator_handle`; anything else is a counted failure (the id is not echoed).
+ */
+async function adoptRun(x: Run, i: Of<"run">): Promise<void> {
+  const handle = x.r.coordinator.terminalHandle;
+  const run = (await x.ctx.orca.runList()).find((y) => y.id === i.payload.runId);
+  if (!run) throw new WingmateError("run_unknown", "the named run is not in orca run-list");
+  if (!handle || run.coordinatorHandle !== handle)
+    throw new WingmateError("run_not_owned", "the named run is not coordinated by this issue's terminal");
+  x.r.coordinator.childRunId = run.id;
+}
+
 function handoff(x: Run, i: Of<"handoff">): void {
   const repo = i.payload.repo;
   if (repo && !x.ctx.cfg.projects[x.r.project]?.repos[repo])
@@ -256,8 +269,7 @@ async function execute(x: Run, i: Intent): Promise<void> {
       } else addNote(x.r, i.payload.text);
       return;
     case "run":
-      x.r.coordinator.childRunId = i.payload.runId;
-      return;
+      return adoptRun(x, i);
     case "gate":
       return gate(x, i);
     case "ask":

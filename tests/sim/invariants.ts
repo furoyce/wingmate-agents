@@ -81,7 +81,12 @@ function entryKey(e: JournalEntry): string {
 const count = (keys: string[]) =>
   keys.reduce((m, k) => m.set(k, (m.get(k) ?? 0) + 1), new Map<string, number>());
 
-/** I2: no Linear write without a journal entry that reached confirmed; no entry left acted or poisoned; every worktree claimed. */
+/**
+ * I2, as slice 1 builds it (F9): no Linear write without a journal entry that reached confirmed, and no entry left acted or poisoned.
+ * Orca mutations are ledgered rather than journaled (`JOURNAL_KINDS` reserves their kinds; `--retry-request` replay is not built),
+ * so for Orca this asserts what the journal and the record guarantee instead: every worktree create belongs to a claim entry, and no
+ * worktree is ever removed twice.
+ */
 async function assertJournal(w: World): Promise<void> {
   const journal = await w.ctx.journal.all();
   expect(
@@ -95,6 +100,8 @@ async function assertJournal(w: World): Promise<void> {
     const issue = (c.args as { linearIssue: string }).linearIssue;
     expect(journal.some((e) => e.kind === "claim" && e.issue === issue)).toBe(true);
   }
+  const removed = w.orca.removed; // removals that took effect (a call that failed before acting may be retried)
+  expect(removed.filter((id, i) => removed.indexOf(id) !== i)).toEqual([]);
 }
 
 /** I5: Wingmate's issue writes only replace Lifecycle labels and only make the two §11.2 state moves. */

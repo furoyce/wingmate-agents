@@ -1,5 +1,6 @@
 // src/machine/reconcile.ts — §6.1: reads only. Fleet, quota, candidates with verdicts, and the events a tick acts on.
 import { join } from "node:path";
+import { OrcaError } from "../orca/cli";
 import { type Verdict, evaluateCandidate } from "../policy/eligibility";
 import { orderCandidates } from "../policy/priority";
 import type {
@@ -89,7 +90,15 @@ export async function reconcile(ctx: Ctx): Promise<Reconciled> {
     const t = await ctx.orca.terminalList(wt.id);
     terminals.set(wt.id, t);
     if (r.coordinator.childRunId) {
-      workers.set(r.coordinator.childRunId, await ctx.orca.workerList(r.coordinator.childRunId));
+      try {
+        workers.set(r.coordinator.childRunId, await ctx.orca.workerList(r.coordinator.childRunId));
+      } catch (e) {
+        // F8: a Run Orca cannot list (deleted, never this issue's) makes only this record's liveness unverifiable (§5.5), never the tick
+        if (!(e instanceof OrcaError)) throw e;
+        ctx.log.warn({ issue: r.identifier, code: e.code }, "worker-list failed; liveness unverifiable");
+        liveness.set(r.identifier, "unverifiable");
+        continue;
+      }
     }
     const row = fleet.worktrees.find((w) => w.worktreeId === wt.id);
     let preview: string | undefined;
