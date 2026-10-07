@@ -11,7 +11,8 @@ import { provisionAndLaunch } from "./claim";
 import { isTickAbort } from "./guard";
 import { refreshRepoSiblings } from "./launch";
 import { LinearWrites } from "./linearWrites";
-import { block, stopAgents } from "./release";
+import { type HandoffIntent, consumeHandoff } from "./outbox";
+import { block, closeClaimEntries, stopAgents } from "./release";
 import { relaunch } from "./resume";
 import { saveRecord } from "./save";
 import { addAttention, endAttempt, enterPipelineStage, stageOf, transition, worktreeOf } from "./states";
@@ -27,12 +28,20 @@ async function stopped(a: Advance): Promise<void> {
 }
 
 /**
- * §9.4 (one per tick): stop workers and coordinator, write the handoff comment, and launch the next provider of the coordinator
+ * §9.4 (one per tick): write the handoff comment, stop workers and coordinator, and launch the next provider of the coordinator
  * cascade not yet tried in this cycle — its first launch is not one of the attempt's relaunches; none left (handoffs per cycle are
- * bounded by cascade length − 1) → `blocked`.
+ * bounded by cascade length − 1) → `blocked`. F2: the keyed comment comes first, so a failed Linear write changes nothing (the
+ * coordinator keeps running, an agent's `handoff` intent stays pending) and a retry never posts it twice; the new attempt is on disk
+ * before the intent leaves the outbox.
  */
-export async function doHandoff(a: Advance, trigger: string, reason: string | null = null): Promise<void> {
+export async function doHandoff(
+  a: Advance,
+  trigger: string,
+  reason: string | null = null,
+  intent: HandoffIntent | null = null,
+): Promise<void> {
   const { ctx, r, s } = a;
+  const wt = r.worktree?.path ?? "";
   const cascade = ctx.cfg.defaults.providers.coordinatorCascade;
   const tried = [...new Set(r.attempts.filter((x) => x.cycle === r.cycle).map((x) => x.provider))].filter(
     isCoordinator,
@@ -43,34 +52,28 @@ export async function doHandoff(a: Advance, trigger: string, reason: string | nu
     tried.length ? tried : [r.provider],
     (p) => availability(a.rec.rateLimits, p, ctx.cfg.defaults.quota, nowMs).available,
   );
-  await stopped(a);
-  endAttempt(ctx, r, "handoff", trigger);
+  const blockWith = async (cause: string, detail: string, nextAction: string) => {
+    endAttempt(ctx, r, "handoff", trigger);
+    try {
+      await block(ctx, r, a.issue, cause, detail, nextAction); // stops the agents; `blocked` is on disk before any Linear write
+    } finally {
+      // the block is decided and on disk even when its label or comment is still due (finishBlock): the request is answered
+      if (stageOf(r) === "blocked") await consumeHandoff(ctx, r, wt, intent);
+    }
+    s.blocked.push(r.identifier);
+  };
   if (!next || r.handoffs.thisCycle >= cascade.length - 1) {
     const cause = trigger === "grace_expired" ? "grace_expired_no_cascade" : "cascade_exhausted";
-    await block(
-      ctx,
-      r,
-      a.issue,
-      cause,
-      `trigger ${trigger}; no untried available provider`,
-      "move the issue back to Todo to re-queue it when ready",
-    );
-    s.blocked.push(r.identifier);
-    return;
+    const detail = `trigger ${trigger}; no untried available provider`;
+    return blockWith(cause, detail, "move the issue back to Todo to re-queue it when ready");
   }
   const tier = await resolveTier(next, { home: ctx.home });
-  if (!tier) {
-    await block(
-      ctx,
-      r,
-      a.issue,
+  if (!tier)
+    return blockWith(
       "provider_unavailable",
       `${next}: model_unresolved`,
       "set the provider CLI's default model, then re-queue",
     );
-    s.blocked.push(r.identifier);
-    return;
-  }
   const body = renderHandoff({
     from: r.provider,
     to: next,
@@ -83,6 +86,8 @@ export async function doHandoff(a: Advance, trigger: string, reason: string | nu
   await new LinearWrites(ctx).postComment(r, a.issue, body, {
     key: `handoff:${r.identifier}:${r.cycle}:${r.coordinator.attempt}`,
   });
+  await stopped(a);
+  endAttempt(ctx, r, "handoff", trigger);
   r.provider = next;
   r.coordinator.attempt += 1;
   r.coordinator.relaunches = 0;
@@ -101,6 +106,7 @@ export async function doHandoff(a: Advance, trigger: string, reason: string | nu
   });
   r.coordinator.sessionId = next === "claude" ? sessionId : null;
   await saveRecord(ctx, r);
+  await consumeHandoff(ctx, r, wt, intent);
   if (await relaunch(ctx, r, `handoff:${trigger}`, { counted: false })) s.handoffs.push(r.identifier);
   else addAttention(r, "launch_unconfirmed");
 }
@@ -123,11 +129,20 @@ async function retire(a: Advance, old: NonNullable<WRecord["worktree"]>): Promis
   }
 }
 
-/** `handoff --repo <name>`: same provider and cycle, no handoff counted, a new attempt in a new worktree of the other repo. */
-export async function doReroute(a: Advance, repoName: string): Promise<void> {
+/**
+ * `handoff --repo <name>`: same provider and cycle, no handoff counted, a new attempt in a new worktree of the other repo. F2: the
+ * agent's intent leaves the old worktree's outbox once the reroute is on disk; F4: the record's earlier claim entries are closed
+ * before the reroute's own entry opens.
+ */
+export async function doReroute(
+  a: Advance,
+  repoName: string,
+  intent: HandoffIntent | null = null,
+): Promise<void> {
   const { ctx, r, s } = a;
   if (!a.project.repos[repoName]) {
     addAttention(r, "reroute_unknown_repo");
+    await consumeHandoff(ctx, r, r.worktree?.path ?? "", intent); // a request that can never be honored
     return;
   }
   await stopped(a);
@@ -158,6 +173,7 @@ export async function doReroute(a: Advance, repoName: string): Promise<void> {
   await transition(ctx, r, "claimed", "reroute", repoName);
   enterPipelineStage(ctx, r, "intake");
   await saveRecord(ctx, r);
+  if (old) await consumeHandoff(ctx, r, old.path, intent);
   if (old) await retire(a, old);
   const l = r.coordinator.launch;
   const tier =
@@ -168,6 +184,7 @@ export async function doReroute(a: Advance, repoName: string): Promise<void> {
     addAttention(r, "model_unresolved");
     return;
   }
+  await closeClaimEntries(ctx, r.identifier, "rerouted");
   const entry = await ctx.journal.intent({
     issue: r.identifier,
     kind: "claim",

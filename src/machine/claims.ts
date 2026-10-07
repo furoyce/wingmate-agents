@@ -16,6 +16,7 @@ import type { Ctx } from "./context";
 import { isRecordAbort, isTickAbort, recordCtx } from "./guard";
 import { refreshRepoSiblings } from "./launch";
 import type { Candidate, Reconciled } from "./reconcile";
+import { closeClaimEntries } from "./release";
 import { saveRecord } from "./save";
 import { syncStatus } from "./status";
 import type { TickOptions, TickSummary } from "./tick";
@@ -99,6 +100,7 @@ async function claimOne(
   const old = known.find((x) => x.identifier === id);
   const cycle = await nextCycle(ctx, id, old);
   if (old) {
+    await closeClaimEntries(ctx, id, "archived"); // F4: no earlier cycle's claim entry is ever replayed into this one
     await archiveRecord(ctx.dirs, id);
     known.splice(known.indexOf(old), 1);
   }

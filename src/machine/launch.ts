@@ -1,21 +1,27 @@
 // src/machine/launch.ts — what every coordinator (re)launch needs first (Rulings R22/R24) and what the kit ledgered at install.
 import { mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { refreshSiblingDenies } from "../kit/install";
-import { errorCode, errorText } from "../shared/errors";
+import { refreshSiblingDenies, verifyIntegrity } from "../kit/install";
+import { WingmateError, errorCode, errorText } from "../shared/errors";
 import type { WRecord } from "../state/records";
 import type { Ctx } from "./context";
 
 const ACTIVE = new Set(["claimed", "working", "awaiting-human", "review", "blocked"]);
 
 /**
- * R22/R24, before every coordinator (re)launch: re-list the other worktrees' gitdirs and branches into the kit's settings files
- * (Claude pins `--settings` at launch, so a refresh applies from this launch on), and recreate the own branch's ref directory — an
- * out-of-sandbox `git gc` can prune an empty `refs/heads/<namespace>/`, and the sandbox denies creating it again.
+ * Before every coordinator (re)launch. F2: the kit's integrity set is verified first (§6.3 step 6 runs after liveness, so a tampered
+ * kit could otherwise be relaunched into before it blocks; `kit_tampered`, or `integrity_unverifiable`, refuses the launch). R22/R24:
+ * re-list the other worktrees' gitdirs and branches into the kit's settings files (Claude pins `--settings` at launch, so a refresh
+ * applies from this launch on), and recreate the own branch's ref directory — an out-of-sandbox `git gc` can prune an empty
+ * `refs/heads/<namespace>/`, and the sandbox denies creating it again.
  */
 export async function prepareLaunch(ctx: Ctx, r: WRecord): Promise<void> {
   const wt = r.worktree;
   if (!wt) return;
+  const expected = await kitHashes(ctx, r);
+  const changed = expected ? await verifyIntegrity(wt.path, wt.gitCommonDir, expected) : [];
+  if (changed.length)
+    throw new WingmateError("kit_tampered", `${r.identifier}: ${changed.slice(0, 5).join(",")}`);
   await refreshSiblingDenies(ctx.kitDirFor(r.identifier), wt.gitCommonDir, wt.gitdirName, wt.branch);
   await mkdir(dirname(join(wt.gitCommonDir, "refs", "heads", wt.branch)), { recursive: true });
 }

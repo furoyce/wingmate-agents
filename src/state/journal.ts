@@ -121,9 +121,12 @@ export class Journal {
   }
   async failed(id: string, error: string) {
     const e = await this.get(id);
-    e.attempts += 1;
     e.error = error;
-    if (e.attempts >= 3) e.state = "poisoned";
+    // a closed entry (confirmed, abandoned, poisoned) only records a late failure: it is never re-counted or re-opened
+    if (e.state === "intent" || e.state === "acted") {
+      e.attempts += 1;
+      if (e.attempts >= 3) e.state = "poisoned";
+    }
     await this.save(e);
   }
   async abandon(id: string, error: string) {

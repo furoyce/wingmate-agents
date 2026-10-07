@@ -9,7 +9,7 @@ import { resolveTier } from "../policy/providers";
 import { errorCode, errorText } from "../shared/errors";
 import { stopRequested } from "../state/heartbeat";
 import type { WRecord } from "../state/records";
-import { claimLinear, provisionAndLaunch } from "./claim";
+import { claimLinear, openClaimEntry, provisionAndLaunch } from "./claim";
 import type { Ctx } from "./context";
 import { isRecordAbort, isTickAbort, recordCtx } from "./guard";
 import { doHandoff, doReroute } from "./handoff";
@@ -18,7 +18,7 @@ import { LinearWrites } from "./linearWrites";
 import { syncMirror } from "./mirror";
 import { executeOutbox } from "./outbox";
 import type { Event, Reconciled } from "./reconcile";
-import { block, release, stopAgents } from "./release";
+import { block, finishBlock, release, stopAgents } from "./release";
 import { readTracked, saveRecord } from "./save";
 import { addAttention, dropAttention, stageOf } from "./states";
 import { addNote, flushNotes, syncStatus } from "./status";
@@ -152,14 +152,16 @@ async function overrides(a: Advance): Promise<StepOut> {
   return a.r.paused ? "stop" : "next"; // paused: no outbox, resume, relaunch, nudge or timers (§7.4)
 }
 
-/** §6.6 replay of an unfinished claim (or reroute) entry: the same steps again; a second failure blocks (`launch_failed`). */
+/**
+ * §6.6 replay of the record's own unfinished claim (or reroute) entry — F4: keyed to its current cycle and attempt, never a stale
+ * one — the same steps again; a second failure blocks (`launch_failed`; `block` closes the entry once the record is `blocked`).
+ */
 async function replayClaim(a: Advance): Promise<StepOut> {
   const { ctx, r } = a;
   if (r.stage !== "claimed" || a.ro) return "next";
-  const open = (await ctx.journal.pending()).find((e) => e.issue === r.identifier && e.kind === "claim");
+  const open = await openClaimEntry(ctx, r);
   if (!open) return "next";
   if (open.attempts >= 2) {
-    await ctx.journal.abandon(open.id, "launch_failed");
     const next = "check Orca, then move the issue back to Todo to re-queue it";
     await block(ctx, r, a.issue, "launch_failed", `a claim step failed ${open.attempts} times`, next);
     a.s.blocked.push(r.identifier);
@@ -204,8 +206,9 @@ async function outbox(a: Advance): Promise<StepOut> {
   if (o.handoff) {
     a.budget.handoffs -= 1;
     const reason = o.handoff.payload.reason.slice(0, 120);
-    if (o.handoff.payload.repo) await doReroute(a, o.handoff.payload.repo);
-    else await doHandoff(a, "agent_request", /^[\w .,:-]*$/.test(reason) ? reason : null);
+    // F2: the intent leaves the outbox only once its handoff (or reroute, or block) is on disk
+    if (o.handoff.payload.repo) await doReroute(a, o.handoff.payload.repo, o.handoff);
+    else await doHandoff(a, "agent_request", /^[\w .,:-]*$/.test(reason) ? reason : null, o.handoff);
     a.launched = true;
     a.dirty = true;
     return "stop";
@@ -213,7 +216,14 @@ async function outbox(a: Advance): Promise<StepOut> {
   return o.parked || o.finished || !WORKING.has(r.stage) ? "stop" : "next";
 }
 
-const STEPS = [overrides, replayClaim, outbox, comments, liveness, timers, integrity, budgets];
+/** F2: a block whose Linear writes failed is finished first (the record is `blocked` on disk already). */
+async function blockNotice(a: Advance): Promise<StepOut> {
+  const ownerChanged = a.evs.some((e) => e.type === "owner_state" || e.type === "owner_labels");
+  if (await finishBlock(a.ctx, a.r, a.issue, ownerChanged)) a.dirty = true;
+  return "next";
+}
+
+const STEPS = [overrides, blockNotice, replayClaim, outbox, comments, liveness, timers, integrity, budgets];
 
 /** The mirror, the record, then the status comment when a tick-level change made it stale (once per tick, Ruling R1). */
 async function settle(a: Advance, before: string[]): Promise<void> {

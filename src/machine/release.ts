@@ -1,4 +1,5 @@
 // src/machine/release.ts — the shared stop sequence (§7.4 release, §9.4 handoff, §13.3 i), release and block.
+import { z } from "zod";
 import { renderBlocked } from "../linear/templates";
 import type { LinearIssue } from "../ports";
 import { errorText } from "../shared/errors";
@@ -7,9 +8,24 @@ import type { WRecord } from "../state/records";
 import type { Ctx } from "./context";
 import { LinearWrites } from "./linearWrites";
 import { saveRecord } from "./save";
-import { addAttention, endAttempt, transition } from "./states";
+import { addAttention, dropAttention, endAttempt, transition } from "./states";
 
 const SETTLED = new Set(["completed", "failed"]);
+/** F2: a block whose Blocked label or comment has not reached Linear yet (the record is `blocked` on disk already). */
+const BLOCK_UNPOSTED = "blocked_unposted";
+const BlockNotice = z.object({
+  key: z.string(),
+  reason: z.string(),
+  detail: z.string(),
+  nextAction: z.string(),
+});
+type BlockNotice = z.infer<typeof BlockNotice>;
+
+/** F4: every open claim entry of the issue is closed once its record leaves the claim for good (release, block, archive, reroute). */
+export async function closeClaimEntries(ctx: Ctx, identifier: string, why: string): Promise<void> {
+  for (const e of await ctx.journal.pending())
+    if (e.issue === identifier && e.kind === "claim") await ctx.journal.abandon(e.id, why);
+}
 
 /**
  * §7.4: stop every unsettled Dispatch of the child Run (`worker-stop`, then `worker-abandon` when the stop is not proven `exited`),
@@ -73,6 +89,8 @@ export async function release(
   );
   const to = cause === "override" ? "released" : cause === "owner_done" ? "done" : "cancelled";
   await transition(ctx, r, to, cause);
+  await closeClaimEntries(ctx, r.identifier, `${to}:${cause}`);
+  dropAttention(r, BLOCK_UNPOSTED);
   if (comment) await w.postComment(r, issue, comment, { key: `release:${r.identifier}:${r.cycle}` });
   endAttempt(ctx, r, to, cause);
   if (r.worktree)
@@ -86,7 +104,29 @@ export async function release(
   return true;
 }
 
-/** Stop, `blocked`, the `Blocked` Lifecycle label and exactly one blocked comment (§7.5 step 2). */
+/** The Blocked label (unless the owner changed the issue since: Linear wins) and the one keyed blocked comment; then the marker goes. */
+async function postBlockNotice(
+  ctx: Ctx,
+  r: WRecord,
+  issue: LinearIssue,
+  n: BlockNotice,
+  label: boolean,
+): Promise<void> {
+  const w = new LinearWrites(ctx);
+  if (label) await w.setLifecycle(r, issue, "Blocked");
+  const retained = r.worktree ? [`branch ${r.worktree.branch}`, `worktree ${r.worktree.path}`] : [];
+  const { reason, detail, nextAction } = n;
+  const body = renderBlocked({ identifier: r.identifier, reason, detail, retained, nextAction });
+  await w.postComment(r, issue, body, { key: n.key });
+  dropAttention(r, BLOCK_UNPOSTED);
+  await saveRecord(ctx, r);
+}
+
+/**
+ * Stop, `blocked`, the `Blocked` Lifecycle label and exactly one blocked comment (§7.5 step 2). F2: the record is written `blocked`
+ * (with its open claim entries closed) before any Linear write, so a failed label or comment can never let it escape to a relaunch;
+ * its next processing finishes them (`finishBlock`).
+ */
 export async function block(
   ctx: Ctx,
   r: WRecord,
@@ -99,16 +139,41 @@ export async function block(
   if (unverifiable.length)
     addAttention(r, `release_unverifiable(${unverifiable.map((u) => u.split(":")[0]).join(",")})`);
   await transition(ctx, r, "blocked", reason, detail);
-  const w = new LinearWrites(ctx);
-  await w.setLifecycle(r, issue, "Blocked");
-  const retained = r.worktree ? [`branch ${r.worktree.branch}`, `worktree ${r.worktree.path}`] : [];
-  await w.postComment(
-    r,
-    issue,
-    renderBlocked({ identifier: r.identifier, reason, detail, retained, nextAction }),
-    {
-      key: `blocked:${r.identifier}:${r.cycle}:${r.history.length}`,
-    },
-  );
+  const notice: BlockNotice = {
+    key: `blocked:${r.identifier}:${r.cycle}:${r.history.length}`,
+    reason,
+    detail,
+    nextAction,
+  };
+  await ctx.ledger.append({ at: ctx.now(), issue: r.identifier, type: "block_notice", data: notice });
+  addAttention(r, BLOCK_UNPOSTED);
+  await closeClaimEntries(ctx, r.identifier, `blocked:${reason}`);
   await saveRecord(ctx, r);
+  await postBlockNotice(ctx, r, issue, notice, true);
+}
+
+/**
+ * F2: a block whose Blocked label or comment did not reach Linear is finished on the record's next processing — the comment once
+ * (keyed), the label only while the owner has not changed the issue since. Returns whether there was one to finish.
+ */
+export async function finishBlock(
+  ctx: Ctx,
+  r: WRecord,
+  issue: LinearIssue,
+  ownerChanged: boolean,
+): Promise<boolean> {
+  if (r.stage !== "blocked" || !r.attention.includes(BLOCK_UNPOSTED)) return false;
+  const last = (await ctx.ledger.readIssue(r.identifier)).filter((e) => e.type === "block_notice").at(-1);
+  const parsed = BlockNotice.safeParse(last?.data);
+  const h = [...r.history].reverse().find((x) => x.to === "blocked");
+  const notice: BlockNotice = parsed.success
+    ? parsed.data
+    : {
+        key: `blocked:${r.identifier}:${r.cycle}:${r.history.length}`,
+        reason: h?.cause ?? "unknown",
+        detail: h?.evidence ?? "",
+        nextAction: "see the issue's record in the Console",
+      };
+  await postBlockNotice(ctx, r, issue, notice, !ownerChanged);
+  return true;
 }

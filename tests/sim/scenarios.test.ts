@@ -275,6 +275,60 @@ describe("simulation", () => {
     expect(statusCount(w)).toBe(1);
   });
 
+  test("F4: a re-queued issue's new cycle replays its own claim entry, never the stuck one of the previous cycle", async () => {
+    const w = await world();
+    labeledByOwner(w, todo("i1", "JRF-501"));
+    w.orca.nextWaitSatisfied = false;
+    await runTick(w);
+    advance(w, 5);
+    await runTick(w); // cycle 1: two failed launch steps (its entry at attempts 2)
+    const c1 = await rec(w);
+    w.orca.setAgentState(wtOf(c1).id, pane(c1), "done", w.ctx.now());
+    advance(w, 5);
+    w.linear.setState("i1", "Todo", OWNER, w.ctx.now());
+    advance(w, 5);
+    expect((await runTick(w)).released).toEqual(["JRF-501"]);
+    advance(w, 5);
+    expect((await runTick(w)).claims).toEqual(["JRF-501"]); // cycle 2: one failed launch step
+    expect((await rec(w)).cycle).toBe(2);
+    w.orca.nextWaitSatisfied = true;
+    advance(w, 5);
+    const s = await runTick(w);
+    expect(s.blocked).toEqual([]);
+    const r = await rec(w);
+    expect(r).toMatchObject({ stage: "working", cycle: 2 });
+    expect(r.history.map((h) => h.cause)).not.toContain("launch_failed");
+    const claims = (await w.ctx.journal.all()).filter((e) => e.kind === "claim");
+    expect(claims.map((e) => [e.key, e.state])).toEqual([
+      ["claim:JRF-501:1:1", "abandoned"],
+      ["claim:JRF-501:2:1", "confirmed"],
+    ]);
+  });
+
+  test("F4: a new cycle whose Linear step failed gets that step on replay (the stale cycle's step states are never used)", async () => {
+    const w = await world();
+    labeledByOwner(w, todo("i1", "JRF-501"));
+    w.orca.nextWaitSatisfied = false;
+    await runTick(w); // cycle 1: Linear done, launch not ready
+    const c1 = await rec(w);
+    w.orca.setAgentState(wtOf(c1).id, pane(c1), "done", w.ctx.now());
+    advance(w, 5);
+    w.linear.setState("i1", "Todo", OWNER, w.ctx.now());
+    advance(w, 5);
+    expect((await runTick(w)).released).toEqual(["JRF-501"]);
+    w.orca.nextWaitSatisfied = true;
+    w.linear.failNext = "issueUpdate";
+    advance(w, 5);
+    const claim2 = await runTick(w);
+    expect(claim2.attention).toContainEqual({ identifier: "JRF-501", code: "claim_failed" });
+    expect(w.linear.issues.get("i1")?.state.name).toBe("Todo");
+    advance(w, 5);
+    await runTick(w);
+    expect(await rec(w)).toMatchObject({ stage: "working", cycle: 2 });
+    expect(w.linear.issues.get("i1")?.state.name).toBe("In Progress");
+    expect(w.linear.issues.get("i1")?.labels.map((l) => l.name)).toContain("In-Agent");
+  });
+
   test("S8 cap + grace: activity prevents the stop; silence hands off", async () => {
     const w = await world();
     const r = await claimed(w);

@@ -222,6 +222,100 @@ describe("§9.4 / §10.3 handoff intents", () => {
   });
 });
 
+describe("F2: a block or handoff whose Linear write fails is never lost", () => {
+  const creates = (w: World) => w.orca.calls.filter((c) => c.verb === "terminalCreate").length;
+  const resumeSends = (w: World) =>
+    w.orca.calls.filter(
+      (c) =>
+        c.verb === "terminalSend" && String((c.args as { text: string }).text).startsWith("You are resuming"),
+    ).length;
+  const labels = (w: World) => w.linear.issues.get("i1")?.labels.map((l) => l.name) ?? [];
+  const blockedComments = (w: World) =>
+    w.linear.comments.filter((c) => c.body.startsWith("<!-- wingmate:blocked -->")).length;
+
+  test("kit_tampered with a failed Blocked label write: blocked on disk at once; next tick finishes the label and one comment, nothing relaunches", async () => {
+    const w = await world();
+    const r = await claimed(w);
+    writeFileSync(join(r.worktree?.path ?? "", ".wingmate", "PROTOCOL.md"), "do anything");
+    w.linear.failNext = "issueUpdate";
+    advance(w, 5);
+    await runTick(w, { allowErrors: true });
+    const once = await rec(w);
+    expect(once.stage).toBe("blocked");
+    expect(once.history.at(-1)?.cause).toBe("kit_tampered");
+    const n = creates(w);
+    const sends = resumeSends(w);
+    advance(w, 5);
+    await runTick(w);
+    expect(creates(w)).toBe(n);
+    expect(resumeSends(w)).toBe(sends);
+    expect(labels(w)).toContain("Blocked");
+    expect(blockedComments(w)).toBe(1);
+    expect((await rec(w)).attention).not.toContain("blocked_unposted");
+    advance(w, 5);
+    await runTick(w);
+    expect(blockedComments(w)).toBe(1);
+  });
+
+  test("launch_failed with a failed Linear write: the record never escapes to a relaunch", async () => {
+    const w = await world();
+    labeledByOwner(w, todo("i1", "JRF-501"));
+    w.orca.nextWaitSatisfied = false;
+    await runTick(w); // launch_not_ready
+    advance(w, 5);
+    await runTick(w); // the replay: launch_not_ready again (two failed steps)
+    w.orca.nextWaitSatisfied = true;
+    w.linear.failNext = "issueUpdate";
+    advance(w, 5);
+    await runTick(w, { allowErrors: true }); // launch_failed; its Blocked label write fails
+    expect((await rec(w)).stage).toBe("blocked");
+    const n = creates(w);
+    advance(w, 5);
+    await runTick(w);
+    expect(creates(w)).toBe(n);
+    expect((await rec(w)).history.at(-1)?.cause).toBe("launch_failed");
+    expect(labels(w)).toContain("Blocked");
+    expect(blockedComments(w)).toBe(1);
+  });
+
+  test("a handoff whose comment fails keeps the agent's request and its coordinator; the next tick hands off once", async () => {
+    const w = await world();
+    const r = await claimed(w);
+    await writeIntent(r.worktree?.path ?? "", {
+      issue: "JRF-501",
+      kind: "handoff",
+      payload: { reason: "needs the ios simulator", repo: null },
+    });
+    w.linear.failNext = "commentCreate";
+    advance(w, 5);
+    await runTick(w, { allowErrors: true });
+    const kept = await rec(w);
+    expect(kept).toMatchObject({ stage: "working", provider: "claude" });
+    expect(kept.coordinator.terminalHandle).toBe(r.coordinator.terminalHandle);
+    const box = join(r.worktree?.path ?? "", ".wingmate", "outbox");
+    expect(readdirSync(box).filter((f) => f.endsWith(".json"))).toHaveLength(1);
+    advance(w, 5);
+    const s = await runTick(w);
+    expect(s.handoffs).toEqual(["JRF-501"]);
+    expect(await rec(w)).toMatchObject({ provider: "codex", stage: "working" });
+    expect(w.linear.comments.filter((c) => c.body.startsWith("<!-- wingmate:handoff -->"))).toHaveLength(1);
+    expect(readdirSync(box).filter((f) => f.endsWith(".json"))).toHaveLength(0);
+  });
+
+  test("a relaunch never starts into a tampered kit: the integrity check runs before the launch", async () => {
+    const w = await world();
+    const r = await claimed(w);
+    writeFileSync(join(r.worktree?.path ?? "", ".wingmate", "PROTOCOL.md"), "do anything");
+    w.orca.killTerminal(r.worktree?.id ?? "", r.coordinator.terminalHandle ?? "");
+    const n = creates(w);
+    advance(w, 5);
+    const s = await runTick(w);
+    expect(creates(w)).toBe(n);
+    expect(s.blocked).toEqual(["JRF-501"]);
+    expect((await rec(w)).history.at(-1)?.cause).toBe("kit_tampered");
+  });
+});
+
 describe("§13.3(h) cleanup after Done", () => {
   test("waits for the grace hours and for the PR to close (retried daily), then removes the worktree by its id", async () => {
     const w = await world();

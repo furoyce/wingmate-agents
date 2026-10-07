@@ -12,6 +12,7 @@ import type { LinearIssue } from "../ports";
 import { WingmateError, errorText } from "../shared/errors";
 import { run } from "../shared/exec";
 import { newUlid, newUuid } from "../shared/ids";
+import type { JournalEntry } from "../state/journal";
 import { type WRecord, createRecordExclusive, newRecord } from "../state/records";
 import type { Ctx } from "./context";
 import { isTickAbort } from "./guard";
@@ -36,6 +37,20 @@ export type Tier = { model: string; effort: string };
 
 export const CLAIM_STEPS = ["linear", "worktree", "kit", "launch", "orcaMeta"];
 const EPOCH = "1970-01-01T00:00:00.000Z";
+
+/** F4: the keys of the record's current claim entry — its claim (cycle, attempt), or the reroute it is in. */
+const claimKeys = (r: WRecord): string[] => [
+  `claim:${r.identifier}:${r.cycle}:${r.coordinator.attempt}`,
+  `reroute:${r.identifier}:${r.cycle}:${r.repo}`,
+];
+
+/** F4: the record's own open claim entry (the newest keyed to its current claim), never another cycle's or attempt's. */
+export async function openClaimEntry(ctx: Ctx, r: WRecord): Promise<JournalEntry | undefined> {
+  const keys = claimKeys(r);
+  return (await ctx.journal.pending())
+    .filter((e) => e.issue === r.identifier && e.kind === "claim" && keys.includes(e.key))
+    .at(-1);
+}
 
 const lifecycleOf = (ctx: Ctx, issue: LinearIssue): string | null =>
   issue.labels.find((l) => ctx.meta.lifecycleIds.has(l.id))?.name ?? null;

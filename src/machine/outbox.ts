@@ -22,6 +22,7 @@ import { addAttention, dropAttention, enterPipelineStage, transition } from "./s
 import { addNote, syncStatus } from "./status";
 
 type Of<K extends Intent["kind"]> = Extract<Intent, { kind: K }>;
+export type HandoffIntent = Of<"handoff">;
 export interface OutboxResult {
   executed: number;
   failed: number;
@@ -312,8 +313,9 @@ async function runIntent(x: Run, i: Intent): Promise<boolean> {
   }
   x.r.timers.lastActivityAt = x.ctx.now(); // §9.6: an executed intent is activity
   await saveRecord(x.ctx, x.r); // effects on disk before the intent leaves the outbox
-  await consumeIntent(x.wt, i.id);
   x.res.executed += 1;
+  if (i.kind === "handoff") return true; // F2: consumed by the tick once the handoff is on disk (`consumeHandoff`)
+  await consumeIntent(x.wt, i.id);
   await x.ctx.ledger.append({
     at: x.ctx.now(),
     issue: x.r.identifier,
@@ -321,6 +323,26 @@ async function runIntent(x: Run, i: Intent): Promise<boolean> {
     data: { kind: i.kind, id: i.id },
   });
   return true;
+}
+
+/**
+ * F2: a `handoff` intent leaves the outbox (of the worktree it was written in) only once the tick's handoff, reroute or block it led
+ * to is on disk; a failure before that leaves it pending, so the agent's request is retried, never lost.
+ */
+export async function consumeHandoff(
+  ctx: Ctx,
+  r: WRecord,
+  wt: string,
+  i: Of<"handoff"> | null,
+): Promise<void> {
+  if (!i) return;
+  await consumeIntent(wt, i.id);
+  await ctx.ledger.append({
+    at: ctx.now(),
+    issue: r.identifier,
+    type: "intent_executed",
+    data: { kind: i.kind, id: i.id },
+  });
 }
 
 async function drain(x: Run, opts: OutboxOptions): Promise<void> {
