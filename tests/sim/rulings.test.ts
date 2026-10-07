@@ -103,6 +103,52 @@ describe("R16: a tick whose lock was reclaimed aborts before its next external a
   });
 });
 
+describe("TES-1: the guard holds for Linear and git writes too (Ruling R16, §13.3 i)", () => {
+  test("a lock reclaimed during a claim's first Linear write: no Linear write follows it (outcome lock_lost)", async () => {
+    const w = await world();
+    labeledByOwner(w, todo("i1", "JRF-501"));
+    let at = -1;
+    w.linear.onCall = async (m) => {
+      if (m !== "updateIssue" || at >= 0) return;
+      at = w.linear.writes.length;
+      writeFileSync(join(w.dirs.state, "tick.lock"), foreignLock);
+      await Bun.sleep(60); // the heartbeat runs and finds another token
+    };
+    const s = await runTick(w, { lockHeartbeatMs: 10 });
+    w.linear.onCall = null;
+    expect(s.outcome).toBe("lock_lost");
+    expect(at).toBeGreaterThanOrEqual(0);
+    expect(w.linear.writes.slice(at)).toHaveLength(1); // only the write in flight when the lock was lost
+    expect(w.orca.calls.filter((c) => c.verb === "worktreeCreate")).toEqual([]);
+  });
+
+  test("a stop for everything requested while a finish reads the remote: nothing is pushed, no PR (outcome stopped)", async () => {
+    const w = await world();
+    const r = await claimed(w);
+    await readyToFinish(w, "JRF-501");
+    await writeIntent(r.worktree?.path ?? "", {
+      issue: "JRF-501",
+      kind: "finish",
+      payload: { summaryFile: ".wingmate/s.md", title: null, draft: false, repos: [] },
+    });
+    const read = w.git.lsRemoteSha.bind(w.git);
+    let asked = false;
+    w.git.lsRemoteSha = async (t, url, branch) => {
+      if (branch === r.worktree?.branch && !asked) {
+        asked = true;
+        await requestStop(w.dirs, { scope: "all", at: w.ctx.now() });
+      }
+      return read(t, url, branch);
+    };
+    advance(w, 5);
+    const s = await runTick(w);
+    expect(asked).toBe(true);
+    expect(s.outcome).toBe("stopped");
+    expect(w.git.pushed).toEqual([]);
+    expect(w.gh.prs).toEqual([]);
+  });
+});
+
 describe("§13.3(i) stop requests", () => {
   test("a stop for everything, requested mid-tick, aborts the tick before its next external action (outcome stopped)", async () => {
     const w = await world();
