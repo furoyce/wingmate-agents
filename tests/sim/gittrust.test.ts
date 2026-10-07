@@ -257,6 +257,59 @@ describe("C30: the claim's base is GitHub's — the local origin/main must name 
     expect(terminalCreates(w)).toBe(0);
   });
 
+  /** An object an agent asks git to read another one in place of (`refs/replace/<object>`, F7); its name is agent-made. */
+  const REPLACED = "89abcdef0123456789abcdef0123456789abcdef";
+
+  test("F7: a replace ref in the repository — git would read another object in place of GitHub's commit, its tree or a file, HEAD unchanged — blocks diverged before any create", async () => {
+    const w = await world();
+    const runs = tracedSetup(w);
+    w.git.planted.set(`refs/replace/${REPLACED}`, "agentsha");
+    labeledByOwner(w, todo("i1", "JRF-501"));
+    expect((await runTick(w)).claims).toEqual(["JRF-501"]);
+    const r = await rec(w);
+    expect(r.history.at(-1)?.cause).toBe("base_mismatch");
+    expect(r.attention).toContain("base_diverged");
+    expect(r.worktree).toBeNull();
+    expect(w.orca.calls.filter((c) => c.verb === "worktreeCreate")).toEqual([]);
+    // the base itself verified (GitHub's main, here); what would stand in for it is the replace ref
+    expect((await ledgerOf(w, "base_mismatch")).map((e) => e.data)).toEqual([
+      {
+        base: "refs/remotes/origin/main",
+        branch: "main",
+        remote: "basesha",
+        local: "basesha",
+        verdict: "diverged",
+        reused: false,
+      },
+    ]);
+    expect(blockedComment(w)).toContain("refs/replace/");
+    expect(blockedComment(w)).not.toContain(REPLACED.slice(0, 12)); // agent-made names never reach the comment
+    expect(await ledgerOf(w, "kit_installed")).toEqual([]);
+    expect(() => readFileSync(runs, "utf8")).toThrow();
+    expect(terminalCreates(w)).toBe(0);
+  });
+
+  test("F7: a replace ref that appears while Orca creates the worktree (after the check) blocks kit_tampered before the kit, the setup or a terminal", async () => {
+    const w = await world();
+    const runs = tracedSetup(w);
+    w.orca.onCall = (verb) => {
+      if (verb === "worktreeCreate") w.git.planted.set(`refs/replace/${REPLACED}`, "agentsha");
+    };
+    labeledByOwner(w, todo("i1", "JRF-501"));
+    expect((await runTick(w)).claims).toEqual(["JRF-501"]);
+    const r = await rec(w);
+    expect(r.stage).toBe("blocked");
+    expect(r.history.at(-1)?.cause).toBe("kit_tampered");
+    expect(r.worktree?.id).toBeTruthy(); // recorded, so the blocked comment names it and stop/release cover it
+    expect(w.orca.calls.filter((c) => c.verb === "worktreeCreate")).toHaveLength(1);
+    expect(await ledgerOf(w, "kit_installed")).toEqual([]);
+    expect(() => readFileSync(runs, "utf8")).toThrow();
+    expect(terminalCreates(w)).toBe(0);
+    expect(blockedComment(w)).toContain("refs/replace/");
+    expect(blockedComment(w)).not.toContain(REPLACED.slice(0, 12));
+    expect(blockedComment(w)).toContain("wingmate stop --all"); // a hook may have run during the create: a possible escape
+  });
+
   test("F1/F2: without the repository's main checkout in Orca's fleet the base cannot be verified first: blocked, nothing created", async () => {
     const w = await world();
     w.orca.mains.clear();

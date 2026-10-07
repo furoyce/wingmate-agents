@@ -258,6 +258,12 @@ export interface GitPort {
    * (an object it does not have). A clone that has not fetched holds an ancestor of GitHub's base; a rewritten ref need not.
    */
   isAncestor(t: GitTarget, ancestor: string, descendant: string): Promise<boolean | null>;
+  /**
+   * F7: the refs under `refs/replace/` (`git replace`), packed or loose, at most ten. Each makes git read another object wherever the
+   * one it names is read — a commit, a tree, a file — while every ref and HEAD still name the original. Orca's `git worktree add`
+   * honors them; the dispatcher's own git never does (DISPATCHER_GIT_ENV).
+   */
+  replaceRefs(t: GitTarget): Promise<string[]>;
 }
 /**
  * C29: `repo` is the configured `repos.<name>.github`. gh is told the repository (`--repo`) and runs outside every worktree, so it never

@@ -21,10 +21,13 @@ const OBJECT_NAME = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
  * own git calls find no repository; this stays as a second layer). Its config has command scope,
  * above the repository's own, so no hook and no fsmonitor command runs with the owner's credentials: a relative `core.hooksPath`
  * (husky's `.husky/_`) resolves inside the agent-writable worktree, where an ignored hook is seen by neither git status, the path
- * guard nor the secret scan. Never prompts.
+ * guard nor the secret scan. Never prompts. F7: never follows a replace ref (`refs/replace/<object>`, which an agent's sandbox can add
+ * through the shared packed-refs): one would show the guards another object than the one the push sends (pack-objects never
+ * replaces), and the base checks another history than GitHub's.
  */
 export const DISPATCHER_GIT_ENV: Readonly<Record<string, string>> = {
   GIT_TERMINAL_PROMPT: "0",
+  GIT_NO_REPLACE_OBJECTS: "1",
   GIT_CONFIG_COUNT: "2",
   GIT_CONFIG_KEY_0: "core.hooksPath",
   GIT_CONFIG_VALUE_0: "/dev/null",
@@ -48,6 +51,8 @@ const githubRepo = (url: string): string | null => {
 };
 /** C26: the ref line `git push --porcelain` prints for a non-fast-forward rejection (its status words are not translated). */
 const NON_FAST_FORWARD = /^!\t[^\t]*\t\[rejected\] \((?:non-fast-forward|fetch first)\)$/m;
+/** F7: how many replace refs `replaceRefs` names — one is enough to refuse, and the read stays bounded. */
+const REPLACE_REFS_MAX = 10;
 
 /** Not `git_…`: an invalid branch is no infrastructure trouble, so a finish that keeps hitting it is counted (and quarantined). */
 function assertBranch(branch: string): void {
@@ -248,5 +253,10 @@ export class GitCli implements GitPort {
       throw new WingmateError("sha_invalid", "git merge-base: a commit to compare is not a full object name");
     const r = await this.run(t, ["merge-base", "--is-ancestor", ancestor, descendant], 60_000);
     return r.code === 0 ? true : r.code === 1 ? false : null;
+  }
+  /** F7: `git for-each-ref` of `refs/replace/` on the pinned target — packed and loose refs alike, at most ten names. */
+  async replaceRefs(t: GitTarget): Promise<string[]> {
+    const args = ["for-each-ref", `--count=${REPLACE_REFS_MAX}`, "--format=%(refname)", "refs/replace/"];
+    return (await this.g(t, args)).split("\n").filter(Boolean);
   }
 }

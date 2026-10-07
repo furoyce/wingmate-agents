@@ -32,7 +32,10 @@ export class FakeGit implements GitPort {
   fetched: { url: string; sha: string }[] = [];
   /** `${ancestor}..${descendant}` pairs where the first is in the second's history (F3: a stale clone); no other pair is. */
   ancestors = new Set<string>();
-  /** Refs a test planted, each resolving to its own commit (F1/F2: `refs/heads/<GitHub's commit>`, which Orca takes for the base). */
+  /**
+   * Refs a test planted, each resolving to its own commit (F1/F2: `refs/heads/<GitHub's commit>`, which Orca takes for the base; F7:
+   * `refs/replace/<object>`, which makes git read another object in its place).
+   */
   planted = new Map<string, string>();
   /** Real git dirs of worktrees the fake Orca created on disk (makeWorld wires them); other paths get made-up ones. */
   commonDirs = new Map<string, string>();
@@ -93,6 +96,14 @@ export class FakeGit implements GitPort {
   async isAncestor(at: GitTarget, ancestor: string, descendant: string) {
     await pathOf(at);
     return this.ancestors.has(`${ancestor}..${descendant}`);
+  }
+  /** As GitCli: the planted refs under `refs/replace/`, sorted, at most ten (F7). */
+  async replaceRefs(at: GitTarget) {
+    await pathOf(at);
+    return [...this.planted.keys()]
+      .filter((ref) => ref.startsWith("refs/replace/"))
+      .sort()
+      .slice(0, 10);
   }
 }
 

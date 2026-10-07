@@ -1,11 +1,20 @@
 // tests/unit/git/cli.test.ts — GitCli against a real temp repository; GhCli against an injected runner (no network)
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { GhCli } from "../../../src/gh/cli";
 import { GitCli, type Runner } from "../../../src/git/cli";
 import { qualifiedBase } from "../../../src/git/refname";
+import { mainCheckoutTarget } from "../../../src/git/trust";
 import type { GitTarget } from "../../../src/ports";
 import { type RunResult, run } from "../../../src/shared/exec";
 
@@ -180,7 +189,8 @@ describe("GitCli", () => {
     await g.addedLines(t, sha, sha);
     await g.commitsAhead(t, sha, sha);
     await g.historyChanges(t, sha, sha, null);
-    expect(seen.length).toBeGreaterThanOrEqual(7);
+    await g.replaceRefs(t);
+    expect(seen.length).toBeGreaterThanOrEqual(8);
     for (const { argv, env } of seen) {
       expect(argv.slice(0, 5)).toEqual(pinned(t));
       expect(env).toMatchObject({
@@ -212,6 +222,7 @@ describe("GitCli", () => {
     await expect(g.historyChanges(t, sha, sha, null)).rejects.toMatchObject(tampered);
     await expect(g.lsRemoteSha(t, URL, "furoyce/wm-jrf-9")).rejects.toMatchObject(tampered);
     await expect(g.push(t, URL, "furoyce/wm-jrf-9", sha)).rejects.toMatchObject(tampered);
+    await expect(g.replaceRefs(t)).rejects.toMatchObject(tampered);
     writeFileSync(join(t.gitDir, "commondir"), "../..\n");
     writeFileSync(join(t.path, ".git"), `gitdir: ${join(fake, "worktrees", "wm-jrf-9")}\n`);
     await expect(g.addedLines(t, sha, sha)).rejects.toMatchObject(tampered);
@@ -365,7 +376,7 @@ describe("GitCli", () => {
     await git(["-C", dir, "switch", "-q", "main"]); // HEAD moves; the explicit head does not
     expect((await g.historyChanges(dir, base, head)).paths).toContain(".env");
   });
-  test("F2 (D14): every git process GitCli starts runs no repository hook and no fsmonitor, without prompting", async () => {
+  test("F2 (D14): every git process GitCli starts runs no repository hook and no fsmonitor, without prompting, and (F7) follows no replace ref", async () => {
     const { t } = await linkedTarget();
     const seen: { argv: string[]; env: Record<string, string> }[] = [];
     const runner: Runner = async (argv, opts) => {
@@ -391,7 +402,9 @@ describe("GitCli", () => {
     await g.push(t, URL, "furoyce/wm-jrf-1", sha);
     await g.lsRemoteSha(t, URL, "furoyce/wm-jrf-1");
     await g.fetchCommit(t, URL, sha);
-    expect(seen.length).toBeGreaterThanOrEqual(11);
+    await g.isAncestor(t, sha, sha);
+    await g.replaceRefs(t);
+    expect(seen.length).toBeGreaterThanOrEqual(13);
     expect(seen.some((s) => s.argv.includes("push"))).toBe(true);
     for (const { argv, env } of seen) {
       const config = Object.fromEntries(
@@ -405,6 +418,7 @@ describe("GitCli", () => {
         { "core.hooksPath": "/dev/null", "core.fsmonitor": "false" },
       ]);
       expect(env.GIT_TERMINAL_PROMPT).toBe("0");
+      expect([argv[3], env.GIT_NO_REPLACE_OBJECTS]).toEqual([argv[3], "1"]);
     }
   });
   test("C24: a committed or an untracked `.gitattributes` '* -diff' hides no added line, net or in the history (--text --no-textconv)", async () => {
@@ -585,6 +599,52 @@ describe("GitCli", () => {
       await expect(g.isAncestor(t, bad, head)).rejects.toMatchObject({ code: "sha_invalid" });
     expect(seen).toEqual([]);
   });
+  test("F7: no read of the dispatcher's follows a replace ref — one planted in packed-refs (an agent's sandbox may write it) hides an added secret line from git's own diff while the push still sends it, never from the guard reads", async () => {
+    const { dir, base, t } = await linkedTarget();
+    const head = (await git(["-C", dir, "rev-parse", "feature"])).trim();
+    const secret = (await git(["-C", dir, "rev-parse", "feature:src.ts"])).trim();
+    const scratch = realpathSync(mkdtempSync(join(tmpdir(), "wm-gitcli-replace-")));
+    writeFileSync(join(scratch, "harmless.ts"), "const x = 1;\n");
+    const harmless = (await git(["-C", dir, "hash-object", "-w", join(scratch, "harmless.ts")])).trim();
+    appendFileSync(join(dir, ".git", "packed-refs"), `${harmless} refs/replace/${secret}\n`);
+    // what git reads by default now: the harmless blob in the secret's place, while a push (pack-objects never replaces) sends the secret
+    expect(await git(["-C", t.path, "diff", "--text", `${base}...${head}`])).not.toContain("sk-ant-api03");
+    await git(["init", "-q", "--bare", join(scratch, "gh.git")]);
+    await git(["-C", t.path, "push", "-q", join(scratch, "gh.git"), `${head}:refs/heads/furoyce/wm-jrf-9`]);
+    expect(await git(["--git-dir", join(scratch, "gh.git"), "cat-file", "-p", secret])).toContain(
+      "sk-ant-api03",
+    );
+    const hermetic: Runner = (argv, opts) => run(argv, { ...opts, env: { ...opts?.env, ...HERMETIC } });
+    const g = new GitCli(hermetic);
+    const token = { path: "src.ts", line: 'token = "sk-ant-api03-xxxx"' };
+    expect(await g.addedLines(t, base, head)).toContainEqual(token);
+    expect((await g.historyChanges(t, base, head)).added).toContainEqual(token);
+    expect(await g.changedPaths(t, base, head)).toEqual(["src.ts"]);
+  });
+  test("F7: replaceRefs lists the refs under refs/replace/ — packed (an agent's sandbox may write packed-refs) or loose — on the pinned target, the main checkout's too, at most ten", async () => {
+    const { dir, base, t } = await linkedTarget();
+    const seen: string[][] = [];
+    const hermetic: Runner = (argv, opts) => {
+      seen.push(argv);
+      return run(argv, { ...opts, env: { ...opts?.env, ...HERMETIC } });
+    };
+    const g = new GitCli(hermetic);
+    expect(await g.replaceRefs(t)).toEqual([]);
+    expect(seen).toEqual([
+      [...pinned(t), "for-each-ref", "--count=10", "--format=%(refname)", "refs/replace/"],
+    ]);
+    const head = (await git(["-C", dir, "rev-parse", "feature"])).trim();
+    const blob = (await git(["-C", dir, "rev-parse", "main:a.txt"])).trim();
+    const other = (await git(["-C", dir, "rev-parse", "feature:src.ts"])).trim();
+    appendFileSync(join(dir, ".git", "packed-refs"), `${head} refs/replace/${base}\n`);
+    await git(["-C", dir, "update-ref", `refs/replace/${blob}`, other]);
+    const both = [`refs/replace/${base}`, `refs/replace/${blob}`].sort();
+    expect(await g.replaceRefs(t)).toEqual(both);
+    expect(await g.replaceRefs(await mainCheckoutTarget(dir))).toEqual(both); // F1/F2: where the claim checks before a create
+    for (let i = 0; i < 12; i += 1)
+      await git(["-C", dir, "update-ref", `refs/replace/${(i + 1).toString(16).padStart(40, "0")}`, other]);
+    expect(await g.replaceRefs(t)).toHaveLength(10);
+  });
 });
 
 describe("GhCli", () => {
@@ -625,7 +685,7 @@ describe("GhCli", () => {
     const runner: Runner = async (argv) => ok(argv[2] === "list" ? "[]" : "done\n");
     await expect(new GhCli(runner).prCreate(REPO, args)).rejects.toThrow(/no PR url/);
   });
-  test("F2 (D14): the git processes gh starts run no hook and no fsmonitor", async () => {
+  test("F2 (D14): the git processes gh starts run no hook and no fsmonitor, and (F7) follow no replace ref", async () => {
     const envs: Record<string, string>[] = [];
     const runner: Runner = async (argv, opts) => {
       envs.push(opts?.env ?? {});
@@ -642,6 +702,7 @@ describe("GhCli", () => {
     expect(envs).toHaveLength(3);
     for (const env of envs)
       expect(env).toMatchObject({
+        GIT_NO_REPLACE_OBJECTS: "1",
         GIT_CONFIG_COUNT: "2",
         GIT_CONFIG_KEY_0: "core.hooksPath",
         GIT_CONFIG_VALUE_0: "/dev/null",
