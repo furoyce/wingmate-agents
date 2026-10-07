@@ -537,7 +537,7 @@ describe("main() knows the operator commands", () => {
 });
 
 describe("buildRealCtx({ linearOptional })", () => {
-  test("builds while Linear cannot be read (no app credentials yet): empty team metadata and the code; without it, refuses", async () => {
+  test("builds while Linear cannot be read (no app credentials yet): empty team metadata and the code; without it, refuses (Task 13: linear_app_required)", async () => {
     const root = mkdtempSync(join(tmpdir(), "wm-wire-"));
     const keys = ["WINGMATE_HOME", "WINGMATE_CONFIG_HOME", "HOME", "HOMEBREW_PREFIX"] as const;
     const saved = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
@@ -553,8 +553,9 @@ describe("buildRealCtx({ linearOptional })", () => {
       expect(ctx.linearDown).toBe("linear_credentials_missing");
       expect(ctx.meta.labels).toEqual([]);
       expect(ctx.dirs.state).toBe(root);
+      // Task 13 (§11.1): a writing context without the app's credentials.json is refused before any read, never built
       await expect(buildRealCtx({ readOnly: false })).rejects.toMatchObject({
-        code: "linear_credentials_missing",
+        code: "linear_app_required",
       });
     } finally {
       for (const k of keys) {
