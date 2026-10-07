@@ -40,9 +40,18 @@ export class FakeGit implements GitPort {
   /** Real git dirs of worktrees the fake Orca created on disk (makeWorld wires them); other paths get made-up ones. */
   commonDirs = new Map<string, string>();
   gitDirs = new Map<string, string>();
+  /**
+   * Each worktree's HEAD: where Orca really started it (makeWorld: FakeOrca's `startCommit` at the create), until the agent commits
+   * (readyToFinish: `headsha`). Any other path's HEAD is `headsha`.
+   */
+  heads = new Map<string, string>();
+  /** `core.useReplaceRefs` in each repository's own config, by main checkout path (R30); absent: unset. */
+  replaceRefsConfig = new Map<string, boolean>();
+  /** The main checkout of every `disableReplaceRefs` write, in order (R30: `install` writes only when the value is not false). */
+  configWrites: string[] = [];
 
   async revParse(at: GitAt, ref: string): Promise<string> {
-    await pathOf(at);
+    const path = await pathOf(at);
     const planted = this.planted.get(ref);
     if (planted !== undefined) return planted;
     // a branch named after a remote tip's commit exists only when a test plants it: git never makes one
@@ -51,7 +60,7 @@ export class FakeGit implements GitPort {
       [...this.remoteSha.values()].includes(ref.slice("refs/heads/".length))
     )
       throw new Error(`git rev-parse failed (128): fatal: ${ref}: Needed a single revision`);
-    const sha = ref === "HEAD" ? "headsha" : "basesha";
+    const sha = ref === "HEAD" ? (this.heads.get(path) ?? "headsha") : "basesha";
     if (this.missing.has(sha))
       throw new Error(`git rev-parse failed (128): fatal: ${ref}: bad object ${sha}`);
     return sha;
@@ -104,6 +113,23 @@ export class FakeGit implements GitPort {
       .filter((ref) => ref.startsWith("refs/replace/"))
       .sort()
       .slice(0, 10);
+  }
+  /** As GitCli (R30): the planted refs whose last path component is `sha`, in any case, sorted, at most ten. */
+  async refsNamedAfter(at: GitTarget, sha: string) {
+    await pathOf(at);
+    return [...this.planted.keys()]
+      .filter((ref) => ref.split("/").at(-1)?.toLowerCase() === sha.toLowerCase())
+      .sort()
+      .slice(0, 10);
+  }
+  /** As GitCli (R30): the repository's own `core.useReplaceRefs`, null when unset. */
+  async useReplaceRefs(at: GitTarget) {
+    return this.replaceRefsConfig.get(await pathOf(at)) ?? null;
+  }
+  async disableReplaceRefs(at: GitTarget) {
+    const path = await pathOf(at);
+    this.configWrites.push(path);
+    this.replaceRefsConfig.set(path, false);
   }
 }
 

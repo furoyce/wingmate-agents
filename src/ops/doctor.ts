@@ -29,6 +29,7 @@ import {
   settingsPosture,
   withCanary,
 } from "./probe";
+import { replaceRefsDisabled } from "./repoSettings";
 
 export interface Check {
   name: string;
@@ -290,6 +291,8 @@ export async function doctor(ctx: Ctx, o: DoctorOptions): Promise<DoctorReport> 
     };
   });
   await attempt("claude_trust", () => claudeTrust(ctx, fleet), false);
+  // R30 (D14): Orca's checkout of a pilot repository must follow no replace ref an agent could plant in the shared git dir
+  await attempt("replace_refs_disabled", () => replaceRefsDisabled(ctx, fleet));
   await attempt("binary_installed", () => binaryInstalled(ctx, o.version));
   await attempt("automation_present", () => automationPresent(ctx));
   await attempt(

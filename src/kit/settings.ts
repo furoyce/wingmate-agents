@@ -446,6 +446,9 @@ export function claudeSettings(i: SettingsInput): object {
           `${c}/info/**`,
           `${c}/refs/heads/${base}*`,
           `${c}/refs/remotes/**`,
+          // R30 (§13.3 b): defense in depth — a packed replace ref stays writable through packed-refs; what keeps Orca's checkout from
+          // following either form is install's core.useReplaceRefs=false in `<common>/config`, which is denied above
+          `${c}/refs/replace/**`,
           ...COMMON_TOP_DENY.map((n) => `${c}/${n}`),
           ...COMMON_GLOB_DENY.map((g) => `${c}/${g}`),
           "~/.local/share/wingmate/**",

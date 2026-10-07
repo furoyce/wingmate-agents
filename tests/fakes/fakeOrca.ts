@@ -78,10 +78,13 @@ export class FakeOrca implements OrcaPort {
   /** What `worktree current` reports for any cwd (the checkout `install` and `doctor` run from). */
   current = { repoId: "repo-self", worktreeId: "wt-self", path: "/wt/self" };
   /**
-   * What `worktree show` reports as a worktree's `head`. FakeGit resolves every base ref to `basesha`, so an honest create starts
-   * there; F7 tests set another commit (a ref an agent made shadowing the base name).
+   * Where a new worktree really starts (makeWorld hands it to FakeGit as that worktree's HEAD) and, unless `shownHead` says otherwise,
+   * what `worktree show` reports as its `head`. FakeGit resolves every base ref to `basesha`, so an honest create starts there; F7
+   * tests set another commit (a ref an agent made shadowing the base name).
    */
   startCommit = "basesha";
+  /** R30: what `worktree show` reports as `head` when it is not where the worktree started (Orca's head is cached); null: `startCommit`. */
+  shownHead: string | null = null;
   /**
    * Repos whose main checkout `worktree ps` lists (`isMainWorktree`; F1/F2: a claim verifies its base there before it creates a
    * worktree). With `root` it is `<root>/repos/<repoId>`, whose `.git` directory is made when first listed and becomes a real
@@ -194,7 +197,7 @@ export class FakeOrca implements OrcaPort {
     await this.rec("worktreeShow", id);
     const r = this.rows.get(id);
     if (!r) throw new Error("no worktree");
-    return { id, path: r.path, branch: r.branch, head: this.startCommit };
+    return { id, path: r.path, branch: r.branch, head: this.shownHead ?? this.startCommit };
   }
   async worktreeSet(id: string, a: unknown) {
     await this.rec("worktreeSet", { id, a });

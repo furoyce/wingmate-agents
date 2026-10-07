@@ -261,9 +261,22 @@ export interface GitPort {
   /**
    * F7: the refs under `refs/replace/` (`git replace`), packed or loose, at most ten. Each makes git read another object wherever the
    * one it names is read — a commit, a tree, a file — while every ref and HEAD still name the original. Orca's `git worktree add`
-   * honors them; the dispatcher's own git never does (DISPATCHER_GIT_ENV).
+   * honors them unless the repository's config says `core.useReplaceRefs=false` (R30); the dispatcher's own git never does
+   * (DISPATCHER_GIT_ENV).
    */
   replaceRefs(t: GitTarget): Promise<string[]>;
+  /**
+   * R30: the refs whose last path component is `sha` — in any namespace (`refs/heads/`, `refs/tags/`, …), packed or loose, in any case
+   * (a case-insensitive disk finds a loose ref so) — at most ten. Orca resolves a base given as a commit through `refs/heads/<commit>`.
+   */
+  refsNamedAfter(t: GitTarget, sha: string): Promise<string[]>;
+  /**
+   * R30 (D14): `core.useReplaceRefs` as the repository's own config file holds it (`<common>/config`), read as git reads a boolean;
+   * null when unset. False there makes every git of the repository — Orca's `git worktree add` too — ignore refs/replace/.
+   */
+  useReplaceRefs(t: GitTarget): Promise<boolean | null>;
+  /** R30: `core.useReplaceRefs=false` in the repository's own config, every earlier value replaced — the one setting `install` makes there. */
+  disableReplaceRefs(t: GitTarget): Promise<void>;
 }
 /**
  * C29: `repo` is the configured `repos.<name>.github`. gh is told the repository (`--repo`) and runs outside every worktree, so it never

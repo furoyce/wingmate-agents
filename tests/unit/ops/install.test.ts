@@ -4,6 +4,8 @@ import { describe, expect, test } from "bun:test";
 import { lstatSync, mkdtempSync, readlinkSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { readOnlyCtx } from "../../../src/cli/wire";
+import { mainCheckoutTarget } from "../../../src/git/trust";
 import { readCredentials, writeCredentials } from "../../../src/linear/auth";
 import { doctor } from "../../../src/ops/doctor";
 import {
@@ -360,6 +362,70 @@ describe("install — Task 12 coverage", () => {
     for (const v of [all, needsYou])
       expect(JSON.stringify(v?.filterData)).toContain('"nin":["completed","canceled"]');
     for (const p of Object.values(w.cfg.projects)) expect(text).toContain(p.linearProject);
+  });
+});
+
+describe("install — Task 13 F7 (Ruling R30): core.useReplaceRefs=false in every pilot repository", () => {
+  /** `<project>/<repo>` of every configured repository, in config order, with the main checkout the world's Orca lists for it. */
+  const pilots = (w: Awaited<ReturnType<typeof world>>) =>
+    Object.entries(w.cfg.projects).flatMap(([key, p]) =>
+      Object.entries(p.repos).map(([name, repo]) => ({
+        repo: `${key}/${name}`,
+        orcaRepo: repo.orcaRepo,
+        path: join(w.root, "orca", "repos", repo.orcaRepo),
+      })),
+    );
+
+  test("install sets it in the repository config of each pilot repo's main checkout, writes only when it is not false already, and lists every repo in its result", async () => {
+    const w = await world();
+    const repos = pilots(w);
+    expect(repos.length).toBeGreaterThan(1);
+    const first = await install(w.ctx, base());
+    expect(first.repoSettings).toEqual(
+      repos.map((r) => ({ repo: r.repo, path: r.path, outcome: "set", detail: null })),
+    );
+    for (const r of repos) expect(w.git.replaceRefsConfig.get(r.path)).toBe(false);
+    expect(w.git.configWrites).toEqual(repos.map((r) => r.path));
+    const again = await install(w.ctx, base());
+    expect(again.repoSettings.map((s) => s.outcome)).toEqual(repos.map(() => "unchanged"));
+    // no second write: the common config is in every issue's integrity set (§6.3 step 6)
+    expect(w.git.configWrites).toEqual(repos.map((r) => r.path));
+    w.git.replaceRefsConfig.set(repos[0]?.path ?? "", true); // set back by hand
+    expect((await install(w.ctx, base())).repoSettings[0]?.outcome).toBe("set");
+    expect(w.git.replaceRefsConfig.get(repos[0]?.path ?? "")).toBe(false);
+  });
+
+  test("a pilot repo without a usable main checkout is listed failed with the reason; install still completes, the automation disabled", async () => {
+    const w = await world();
+    const [missing, plain, ...rest] = pilots(w);
+    if (!missing || !plain) throw new Error("two pilot repos expected");
+    w.orca.mains.delete(missing.orcaRepo); // not in Orca's fleet
+    w.git.useReplaceRefs = async () => {
+      throw new WingmateError("git_failed", "git config failed (3): fatal: bad config line 1");
+    };
+    const a = await install(w.ctx, base());
+    expect(a.repoSettings[0]).toMatchObject({ repo: missing.repo, path: null, outcome: "failed" });
+    expect(a.repoSettings[0]?.detail).toContain("main checkout");
+    expect(a.repoSettings[1]).toEqual({
+      repo: plain.repo,
+      path: plain.path,
+      outcome: "failed",
+      detail: "git_failed",
+    });
+    expect(a.repoSettings).toHaveLength(2 + rest.length);
+    expect(a.enabled).toBe(false);
+    expect(await readInstallState(w.dirs)).not.toBeNull();
+  });
+
+  test("setting it is a write: a read-only context refuses it before git runs", async () => {
+    const w = await world();
+    const ro = readOnlyCtx(w.ctx);
+    const path = pilots(w)[0]?.path ?? "";
+    await w.ctx.orca.worktreePs(); // lists the main checkouts (their .git directories are made on listing)
+    await expect(ro.git.disableReplaceRefs(await mainCheckoutTarget(path))).rejects.toMatchObject({
+      code: "read_only",
+    });
+    expect(w.git.configWrites).toEqual([]);
   });
 });
 

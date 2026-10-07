@@ -25,6 +25,7 @@ export async function readyToFinish(w: World, identifier: string) {
   const wt = r.worktree;
   const gates = w.cfg.projects[r.project]?.repos[r.repo]?.gates;
   if (!gates) throw new Error(`${identifier}: no pinned gates for ${r.project}/${r.repo}`);
+  w.git.heads.set(wt.path, "headsha"); // the agent's commit
   const head = await w.git.revParse(wt.path, "HEAD");
   for (const g of ["intake", "plan", "planVerify", "implement", "validate", "ui", "security"] as const)
     r.gates[g] = {

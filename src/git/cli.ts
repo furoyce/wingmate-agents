@@ -259,4 +259,37 @@ export class GitCli implements GitPort {
     const args = ["for-each-ref", `--count=${REPLACE_REFS_MAX}`, "--format=%(refname)", "refs/replace/"];
     return (await this.g(t, args)).split("\n").filter(Boolean);
   }
+  /**
+   * R30: `git for-each-ref --ignore-case` on the pinned target over every ref `refs/<any directories>/<sha>` (one wildmatch pattern; its
+   * double-star part also matches no directory), kept to the refs whose last component is the commit. The commit must be a full
+   * object name, so the pattern holds no glob of anyone else's.
+   */
+  async refsNamedAfter(t: GitTarget, sha: string): Promise<string[]> {
+    if (!OBJECT_NAME.test(sha))
+      throw new WingmateError("sha_invalid", "git for-each-ref: the commit is not a full object name");
+    const args = [
+      "for-each-ref",
+      "--ignore-case",
+      `--count=${REPLACE_REFS_MAX}`,
+      "--format=%(refname)",
+      `refs/**/${sha}`,
+    ];
+    const named = (ref: string) => ref.split("/").at(-1)?.toLowerCase() === sha;
+    return (await this.g(t, args)).split("\n").filter(named);
+  }
+  /** R30: `git config --local --type=bool --get core.useReplaceRefs` — git's own boolean reading; exit 1 is unset. */
+  async useReplaceRefs(t: GitTarget): Promise<boolean | null> {
+    const r = await this.run(t, ["config", "--local", "--type=bool", "--get", "core.useReplaceRefs"], 30_000);
+    if (r.code === 1) return null;
+    const value = r.stdout.trim();
+    if (r.code === 0 && (value === "true" || value === "false")) return value === "true";
+    throw new WingmateError(
+      "git_failed",
+      `git config failed (${r.code}): ${r.stderr.trim().slice(0, 300) || "no boolean"}`,
+    );
+  }
+  /** R30: `git config --local --replace-all core.useReplaceRefs false` — one value left, however many there were (a plain set refuses several). */
+  async disableReplaceRefs(t: GitTarget): Promise<void> {
+    await this.g(t, ["config", "--local", "--replace-all", "core.useReplaceRefs", "false"], 30_000);
+  }
 }

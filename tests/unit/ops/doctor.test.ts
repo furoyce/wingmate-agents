@@ -1,7 +1,7 @@
 // tests/unit/ops/doctor.test.ts — every §13.3 control doctor can verify from the dispatcher host; probes are covered in probe.test.ts.
 // The command runner is injected (`exec`): no test starts the real claude or codex.
 import { describe, expect, test } from "bun:test";
-import { readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { writeCredentials } from "../../../src/linear/auth";
 import { type DoctorOptions, type DoctorReport, doctor } from "../../../src/ops/doctor";
@@ -80,6 +80,7 @@ async function healthy(): Promise<W> {
   for (const p of Object.values(w.cfg.projects))
     for (const [name, repo] of Object.entries(p.repos)) {
       const path = join(w.root, "projects", `${p.key}-${name}`);
+      mkdirSync(join(path, ".git"), { recursive: true }); // a plain clone's git dir (R30: install sets its config there)
       w.orca.rows.set(`${repo.orcaRepo}::${path}`, main(repo.orcaRepo, path));
       trust[path] = { hasTrustDialogAccepted: true };
     }
@@ -137,7 +138,13 @@ describe("doctor — every check", () => {
       "binary_installed",
     ])
       expect(check(rep, n)?.blocking).toBe(true);
-    for (const n of ["automation_present", "sandbox_settings", "sandbox_probe", "notify_test"])
+    for (const n of [
+      "automation_present",
+      "replace_refs_disabled",
+      "sandbox_settings",
+      "sandbox_probe",
+      "notify_test",
+    ])
       expect(check(rep, n)?.blocking).toBe(true);
     for (const n of ["claude_trust", "heartbeat_fresh", "journal_clean", "orca_from_sandbox"])
       expect(check(rep, n)?.blocking).toBe(false);
@@ -238,6 +245,44 @@ describe("doctor — every check", () => {
     expect(check(await doctor(w.ctx, opts()), "claude_trust")?.detail).toContain(
       "main checkout not in the fleet",
     );
+  });
+
+  test("R30 (Task 13 F7): replace_refs_disabled (blocking) reads core.useReplaceRefs in each pilot repo's main checkout — unset, true, unreadable, or no main checkout in the fleet each fail, naming the repo", async () => {
+    const w = await healthy(); // install set it in every pilot repo
+    const ok = check(await doctor(w.ctx, opts()), "replace_refs_disabled");
+    expect(ok).toMatchObject({ ok: true, blocking: true });
+    const repos = Object.entries(w.cfg.projects).flatMap(([key, p]) =>
+      Object.entries(p.repos).map(([name, repo]) => ({
+        repo: `${key}/${name}`,
+        orcaRepo: repo.orcaRepo,
+        path: join(w.root, "projects", `${key}-${name}`),
+      })),
+    );
+    for (const r of repos) expect(ok?.detail).toContain(`${r.repo}: off`);
+    const [first] = repos;
+    if (!first) throw new Error("no pilot repo");
+    const failing = async (detail: string) => {
+      const rep = await doctor(w.ctx, opts());
+      expect(check(rep, "replace_refs_disabled")).toMatchObject({ ok: false, blocking: true });
+      expect(check(rep, "replace_refs_disabled")?.detail).toContain(`${first.repo}: ${detail}`);
+      expect(rep.ok).toBe(false);
+    };
+    w.git.replaceRefsConfig.delete(first.path);
+    await failing("NOT off (unset)");
+    w.git.replaceRefsConfig.set(first.path, true);
+    await failing("NOT off (true)");
+    const read = w.git.useReplaceRefs.bind(w.git);
+    w.git.useReplaceRefs = async (t) => {
+      if (t.path === first.path)
+        throw new WingmateError("git_failed", "git config failed (3): bad config line 7");
+      return read(t);
+    };
+    await failing("unreadable (git_failed)");
+    w.git.useReplaceRefs = read;
+    w.git.replaceRefsConfig.set(first.path, false);
+    w.orca.rows.delete(`${first.orcaRepo}::${first.path}`);
+    w.orca.mains.delete(first.orcaRepo); // the world's own main checkout of that repo too (F1/F2)
+    await failing("main checkout not in the fleet");
   });
 
   test("binary_installed: a changed binary or a link pointing elsewhere fails; automation_present: a changed prompt, precheck or mode fails", async () => {

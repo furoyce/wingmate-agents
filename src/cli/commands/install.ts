@@ -2,6 +2,7 @@
 // `--client-secret -` reads the OAuth client secret from one line of stdin, so it never stands on the command line.
 import { doctor } from "../../ops/doctor";
 import { type InstallResult, install } from "../../ops/install";
+import { REPLACE_REFS_SETTING } from "../../ops/repoSettings";
 import { upsertViews, viewDefinitions, viewRecipe } from "../../ops/views";
 import { WingmateError } from "../../shared/errors";
 import type { Argv } from "../index";
@@ -26,6 +27,19 @@ function print(r: InstallResult, out: (l: string) => void, cfg: Parameters<typeo
   out(`  binary      ${r.binPath} (sha256 ${r.sha256.slice(0, 16)}…)`);
   out(`  worktree    ${r.worktreeId}`);
   out(`  automation  ${r.automationId ?? "none"} (${r.enabled ? "enabled" : "disabled"})`);
+  if (r.repoSettings.length) {
+    // R30 (D14): a deliberate setting in each pilot repository, so Orca's checkouts follow no replace ref an agent plants
+    out(`repository config ${REPLACE_REFS_SETTING} (Orca's checkouts follow no replace ref):`);
+    const width = Math.max(...r.repoSettings.map((s) => s.repo.length));
+    for (const s of r.repoSettings)
+      out(
+        `  ${s.repo.padEnd(width)}  ${s.outcome === "failed" ? `NOT SET (${s.detail ?? "unknown"})` : s.outcome}${s.path ? `  ${s.path}` : ""}`,
+      );
+    if (r.repoSettings.some((s) => s.outcome === "failed"))
+      out(
+        "  doctor's replace_refs_disabled refuses --enable until each is set: fix the cause, then re-run install",
+      );
+  }
   if (r.viewUrls.length) {
     out("saved views (set the display by hand; the API takes only the filter):");
     viewDefinitions(cfg).forEach((v, i) =>

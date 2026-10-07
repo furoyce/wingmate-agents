@@ -2,6 +2,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   appendFileSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   realpathSync,
@@ -385,9 +386,11 @@ describe("GitCli", () => {
         ? "1\n"
         : argv.includes("rev-parse")
           ? `${"a".repeat(40)}\n`
-          : argv.includes("config")
-            ? `${URL}\n`
-            : "";
+          : argv.includes("core.useReplaceRefs")
+            ? "false\n"
+            : argv.includes("config")
+              ? `${URL}\n`
+              : "";
       return { code: 0, stdout: out, stderr: "", timedOut: false, truncated: false };
     };
     const g = new GitCli(runner);
@@ -404,7 +407,10 @@ describe("GitCli", () => {
     await g.fetchCommit(t, URL, sha);
     await g.isAncestor(t, sha, sha);
     await g.replaceRefs(t);
-    expect(seen.length).toBeGreaterThanOrEqual(13);
+    await g.refsNamedAfter(t, sha);
+    await g.useReplaceRefs(t);
+    await g.disableReplaceRefs(t);
+    expect(seen.length).toBeGreaterThanOrEqual(16);
     expect(seen.some((s) => s.argv.includes("push"))).toBe(true);
     for (const { argv, env } of seen) {
       const config = Object.fromEntries(
@@ -644,6 +650,100 @@ describe("GitCli", () => {
     for (let i = 0; i < 12; i += 1)
       await git(["-C", dir, "update-ref", `refs/replace/${(i + 1).toString(16).padStart(40, "0")}`, other]);
     expect(await g.replaceRefs(t)).toHaveLength(10);
+  });
+  test("F7 (R30): useReplaceRefs reads core.useReplaceRefs from the repository's own config as git's boolean (null when unset); disableReplaceRefs sets it false there over any number of values — and then Orca's plain `git worktree add` follows no replace ref, packed or loose", async () => {
+    const { dir, base } = await repo();
+    await git(["-C", dir, "switch", "-q", "main"]);
+    const seen: { argv: string[]; env: Record<string, string> }[] = [];
+    const hermetic: Runner = (argv, opts) => {
+      seen.push({ argv, env: opts?.env ?? {} });
+      return run(argv, { ...opts, env: { ...opts?.env, ...HERMETIC } });
+    };
+    const g = new GitCli(hermetic);
+    const t = await mainCheckoutTarget(dir);
+    expect(await g.useReplaceRefs(t)).toBeNull();
+    expect(seen.map((s) => s.argv)).toEqual([
+      [...pinned(t), "config", "--local", "--type=bool", "--get", "core.useReplaceRefs"],
+    ]);
+    expect(seen[0]?.env).toMatchObject({ GIT_COMMON_DIR: t.commonDir, GIT_NO_REPLACE_OBJECTS: "1" });
+    await git(["-C", dir, "config", "--add", "core.useReplaceRefs", "true"]);
+    await git(["-C", dir, "config", "--add", "core.useReplaceRefs", "yes"]);
+    expect(await g.useReplaceRefs(t)).toBe(true); // the last value, as git reads it
+    seen.length = 0;
+    await g.disableReplaceRefs(t); // over two values (a plain `git config <key> <value>` refuses that, exit 5)
+    expect(seen.map((s) => s.argv)).toEqual([
+      [...pinned(t), "config", "--local", "--replace-all", "core.useReplaceRefs", "false"],
+    ]);
+    const values = async () =>
+      (await git(["-C", dir, "config", "--local", "--get-all", "core.useReplaceRefs"])).trim();
+    expect(await values()).toBe("false");
+    expect(await g.useReplaceRefs(t)).toBe(false);
+    await g.disableReplaceRefs(t); // idempotent: still one value
+    expect(await values()).toBe("false");
+    await git(["-C", dir, "config", "--replace-all", "core.useReplaceRefs", "off"]);
+    expect(await g.useReplaceRefs(t)).toBe(false); // any of git's spellings of false
+    await git(["-C", dir, "config", "--replace-all", "core.useReplaceRefs", "maybe"]);
+    await expect(g.useReplaceRefs(t)).rejects.toMatchObject({ code: "git_failed" });
+    await g.disableReplaceRefs(t); // repairs a value git cannot read (every other git command in the repository dies on it)
+    expect(await g.useReplaceRefs(t)).toBe(false);
+    // Orca's own `git worktree add -b <branch> <path> <commit>` runs plain git, without the dispatcher's environment
+    const feature = (await git(["-C", dir, "rev-parse", "feature"])).trim();
+    const scratch = realpathSync(mkdtempSync(join(tmpdir(), "wm-gitcli-orca-")));
+    const orcaAdd = async (name: string) => {
+      await git(["-C", dir, "worktree", "add", "-q", "-b", name, join(scratch, name), base]);
+      return existsSync(join(scratch, name, "src.ts")); // a file only the agent's commit has
+    };
+    appendFileSync(join(dir, ".git", "packed-refs"), `${feature} refs/replace/${base}\n`);
+    await git(["-C", dir, "config", "--unset-all", "core.useReplaceRefs"]);
+    expect(await orcaAdd("before")).toBe(true); // the packed replace ref redirects the checkout while the setting is unset
+    await g.disableReplaceRefs(t);
+    expect(await orcaAdd("packed")).toBe(false);
+    await git(["-C", dir, "update-ref", "-d", `refs/replace/${base}`]);
+    await git(["-C", dir, "update-ref", `refs/replace/${base}`, feature]);
+    expect(await orcaAdd("loose")).toBe(false);
+  });
+  test("F7 (R30): refsNamedAfter lists the refs whose last path component is the commit — any namespace, packed or loose, any case — on the pinned target, at most ten; a non-object name is refused before git runs", async () => {
+    const { dir, base } = await repo();
+    const seen: string[][] = [];
+    const hermetic: Runner = (argv, opts) => {
+      seen.push(argv);
+      return run(argv, { ...opts, env: { ...opts?.env, ...HERMETIC } });
+    };
+    const g = new GitCli(hermetic);
+    const t = await mainCheckoutTarget(dir);
+    expect(await g.refsNamedAfter(t, base)).toEqual([]);
+    expect(seen).toEqual([
+      [...pinned(t), "for-each-ref", "--ignore-case", "--count=10", "--format=%(refname)", `refs/**/${base}`],
+    ]);
+    const other = (await git(["-C", dir, "rev-parse", "feature"])).trim();
+    for (const ref of [
+      `refs/tags/${base}`,
+      `refs/remotes/origin/${base}`,
+      `refs/${base}`,
+      `refs/odd/deep/${base}`,
+    ])
+      await git(["-C", dir, "update-ref", ref, other]);
+    await git(["-C", dir, "update-ref", `refs/heads/x/${base.toUpperCase()}`, other]); // a loose ref a case-insensitive disk finds
+    appendFileSync(join(dir, ".git", "packed-refs"), `${other} refs/heads/${base}\n`);
+    // only named like it: the commit is not their last component
+    for (const near of [`refs/heads/${base}-x`, `refs/near/${base}/y`])
+      await git(["-C", dir, "update-ref", near, other]);
+    expect((await g.refsNamedAfter(t, base)).sort()).toEqual(
+      [
+        `refs/${base}`,
+        `refs/heads/${base}`,
+        `refs/heads/x/${base.toUpperCase()}`,
+        `refs/odd/deep/${base}`,
+        `refs/remotes/origin/${base}`,
+        `refs/tags/${base}`,
+      ].sort(),
+    );
+    seen.length = 0;
+    await expect(g.refsNamedAfter(t, "main")).rejects.toMatchObject({ code: "sha_invalid" });
+    await expect(g.refsNamedAfter(t, `refs/**/${base}`)).rejects.toMatchObject({ code: "sha_invalid" });
+    expect(seen).toEqual([]);
+    for (let i = 0; i < 12; i += 1) await git(["-C", dir, "update-ref", `refs/tags/n${i}/${base}`, other]);
+    expect(await g.refsNamedAfter(t, base)).toHaveLength(10);
   });
 });
 

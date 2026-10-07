@@ -53,6 +53,7 @@ export async function makeWorld(startIso = "2026-10-06T10:00:00Z") {
   orca.onWorktree = (path, commonDir, gitDir) => {
     git.commonDirs.set(path, commonDir);
     git.gitDirs.set(path, gitDir);
+    git.heads.set(path, orca.startCommit); // R30: the new worktree's HEAD, which the claim reads with its own git
   };
   const gh = new FakeGh();
   const swept: string[] = [];

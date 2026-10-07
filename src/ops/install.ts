@@ -1,8 +1,8 @@
 // src/ops/install.ts — §4.3: the long-lived dispatcher worktree, the compiled binary (`bun build --compile` to
-// <state>/bin/wingmate-<version>, hashed, linked from ~/.local/bin/wingmate), the Orca automation created or edited idempotently, the
-// saved views (§11.5, only as the OAuth app) and install.json. The automation is written disabled first; only `--enable` with a doctor
-// that passes every blocking check — run after install.json names the new binary — turns it on (§13.3 "a failing check refuses
-// `install --enable`").
+// <state>/bin/wingmate-<version>, hashed, linked from ~/.local/bin/wingmate), the Orca automation created or edited idempotently,
+// `core.useReplaceRefs=false` in each pilot repository (R30), the saved views (§11.5, only as the OAuth app) and install.json. The
+// automation is written disabled first; only `--enable` with a doctor that passes every blocking check — run after install.json names
+// the new binary — turns it on (§13.3 "a failing check refuses `install --enable`").
 import { createHash } from "node:crypto";
 import { chmod, lstat, mkdir, readFile, rename, symlink } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
@@ -18,6 +18,7 @@ import { newUlid } from "../shared/ids";
 import type { Dirs } from "../shared/paths";
 import { readText, writeAtomic } from "../state/fs";
 import type { DoctorReport } from "./doctor";
+import { type RepoSetting, disableReplaceRefsInPilots } from "./repoSettings";
 
 export const InstallStateSchema = z.object({
   version: z.string(),
@@ -33,6 +34,8 @@ export type InstallState = z.infer<typeof InstallStateSchema>;
 export interface InstallResult extends InstallState {
   /** The saved views could not be written (an error code); the CLI then prints the manual recipe. */
   viewsError: string | null;
+  /** R30: `core.useReplaceRefs=false` in each pilot repository — set now, already set, or failed with the reason. */
+  repoSettings: RepoSetting[];
 }
 
 export const AUTOMATION_NAME = "wingmate-dispatcher";
@@ -191,6 +194,8 @@ export async function install(ctx: Ctx, o: InstallOptions): Promise<InstallResul
     await ctx.orca.automationsEdit(current.id, flags);
     automationId = current.id;
   } else automationId = (await ctx.orca.automationsCreate(flags)).id;
+  // R30 (D14): Orca's checkouts of a pilot repository follow no replace ref — set before any doctor reads it back
+  const repoSettings = await disableReplaceRefsInPilots(ctx);
   // §11.5: written as the app, so only with its credentials; otherwise the CLI prints the manual recipe
   let viewUrls: string[] = [];
   let viewsError: string | null = null;
@@ -226,7 +231,7 @@ export async function install(ctx: Ctx, o: InstallOptions): Promise<InstallResul
     state.enabled = true;
     await writeAtomic(statePath(ctx.dirs), JSON.stringify(state, null, 2));
   }
-  return { ...state, viewsError };
+  return { ...state, viewsError, repoSettings };
 }
 
 /** `bun install --frozen-lockfile` then `bun build --compile` into a temp file renamed over `outFile` (a running binary is never rewritten). */

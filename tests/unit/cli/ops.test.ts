@@ -59,6 +59,7 @@ const fakeResult = (o: Partial<InstallResult> = {}): InstallResult => ({
   installedAt: "2026-10-06T10:00:00.000Z",
   enabled: false,
   viewsError: null,
+  repoSettings: [],
   ...o,
 });
 
@@ -122,6 +123,29 @@ describe("wingmate install (CLI)", () => {
       automationId: "auto-1",
       viewUrls: ["https://linear.app/jrf/view/x"],
     });
+  });
+
+  test("R30 (Task 13 F7): install prints each pilot repo's core.useReplaceRefs=false outcome, and that doctor refuses --enable until a failed one is set", async () => {
+    const w = await world();
+    const t = io(w);
+    const code = await installCommand(parseArgv(["install"]), {
+      ...t.deps,
+      install: async () =>
+        fakeResult({
+          repoSettings: [
+            { repo: "bouncr/api", path: "/repos/api", outcome: "set", detail: null },
+            { repo: "bouncr/web", path: "/repos/web", outcome: "unchanged", detail: null },
+            { repo: "ehr/app", path: null, outcome: "failed", detail: "main checkout not in the fleet" },
+          ],
+        }),
+    });
+    expect(code).toBe(0);
+    const text = t.out.join("\n");
+    expect(text).toContain("core.useReplaceRefs=false");
+    expect(text).toMatch(/bouncr\/api +set +\/repos\/api/);
+    expect(text).toMatch(/bouncr\/web +unchanged +\/repos\/web/);
+    expect(text).toMatch(/ehr\/app +NOT SET \(main checkout not in the fleet\)/);
+    expect(text).toContain("replace_refs_disabled");
   });
 
   /** stdin as the CLI reads it, in chunks that need not end on a line boundary. */

@@ -8,6 +8,8 @@ import { join } from "node:path";
 import { verifyIntegrity } from "../../src/kit/install";
 import { writeIntent } from "../../src/kit/intents";
 import { LaunchSchema } from "../../src/kit/local";
+import type { GitTarget } from "../../src/ports";
+import { WingmateError } from "../../src/shared/errors";
 import { type WRecord, readRecord } from "../../src/state/records";
 import { OWNER, type World, advance, labeledByOwner, runTick, todo, world } from "./harness";
 
@@ -411,6 +413,127 @@ describe("C30: the claim's base is GitHub's — the local origin/main must name 
     expect(r.history.at(-1)?.cause).toBe("base_mismatch");
     expect(blockedComment(w)).toContain("furoyce/bouncr.lol");
     expect(terminalCreates(w)).toBe(0);
+  });
+});
+
+describe("R30 (Task 13 F7): the new worktree's HEAD read with the dispatcher's own git, refs named after the base commit, post-create reads that fail closed", () => {
+  /** A commit an agent made: a worktree that starts there holds its files. */
+  const AGENT = "fedcba9876543210fedcba9876543210fedcba98";
+  /** An object an agent asks git to read another one in place of (`refs/replace/<object>`); its name is agent-made. */
+  const REPLACED = "89abcdef0123456789abcdef0123456789abcdef";
+  const creates = (w: World) => w.orca.calls.filter((c) => c.verb === "worktreeCreate");
+  /** Blocked at claim, after Orca created the worktree: no kit, no setup, no terminal; the worktree recorded for the comment. */
+  async function blockedAfterCreate(w: World, runs: string): Promise<WRecord> {
+    labeledByOwner(w, todo("i1", "JRF-501"));
+    expect((await runTick(w)).claims).toEqual(["JRF-501"]);
+    const r = await rec(w);
+    expect(r.stage).toBe("blocked");
+    expect(r.history.at(-1)?.cause).toBe("kit_tampered");
+    expect(r.worktree?.id).toBeTruthy();
+    expect(creates(w)).toHaveLength(1);
+    expect(await ledgerOf(w, "kit_installed")).toEqual([]);
+    expect(() => readFileSync(runs, "utf8")).toThrow();
+    expect(terminalCreates(w)).toBe(0);
+    return r;
+  }
+
+  test("the new worktree's HEAD is read with the dispatcher's own pinned git, never Orca's cached `worktree show` head: one that really starts elsewhere while Orca reports the verified commit blocks kit_tampered before the kit, the setup or a terminal", async () => {
+    const w = await world();
+    const runs = tracedSetup(w);
+    w.orca.startCommit = AGENT; // a ref planted in the moment before Orca's checkout: the worktree really starts at the agent's commit
+    w.orca.shownHead = "basesha"; // while `worktree show` still reports the commit it was given (its head is cached)
+    const read: GitTarget[] = [];
+    const revParse = w.git.revParse.bind(w.git);
+    w.git.revParse = async (at, ref) => {
+      if (ref === "HEAD" && typeof at !== "string") read.push(at);
+      return revParse(at, ref);
+    };
+    const r = await blockedAfterCreate(w, runs);
+    // through the new worktree's own verified git dirs (C22: --git-dir, --work-tree and the common dir pinned), not the main checkout's
+    expect(read.map((t) => t.gitDir)).toEqual([gitDirOf(wtOf(r))]);
+    expect(blockedComment(w)).toContain(AGENT.slice(0, 12));
+    expect(blockedComment(w)).not.toContain(AGENT); // short commit names only
+  });
+
+  test("a ref named after GitHub's commit in another namespace (refs/tags/<commit>, …) blocks diverged before any create; its name never reaches the comment", async () => {
+    const w = await world();
+    w.git.planted.set("refs/tags/basesha", AGENT);
+    labeledByOwner(w, todo("i1", "JRF-501"));
+    expect((await runTick(w)).claims).toEqual(["JRF-501"]);
+    const r = await rec(w);
+    expect(r.history.at(-1)?.cause).toBe("base_mismatch");
+    expect(r.attention).toContain("base_diverged");
+    expect(r.worktree).toBeNull();
+    expect(creates(w)).toEqual([]);
+    // the base itself verified (GitHub's main); what could stand in for it is the ref of that name
+    expect((await ledgerOf(w, "base_mismatch")).map((e) => e.data)).toEqual([
+      {
+        base: "refs/remotes/origin/main",
+        branch: "main",
+        remote: "basesha",
+        local: "basesha",
+        verdict: "diverged",
+        reused: false,
+      },
+    ]);
+    expect(blockedComment(w)).toContain("named after GitHub's main commit");
+    expect(blockedComment(w)).not.toContain("refs/tags"); // agent-made names never reach the comment
+    expect(terminalCreates(w)).toBe(0);
+  });
+
+  test("fail closed: replace refs that cannot be listed after the create block kit_tampered — never a replay that skips the check as for a reused worktree", async () => {
+    const w = await world();
+    const runs = tracedSetup(w);
+    const list = w.git.replaceRefs.bind(w.git);
+    w.git.replaceRefs = async (at) => {
+      // the main checkout's listing (before the create) answers; the new worktree's (after it) does not
+      if (at.gitDir !== at.commonDir)
+        throw new WingmateError("git_failed", "git for-each-ref failed (128): fatal: unreadable");
+      return list(at);
+    };
+    await blockedAfterCreate(w, runs);
+    expect(blockedComment(w)).toContain("git_failed");
+    expect(blockedComment(w)).not.toContain("unreadable"); // the code only, never git's own words
+    advance(w, 5);
+    await runTick(w);
+    expect((await rec(w)).stage).toBe("blocked"); // nothing replays the claim
+    expect(creates(w)).toHaveLength(1);
+    expect(terminalCreates(w)).toBe(0);
+  });
+
+  test("fail closed: a new worktree whose HEAD cannot be read blocks kit_tampered before the kit, the setup or a terminal", async () => {
+    const w = await world();
+    const runs = tracedSetup(w);
+    const revParse = w.git.revParse.bind(w.git);
+    w.git.revParse = async (at, ref) => {
+      if (ref === "HEAD" && typeof at !== "string" && at.gitDir !== at.commonDir)
+        throw new WingmateError("git_failed", "git rev-parse failed (128): fatal: ambiguous argument");
+      return revParse(at, ref);
+    };
+    await blockedAfterCreate(w, runs);
+    expect(blockedComment(w)).toContain("git_failed");
+    expect(blockedComment(w)).not.toContain("ambiguous argument");
+  });
+
+  test("the diverged next step says any replace ref refuses claims, the owner's own included, and how to list and delete them; so does the block after a create", async () => {
+    const before = await world();
+    before.git.planted.set(`refs/replace/${REPLACED}`, AGENT);
+    labeledByOwner(before, todo("i1", "JRF-501"));
+    await runTick(before);
+    expect((await rec(before)).history.at(-1)?.cause).toBe("base_mismatch");
+    const after = await world();
+    after.orca.onCall = (verb) => {
+      if (verb === "worktreeCreate") after.git.planted.set(`refs/replace/${REPLACED}`, AGENT);
+    };
+    labeledByOwner(after, todo("i1", "JRF-501"));
+    await runTick(after);
+    expect((await rec(after)).history.at(-1)?.cause).toBe("kit_tampered");
+    for (const w of [before, after]) {
+      const comment = blockedComment(w);
+      expect(comment).toContain("any replace ref refuses claims in this repository, yours included");
+      expect(comment).toContain("`git for-each-ref refs/replace/`");
+      expect(comment).toContain("`git update-ref -d <ref>`");
+    }
   });
 });
 

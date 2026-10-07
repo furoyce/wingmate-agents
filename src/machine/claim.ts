@@ -230,14 +230,25 @@ const replaceRefsHeld = (n: number): string =>
   n === 1
     ? "a replace ref (refs/replace/…) exists"
     : `${n}${n >= 10 ? "+" : ""} replace refs (refs/replace/…) exist`;
+/** R30: refs named after the base commit, as a blocked comment mentions them — by count, never by name (their paths are agent-made). */
+const namedRefsHeld = (n: number, branch: string, sha: string): string =>
+  `${n === 1 ? "a ref" : `${n}${n >= 10 ? "+" : ""} refs`} named after GitHub's ${branch} commit (…/${short(sha)}…) ${n === 1 ? "exists" : "exist"}`;
+/**
+ * R30: what any replace ref means for claims and how the owner removes them — said by the diverged next step, the block after a create
+ * and runbook §12 alike. install's core.useReplaceRefs=false keeps Orca's checkout from following one; a claim refuses them still.
+ */
+const REPLACE_REFS_NEXT =
+  "any replace ref refuses claims in this repository, yours included: in the repository's main checkout `git for-each-ref refs/replace/` lists them and `git update-ref -d <ref>` deletes each";
 
 /**
  * F1/F2 (C30): the base, verified before Orca creates the issue worktree — in the repository's main checkout (`worktree ps`,
  * `isMainWorktree`), whose git dir is the common dir every worktree shares — so that Orca creates it from GitHub's commit. Orca's
  * `git worktree add` runs as the owner, outside the sandbox, and a post-checkout hook under a relative `core.hooksPath` (husky's
  * `.husky/_`) runs from the tree it checks out, as the repo setup does later (C27). So nothing here may stand in for GitHub's commit:
- * no `refs/heads/<commit>` (Orca resolves that name first) and, F7, no replace ref at all — Orca's git follows them, and one makes it
- * check out other files under that commit with HEAD unchanged. A ref planted after this check is the residual (runbook §16).
+ * no `refs/heads/<commit>` (Orca resolves that name first), R30: no ref named after the commit in any namespace, and, F7, no replace
+ * ref at all — one makes git check out other files under that commit with HEAD unchanged (install's core.useReplaceRefs=false keeps
+ * Orca's git from following it; the claim refuses it still). A ref named after the commit planted after this check is the residual
+ * (spec D14, runbook §16): the HEAD re-read after the create catches it, but a hook may already have run.
  */
 async function baseBeforeCreate(
   ctx: Ctx,
@@ -276,6 +287,16 @@ async function baseBeforeCreate(
       shadow,
       `a ref refs/heads/${short(sha)}… named after GitHub's ${branch} commit exists here and resolves to ${short(shadow)}: Orca would create the worktree from it`,
     );
+  // R30: a ref of that name in any namespace — Orca's resolution of a commit-named base may look past refs/heads/
+  const named = await ctx.git.refsNamedAfter(t, sha);
+  if (named.length > 0) {
+    ctx.log.warn({ repo: repo.github, refs: named }, "claim refused: refs named after the base commit");
+    // the base itself verified, so `local` names GitHub's commit: what is wrong is a name that could stand in for it
+    return standIn(
+      sha,
+      `${namedRefsHeld(named.length, branch, sha)} here: a ref of that name can stand in for the commit when Orca resolves the base it is given`,
+    );
+  }
   const replaced = await ctx.git.replaceRefs(t);
   if (replaced.length === 0) return { check, commonDir: t.commonDir };
   ctx.log.warn({ repo: repo.github, refs: replaced }, "claim refused: replace refs in the repository");
@@ -292,8 +313,8 @@ function baseNext(verdict: BaseVerdict, commonDir: string | null): string {
   if (verdict === "stale")
     return `this clone is behind GitHub: run \`git fetch origin\` in the repository's main checkout, ${requeue}`;
   if (verdict === "diverged") {
-    const packed = `${commonDir ?? "<the repository's .git>"}/packed-refs`;
-    return `treat this as possible tampering and keep the evidence: copy ${packed} aside first, run \`wingmate stop --all\` and follow the rotation steps (docs/linear-app-setup.md); only then, in the repository's main checkout, run \`git fetch origin\` and delete any ref the detail points at that you did not make (\`git update-ref -d <ref>\`; \`git for-each-ref refs/replace/\` lists replace refs); ${requeue}`;
+    const common = commonDir ?? "<the repository's .git>";
+    return `treat this as possible tampering and keep the evidence: copy ${common}/packed-refs aside first (with ${common}/refs/replace/ if it exists), run \`wingmate stop --all\` and follow the rotation steps (docs/linear-app-setup.md); only then, in the repository's main checkout, run \`git fetch origin\` and delete any ref the detail points at that you did not make (\`git update-ref -d <ref>\`); ${REPLACE_REFS_NEXT}; ${requeue}`;
   }
   return `fix the cause the detail names (repos.<name>.base against the repository's branches on GitHub, or Orca's main checkout of the repository), ${requeue}`;
 }
@@ -327,15 +348,67 @@ async function baseMismatch(
 }
 
 /**
+ * F7 and R30 (c, e): what a worktree this claim created must show before anything runs there — its HEAD, read with the dispatcher's own
+ * pinned git (C22: `--git-dir`/`--work-tree`, replace refs ignored; never Orca's cached `worktree show` head), at the verified commit,
+ * and no replace ref in the repository. Its setup runs outside the sandbox on the premise that it holds nothing an agent made (C27).
+ * A read that fails refuses too (fail closed): a replay would take the worktree for a reused one and skip these checks. A ref named
+ * after the commit planted after the pre-create check is what can move HEAD; one added and removed again within the create is not
+ * seen (spec D14, runbook §16). Short commit names and codes only: the detail is the blocked comment's. Null when it passes.
+ */
+async function startRefusal(
+  ctx: Ctx,
+  r: WRecord,
+  repo: RepoConfig,
+  t: GitTarget,
+  sha: string,
+): Promise<{ detail: string; next: string } | null> {
+  const base = qualifiedBase(repo.base);
+  const unverified = (what: string, e: unknown) => {
+    if (isTickAbort(e)) throw e;
+    ctx.log.warn(
+      { issue: r.identifier, code: errorCode(e), err: errorText(e) },
+      `new worktree: ${what} unreadable`,
+    );
+    return {
+      detail: `${what} could not be read after Orca created this worktree from the verified ${base} commit ${short(sha)} (${errorCode(e)}): its start cannot be verified`,
+      next: `treat it as possible tampering (runbook: tampering; a hook may have run during the create): run \`git rev-parse HEAD\` in this worktree and \`git for-each-ref refs/replace/\` in the repository's main checkout; if HEAD is not that commit or a replace ref exists, run \`wingmate stop --all\` and follow the rotation steps (docs/linear-app-setup.md); remove this worktree, then move the issue back to Todo to re-queue it`,
+    };
+  };
+  let head: string;
+  try {
+    head = await ctx.git.revParse(t, "HEAD");
+  } catch (e) {
+    return unverified("the new worktree's HEAD", e);
+  }
+  if (head !== sha)
+    return {
+      detail: `the new worktree starts at ${short(head)}, not at the verified ${base} commit ${short(sha)} it was created from: a ref in the repository's shared git dir may stand in for that commit`,
+      next: "treat it as a possible escape (runbook: tampering; a hook may have run during the create): run `wingmate stop --all` and follow the rotation steps (docs/linear-app-setup.md), inspect the refs under the repository's .git named after that commit or like the base (refs/heads/<commit>, tags, heads), remove this worktree, then move the issue back to Todo to re-queue it",
+    };
+  let late: string[];
+  try {
+    late = await ctx.git.replaceRefs(t);
+  } catch (e) {
+    return unverified("the repository's replace refs", e);
+  }
+  if (late.length === 0) return null;
+  ctx.log.warn({ issue: r.identifier, refs: late }, "replace refs appeared while Orca created the worktree");
+  return {
+    detail: `${replaceRefsHeld(late.length)} in the repository's shared git dir after Orca created this worktree from the verified ${base} commit ${short(sha)}: its checkout may hold other files than that commit's`,
+    next: `treat it as a possible escape (runbook: tampering; a hook may have run during the create): copy ${t.commonDir}/packed-refs aside, run \`wingmate stop --all\` and follow the rotation steps (docs/linear-app-setup.md), remove this worktree; ${REPLACE_REFS_NEXT}; then move the issue back to Todo to re-queue it`,
+  };
+}
+
+/**
  * §5.4 step 3: the issue worktree — the one already linked to the issue when it exists (a previous cycle, or a crash after
  * `worktree create`), else a new one. F1/F2 (C30): a new one only once its base is verified in the repository's main checkout, with
- * no ref there standing in for that commit (F7: no replace ref either), and created from that commit; a ref planted between that
- * check and Orca's checkout is the residual (runbook §16). C22: its git dirs come from its own gitfile and
- * commondir, accepted only in a linked worktree's layout and, for a reused worktree, only as an earlier cycle recorded them; the
+ * no ref there standing in for that commit (R30: none named after it; F7: no replace ref either), and created from that commit; a ref
+ * planted between that check and Orca's checkout is the residual (spec D14, runbook §16). C22: its git dirs come from its own gitfile
+ * and commondir, accepted only in a linked worktree's layout and, for a reused worktree, only as an earlier cycle recorded them; the
  * agent's sandbox grants and denies are spelled from them, so a mismatch blocks the issue (`kit_tampered`) before any git runs there.
  * C30: a reused worktree's base is checked there (the local base ref — F7: its full ref — must name GitHub's commit), else
- * `base_mismatch`; F7: a worktree this claim created must start at the verified commit (Orca's `head`), and the repository must still
- * hold no replace ref, else `kit_tampered` — all before kit, setup or launch. False when it blocked.
+ * `base_mismatch`; a worktree this claim created must pass `startRefusal`, else `kit_tampered` — all before kit, setup or launch.
+ * False when it blocked.
  */
 async function provisionWorktree(
   ctx: Ctx,
@@ -401,28 +474,9 @@ async function provisionWorktree(
     await baseMismatch(ctx, r, issue, entryId, repo, check, { commonDir: t.commonDir, reused: true });
     return false;
   }
-  if (!existing && shown.head !== check.sha) {
-    // F7: a worktree this claim created must start at the verified base commit — its setup runs outside the sandbox on the premise
-    // that it holds nothing an agent made (C27). F1/F2: Orca was given that commit, so a ref named after it (refs/heads/<commit>,
-    // planted after the check) is what can stand in for it. Short commit names only: the detail is the blocked comment's.
-    const base = qualifiedBase(repo.base);
-    const detail = `the new worktree starts at ${short(shown.head)}, not at the verified ${base} commit ${short(check.sha)} it was created from: a ref in the repository's shared git dir may stand in for that commit`;
-    const next =
-      "treat it as possible tampering (runbook: tampering): inspect the refs under the repository's .git named after that commit or like the base (refs/heads/<commit>, tags, heads), remove this worktree, then move the issue back to Todo to re-queue it";
-    await block(ctx, r, issue, "kit_tampered", detail, next);
-    return false;
-  }
-  // F7: a replace ref that appeared after the check before the create; Orca's checkout followed it if it was there in time, under
-  // HEAD = the verified commit. One added and removed again within the create is not seen (runbook §16).
-  const late = existing ? [] : await ctx.git.replaceRefs(t);
-  if (late.length > 0) {
-    ctx.log.warn(
-      { issue: r.identifier, refs: late },
-      "replace refs appeared while Orca created the worktree",
-    );
-    const detail = `${replaceRefsHeld(late.length)} in the repository's shared git dir after Orca created this worktree from the verified ${qualifiedBase(repo.base)} commit ${short(check.sha)}: its checkout may hold other files than that commit's`;
-    const next = `treat it as a possible escape (runbook: tampering; a hook may have run during the create): copy ${t.commonDir}/packed-refs aside, run \`wingmate stop --all\` and follow the rotation steps (docs/linear-app-setup.md), remove this worktree, delete the replace refs in the repository's main checkout (\`git for-each-ref refs/replace/\`, then \`git update-ref -d <ref>\`), then move the issue back to Todo to re-queue it`;
-    await block(ctx, r, issue, "kit_tampered", detail, next);
+  const refused = existing ? null : await startRefusal(ctx, r, repo, t, check.sha);
+  if (refused) {
+    await block(ctx, r, issue, "kit_tampered", refused.detail, refused.next);
     return false;
   }
   await ctx.journal.stepDone(entryId, "worktree", {

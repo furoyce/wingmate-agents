@@ -8,6 +8,7 @@ import {
   claudeSettings,
   codexArgv,
   coordinatorArgv,
+  isSiblingDeny,
   isValidBranchName,
   launchCommand,
   roleArgv,
@@ -225,6 +226,19 @@ describe("settings", () => {
       [],
     );
     expect(fs.denyWrite.filter((p) => p.includes("[^") || p.includes("[!"))).toEqual([]);
+  });
+  test("R30 (Task 13 F7): every role denies writing <common>/refs/replace/** — a loose replace ref and its lock (defense in depth: install's core.useReplaceRefs=false is the close) — and a sibling refresh keeps the deny", () => {
+    const sha = "0123456789abcdef0123456789abcdef01234567";
+    for (const role of ["coordinator", ...SPAWN_ROLES] as const) {
+      const fs = (claudeSettings({ ...input, role }) as Settings).sandbox.filesystem;
+      for (const p of [`refs/replace/${sha}`, `refs/replace/${sha}.lock`, "refs/replace/x/y"])
+        expect([role, coveredBy(fs.denyWrite, `/repo/.git/${p}`, "deny")]).toEqual([
+          role,
+          ["/repo/.git/refs/replace/**"],
+        ]);
+      for (const p of COMMIT_WRITES) expect(coveredBy(fs.denyWrite, `/repo/.git/${p}`, "deny")).toEqual([]);
+    }
+    expect(isSiblingDeny("/repo/.git", "/repo/.git/refs/replace/**")).toBe(false); // `refreshSiblingDenies` re-lists only siblings
   });
   test("F7: the main checkout's HEAD and index and the repo-wide shallow/gc.pid are denied with their locks; packed-refs.lock is not", () => {
     const fs = (claudeSettings(input) as Settings).sandbox.filesystem;
