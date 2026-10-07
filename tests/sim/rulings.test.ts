@@ -326,7 +326,10 @@ describe("integrity (§6.3 step 6) and integrity_unverifiable (Task 9 carry-over
   test("a working worktree whose git status fails gets attention integrity_unverifiable and is not blocked", async () => {
     const w = await world();
     const r = await claimed(w);
-    writeFileSync(join(r.worktree?.path ?? "", ".git"), "gitdir: /nowhere\n");
+    // a corrupt index, with the gitfile and commondir intact (a gitfile naming another gitdir is kit_tampered since C22, §13.3 d)
+    const wt = r.worktree;
+    if (!wt) throw new Error("no worktree");
+    writeFileSync(join(wt.gitCommonDir, "worktrees", wt.gitdirName, "index"), "not an index");
     advance(w, 5);
     const s = await runTick(w);
     expect(s.blocked).toEqual([]);

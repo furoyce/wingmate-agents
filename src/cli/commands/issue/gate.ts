@@ -102,7 +102,7 @@ async function validateReport(cwd: string, launch: Launch): Promise<{ ok: boolea
     try {
       r = await run(cmd, { cwd, timeoutMs: 30 * 60_000 });
     } catch (e) {
-      r = { code: 127, stdout: "", stderr: (e as Error).message, timedOut: false };
+      r = { code: 127, stdout: "", stderr: (e as Error).message, timedOut: false, truncated: false };
     }
     const digest = createHash("sha256").update(r.stdout).update("\0").update(r.stderr).digest("hex");
     lines.push(

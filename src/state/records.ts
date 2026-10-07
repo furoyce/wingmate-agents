@@ -282,17 +282,12 @@ export async function createRecordExclusive(dirs: Dirs, r: WRecord): Promise<voi
   }
 }
 
-export async function readRecord(dirs: Dirs, id: string): Promise<WRecord | null> {
-  const text = await readText(file(dirs, id));
-  if (text === null) return null;
+function parseRecord(id: string, path: string, text: string): WRecord {
   let json: unknown;
   try {
     json = JSON.parse(text);
   } catch (e) {
-    throw new WingmateError(
-      "record_invalid",
-      `${id}: not valid JSON (${file(dirs, id)}): ${(e as Error).message}`,
-    );
+    throw new WingmateError("record_invalid", `${id}: not valid JSON (${path}): ${(e as Error).message}`);
   }
   const parsed = RecordSchema.safeParse(json);
   if (!parsed.success) {
@@ -300,6 +295,29 @@ export async function readRecord(dirs: Dirs, id: string): Promise<WRecord | null
     throw new WingmateError("record_invalid", `${id}: ${issue?.path.join(".")} ${issue?.message}`);
   }
   return parsed.data;
+}
+
+export async function readRecord(dirs: Dirs, id: string): Promise<WRecord | null> {
+  const text = await readText(file(dirs, id));
+  return text === null ? null : parseRecord(id, file(dirs, id), text);
+}
+
+/** The cycles of `id` in the archive (`archive/<id>.<cycle>.json`), newest first. */
+export async function archivedCycles(dirs: Dirs, id: string): Promise<number[]> {
+  const names = await readdir(dirs.archive).catch(() => [] as string[]);
+  return names
+    .flatMap((n) => {
+      const m = /^(.+)\.(\d+)\.json$/.exec(n);
+      return m && m[1] === id ? [Number(m[2])] : [];
+    })
+    .sort((a, b) => b - a);
+}
+
+/** The record of `id`'s archived cycle `cycle`, or null when there is none. */
+export async function readArchived(dirs: Dirs, id: string, cycle: number): Promise<WRecord | null> {
+  const path = join(dirs.archive, `${id}.${cycle}.json`);
+  const text = await readText(path);
+  return text === null ? null : parseRecord(id, path, text);
 }
 
 export async function writeRecord(dirs: Dirs, r: WRecord): Promise<void> {

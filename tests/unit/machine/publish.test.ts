@@ -3,9 +3,11 @@
 import { describe, expect, test } from "bun:test";
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -17,6 +19,7 @@ import { allowDepsGranted, publish, runGuards } from "../../../src/machine/publi
 import { reconcile } from "../../../src/machine/reconcile";
 import { transition } from "../../../src/machine/states";
 import type { LinearHistoryEntry, LinearIssue } from "../../../src/ports";
+import { WingmateError } from "../../../src/shared/errors";
 import { type WRecord, readRecord, writeRecord } from "../../../src/state/records";
 import {
   OWNER,
@@ -390,6 +393,69 @@ describe("publish guards (§13.3 d)", () => {
     );
   });
 
+  test("C25: a guard read cut at the capture cap refuses with diff_too_large; nothing is pushed", async () => {
+    const { w, identifier, path } = await setup();
+    w.git.addedLines = async () => {
+      throw new WingmateError("diff_too_large", "git diff output exceeds the 8 MiB capture");
+    };
+    expect(await call(w, identifier)).toBe(false);
+    expect(w.git.pushed).toEqual([]);
+    expect(w.gh.prs).toEqual([]);
+    expect((await rec(w, identifier)).gates.security.note).toBe("publish_guard:diff_too_large");
+    const finding = readFileSync(join(path, ".wingmate", "inbox", inboxFiles(path)[0] ?? ""), "utf8");
+    expect(finding).toContain("publish refused: diff_too_large");
+  });
+
+  test("C22: a gitfile redirected to an agent-made git dir refuses every git read (git_dir_tampered): nothing is pushed and the issue is blocked kit_tampered", async () => {
+    const { w, identifier, path } = await setup();
+    const fake = realpathSync(mkdtempSync(join(tmpdir(), "wm-fake-git-")));
+    mkdirSync(join(fake, "worktrees", "wm-jrf-601"), { recursive: true });
+    writeFileSync(join(fake, "worktrees", "wm-jrf-601", "commondir"), "../..\n");
+    writeFileSync(join(fake, "config"), '[core]\n\tsshCommand = "touch /tmp/wm-pwned"\n');
+    writeFileSync(join(path, ".git"), `gitdir: ${join(fake, "worktrees", "wm-jrf-601")}\n`);
+    expect(await call(w, identifier)).toBe(false);
+    expect(w.git.pushed).toEqual([]);
+    expect(w.gh.prs).toEqual([]);
+    const r = await rec(w, identifier);
+    expect(r.stage).toBe("blocked");
+    expect(r.history.at(-1)?.cause).toBe("kit_tampered");
+    const blocked = w.linear.comments.filter((c) => c.body.startsWith("<!-- wingmate:blocked -->"));
+    expect(blocked).toHaveLength(1);
+    expect(blocked[0]?.body).not.toContain(fake); // what the agent wrote into the gitfile never reaches Linear
+    expect(inboxFiles(path)).toEqual([]); // the owner's to inspect: no finding is handed to the agent
+  });
+
+  test("C26: a non-fast-forward rejection is a refusal (push_rejected) naming origin's tip, counted toward the second-refusal block — never a step retried each tick", async () => {
+    const { w, identifier, path } = await setup();
+    const branch = worktreeOf(await rec(w, identifier)).branch;
+    w.git.remoteSha.set(branch, "pushedsha"); // the agent rewrote commits an earlier publish had pushed
+    w.git.push = async () => {
+      throw new WingmateError("push_rejected", "origin rejected a non-fast-forward push");
+    };
+    expect(await call(w, identifier)).toBe(false);
+    expect(w.gh.prs).toEqual([]);
+    const r = await rec(w, identifier);
+    expect(r).toMatchObject({ stage: "working", pipelineStage: "security" });
+    expect(r.gates.security.note).toBe("publish_guard:push_rejected");
+    expect(r.attention).not.toContain("publish_step_failed");
+    const finding = readFileSync(join(path, ".wingmate", "inbox", inboxFiles(path)[0] ?? ""), "utf8");
+    expect(finding).toContain("publish refused: push_rejected");
+    expect(finding).toContain("pushedsha");
+    expect((await w.ctx.journal.all()).filter((e) => e.kind === "publish").map((e) => e.state)).toEqual([
+      "abandoned",
+    ]);
+    const refused = async () =>
+      (await w.ctx.ledger.readIssue(identifier))
+        .filter((e) => e.type === "publish_refused")
+        .map((e) => e.data.code);
+    expect(await refused()).toEqual(["push_rejected"]);
+    expect(await call(w, identifier)).toBe(false); // the second refusal of the cycle blocks
+    const r2 = await rec(w, identifier);
+    expect(r2.stage).toBe("blocked");
+    expect(r2.history.at(-1)?.cause).toBe("publish_guard");
+    expect(await refused()).toEqual(["push_rejected", "push_rejected"]);
+  });
+
   test("second guard failure in the same cycle → blocked (publish_guard)", async () => {
     const { w, identifier, path } = await setup();
     w.git.changed.set(path, [".github/x.yml"]);
@@ -579,6 +645,30 @@ describe("publish success and replay (§6.6, I4, I9)", () => {
     expect(w.linear.writes.filter((x) => x.kind === "attachment").length).toBe(1);
     expect(w.git.remoteSha.get(worktreeOf(r).branch)).toBe("headsha2");
     expect((await rec(w, identifier)).prs).toHaveLength(1);
+  });
+
+  test("C23: the push goes to the configured GitHub URL (https://github.com/<repos.<name>.github>.git), never to the name origin", async () => {
+    const { w, identifier } = await setup();
+    expect(await call(w, identifier)).toBe(true);
+    expect(w.git.pushUrls).toEqual(["https://github.com/furoyce/bouncr.lol.git"]);
+  });
+
+  test("C26: when the branch is already on the remote, the history read starts at its tip: commits an earlier publish pushed are not read again", async () => {
+    const { w, identifier } = await setup();
+    const branch = worktreeOf(await rec(w, identifier)).branch;
+    w.git.remoteSha.set(branch, "pushedsha");
+    const since: (string | null | undefined)[] = [];
+    const history = w.git.historyChanges.bind(w.git);
+    w.git.historyChanges = async (t, base, head, from) => {
+      since.push(from);
+      return history(t, base, head, from);
+    };
+    expect(await call(w, identifier)).toBe(true);
+    expect(since).toEqual(["pushedsha"]);
+    w.git.remoteSha.delete(branch);
+    since.length = 0;
+    expect(await runGuards(w.ctx, await rec(w, identifier), issueOf(w), "t", "b")).toBeNull();
+    expect(since).toEqual([null]); // a first publish reads the whole branch since its base
   });
 
   test("the completion comment lists the follow-ups ledgered as followup_created", async () => {

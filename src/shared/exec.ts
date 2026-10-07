@@ -3,6 +3,8 @@ export interface RunResult {
   stdout: string;
   stderr: string;
   timedOut: boolean;
+  /** C25: stdout or stderr went past the 8 MiB capture cap, so the text kept is only a prefix of what the command wrote. */
+  truncated: boolean;
 }
 export interface RunOptions {
   cwd?: string;
@@ -15,10 +17,14 @@ const MAX_CAPTURE = 8 * 1024 * 1024;
 /** After a timeout kill, how long to keep waiting for the pipes to reach EOF before cancelling the readers. */
 const GRACE_MS = 2000;
 
-/** Chunk-wise capture: partial output survives a timeout, reads continue past the cap so the child never blocks, and the reader can be cancelled. */
+/**
+ * Chunk-wise capture: partial output survives a timeout, reads continue past the cap so the child never blocks (a chunk past the cap
+ * is dropped and marks the capture truncated), and the reader can be cancelled.
+ */
 function collect(stream: ReadableStream<Uint8Array> | null) {
   const chunks: Uint8Array[] = [];
   let bytes = 0;
+  let truncated = false;
   const reader = stream?.getReader() ?? null;
   const done = (async () => {
     if (!reader) return;
@@ -26,10 +32,11 @@ function collect(stream: ReadableStream<Uint8Array> | null) {
       for (;;) {
         const { value, done } = await reader.read();
         if (done) break;
-        if (value && bytes < MAX_CAPTURE) {
+        if (!value) continue;
+        if (bytes < MAX_CAPTURE) {
           chunks.push(value);
           bytes += value.byteLength;
-        }
+        } else if (value.byteLength) truncated = true;
       }
     } catch {
       // cancelled or closed
@@ -47,6 +54,7 @@ function collect(stream: ReadableStream<Uint8Array> | null) {
   return {
     done,
     text,
+    truncated: () => truncated,
     cancel: () => {
       void reader?.cancel().catch(() => undefined);
     },
@@ -97,7 +105,8 @@ export async function run(argv: string[], opts: RunOptions = {}): Promise<RunRes
       err.cancel();
     }
     const code = await proc.exited;
-    return { code: timedOut ? 124 : code, stdout: out.text(), stderr: err.text(), timedOut };
+    const truncated = out.truncated() || err.truncated();
+    return { code: timedOut ? 124 : code, stdout: out.text(), stderr: err.text(), timedOut, truncated };
   } finally {
     if (timer) clearTimeout(timer);
     if (graceTimer) clearTimeout(graceTimer);

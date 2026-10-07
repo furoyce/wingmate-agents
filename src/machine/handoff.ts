@@ -1,5 +1,6 @@
 // src/machine/handoff.ts — §9.4 mid-issue handoff to the next untried provider in the same worktree, and the `handoff --repo`
 // reroute (§8.1, §10.3): same provider and cycle, a new worktree in the other repo.
+import { gitTarget } from "../git/trust";
 import { coordinatorArgv } from "../kit/settings";
 import { renderHandoff } from "../linear/templates";
 import { type Coordinator, nextInCascade, resolveTier } from "../policy/providers";
@@ -111,10 +112,10 @@ export async function doHandoff(
   else addAttention(r, "launch_unconfirmed");
 }
 
-/** The rerouted-from worktree is removed only when its branch has nothing beyond `baseSha` (unknown → kept). */
+/** The rerouted-from worktree is removed only when its branch has nothing beyond `baseSha` (unknown, or links moved (C22) → kept). */
 async function retire(a: Advance, old: NonNullable<WRecord["worktree"]>): Promise<void> {
   const { ctx, r } = a;
-  const ahead = await ctx.git.commitsAhead(old.path, old.baseSha).catch(() => 1);
+  const ahead = await ctx.git.commitsAhead(gitTarget(old), old.baseSha).catch(() => 1);
   if (ahead !== 0) {
     addNote(r, `kept worktree ${old.path} (it has commits)`);
     return;

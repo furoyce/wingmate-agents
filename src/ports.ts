@@ -197,23 +197,35 @@ export interface BranchHistory {
   added: { path: string; line: string }[];
   messages: string;
 }
+/**
+ * C22 (§13.3 d): where a dispatcher git command runs — the issue worktree, its own gitdir (`<commonDir>/worktrees/<gitdirName>`) and
+ * the repo's common dir, as the claim recorded them. The worktree's gitfile and its gitdir's `commondir` must still name these two,
+ * and git runs with them pinned (`--git-dir`, `--work-tree`, `GIT_COMMON_DIR`).
+ */
+export interface GitTarget {
+  readonly path: string;
+  readonly gitDir: string;
+  readonly commonDir: string;
+}
 export interface GitPort {
-  revParse(cwd: string, ref: string): Promise<string>;
-  commonDir(cwd: string): Promise<string>;
-  /** `git rev-parse --absolute-git-dir`: a linked worktree's admin dir (its basename is the gitdir name; git de-duplicates them). */
-  gitDir(cwd: string): Promise<string>;
-  /** Paths changed from `baseSha` to `head` (default `HEAD`), both sides of a rename, deletions included (§13.3 d). */
-  changedPaths(cwd: string, baseSha: string, head?: string): Promise<string[]>;
-  addedLines(cwd: string, baseSha: string, head?: string): Promise<{ path: string; line: string }[]>;
-  commitsAhead(cwd: string, baseSha: string, head?: string): Promise<number>;
+  revParse(t: GitTarget, ref: string): Promise<string>;
+  /** Paths changed from `baseSha` to `head` (default `HEAD`), both sides of a rename, deletions and type changes included (§13.3 d). */
+  changedPaths(t: GitTarget, baseSha: string, head?: string): Promise<string[]>;
+  addedLines(t: GitTarget, baseSha: string, head?: string): Promise<{ path: string; line: string }[]>;
+  commitsAhead(t: GitTarget, baseSha: string, head?: string): Promise<number>;
   /**
-   * What a push of `head` sends beyond the net diff: every commit of `baseSha..head` (a merge against its first parent) — the paths
-   * each touched (both sides of a rename, deletions included), the lines each added, and the commit messages.
+   * What a push of `head` sends beyond the net diff: every commit of `baseSha..head` not reachable from `since` (C26: the remote
+   * branch's tip, when this worktree has that commit; a merge read against its first parent) — the paths each touched (both sides of
+   * a rename, deletions and type changes included), the lines each added, and the commit messages.
    */
-  historyChanges(cwd: string, baseSha: string, head: string): Promise<BranchHistory>;
-  /** `git push -u origin <sha>:refs/heads/<branch>`: exactly the commit the publish guards cleared, never forced. */
-  push(cwd: string, branch: string, sha: string): Promise<void>;
-  lsRemoteSha(cwd: string, branch: string): Promise<string | null>;
+  historyChanges(t: GitTarget, baseSha: string, head: string, since?: string | null): Promise<BranchHistory>;
+  /**
+   * `git push -u <url> <sha>:refs/heads/<branch>` (C23: the configured GitHub URL, once `remote.origin.url` is proven to name the same
+   * repository): exactly the commit the publish guards cleared, never forced. A non-fast-forward rejection is `push_rejected` (C26).
+   */
+  push(t: GitTarget, url: string, branch: string, sha: string): Promise<void>;
+  /** The commit `refs/heads/<branch>` points at on `url`, or null when that branch is not there. */
+  lsRemoteSha(t: GitTarget, url: string, branch: string): Promise<string | null>;
 }
 export interface GhPort {
   prCreate(

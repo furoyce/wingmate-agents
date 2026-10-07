@@ -1,6 +1,17 @@
 // tests/fakes/fakeGit.ts — in-memory GitPort/GhPort; push records the commit it was given and PR creation reuses an open PR per head (Ruling R2)
 import { basename } from "node:path";
-import type { GhPort, GitPort } from "../../src/ports";
+import { verifyGitLinks } from "../../src/git/trust";
+import type { GhPort, GitPort, GitTarget } from "../../src/ports";
+
+/** A worktree target (C22) or, for test helpers, a bare worktree path. */
+type GitAt = GitTarget | string;
+
+/** As GitCli: a target's links are checked on disk before anything runs (the world's worktrees are real), so tampering refuses here too. */
+async function pathOf(at: GitAt): Promise<string> {
+  if (typeof at === "string") return at;
+  await verifyGitLinks(at);
+  return at.path;
+}
 
 export class FakeGit implements GitPort {
   commits = new Map<string, number>();
@@ -9,38 +20,44 @@ export class FakeGit implements GitPort {
   /** What a push of the worktree's branch sends as history (each commit's paths and added lines, and the messages): none by default. */
   history = new Map<string, { paths: string[]; added: { path: string; line: string }[]; messages: string }>();
   pushed: string[] = [];
+  /** The remote URL of every push (C23: the configured GitHub URL). */
+  pushUrls: string[] = [];
   remoteSha = new Map<string, string>();
   /** Real git dirs of worktrees the fake Orca created on disk (makeWorld wires them); other paths get made-up ones. */
   commonDirs = new Map<string, string>();
   gitDirs = new Map<string, string>();
 
-  async revParse(_cwd: string, ref: string): Promise<string> {
+  async revParse(at: GitAt, ref: string): Promise<string> {
+    await pathOf(at);
     return ref === "HEAD" ? "headsha" : "basesha";
   }
+  /** Test helpers (no longer on the port: the claim reads the git dirs from the worktree's own links, C22). */
   async commonDir(cwd: string) {
     return this.commonDirs.get(cwd) ?? `${cwd}/.git-common`;
   }
   async gitDir(cwd: string) {
     return this.gitDirs.get(cwd) ?? `${cwd}/.git-common/worktrees/${basename(cwd)}`;
   }
-  async changedPaths(cwd: string, _baseSha: string, _head?: string) {
-    return this.changed.get(cwd) ?? [];
+  async changedPaths(at: GitAt, _baseSha: string, _head?: string) {
+    return this.changed.get(await pathOf(at)) ?? [];
   }
-  async addedLines(cwd: string, _baseSha: string, _head?: string) {
-    return this.added.get(cwd) ?? [];
+  async addedLines(at: GitAt, _baseSha: string, _head?: string) {
+    return this.added.get(await pathOf(at)) ?? [];
   }
-  async commitsAhead(cwd: string, _baseSha: string, _head?: string) {
-    return this.commits.get(cwd) ?? 0;
+  async commitsAhead(at: GitAt, _baseSha: string, _head?: string) {
+    return this.commits.get(await pathOf(at)) ?? 0;
   }
-  async historyChanges(cwd: string, _baseSha: string, _head: string) {
-    return this.history.get(cwd) ?? { paths: [], added: [], messages: "" };
+  async historyChanges(at: GitAt, _baseSha: string, _head: string, _since?: string | null) {
+    return this.history.get(await pathOf(at)) ?? { paths: [], added: [], messages: "" };
   }
-  /** As `git push <sha>:refs/heads/<branch>`: origin's branch then points at exactly the commit pushed. */
-  async push(cwd: string, branch: string, sha: string) {
-    this.pushed.push(`${cwd}:${branch}`);
+  /** As `git push <url> <sha>:refs/heads/<branch>`: the remote's branch then points at exactly the commit pushed. */
+  async push(at: GitTarget, url: string, branch: string, sha: string) {
+    this.pushed.push(`${await pathOf(at)}:${branch}`);
+    this.pushUrls.push(url);
     this.remoteSha.set(branch, sha);
   }
-  async lsRemoteSha(_cwd: string, branch: string) {
+  async lsRemoteSha(at: GitTarget, _url: string, branch: string) {
+    await pathOf(at);
     return this.remoteSha.get(branch) ?? null;
   }
 }

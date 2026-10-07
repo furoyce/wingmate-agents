@@ -1,7 +1,9 @@
 // src/machine/claim.ts — the §5.4 sequence as one journal entry with ordered steps; provisionAndLaunch is also the replay path
 // (tick, unfinished claim steps) and the reroute launch.
 import { basename } from "node:path";
+import { z } from "zod";
 import { type ProjectConfig, type RepoConfig, repoFor } from "../config/schema";
+import { discoverGitLinks } from "../git/trust";
 import { pointerBrief } from "../kit/brief";
 import { installKit } from "../kit/install";
 import { staleIntents } from "../kit/intents";
@@ -9,13 +11,20 @@ import { agentEnv, coordinatorArgv, launchCommand } from "../kit/settings";
 import { MARK } from "../linear/markers";
 import { resolveTier } from "../policy/providers";
 import { capMinFor } from "../policy/timers";
-import type { LinearIssue } from "../ports";
-import { WingmateError, errorText } from "../shared/errors";
+import type { GitTarget, LinearIssue } from "../ports";
+import { WingmateError, errorCode, errorText } from "../shared/errors";
 import { run } from "../shared/exec";
 import { newUlid, newUuid } from "../shared/ids";
 import type { JournalEntry } from "../state/journal";
-import { type WRecord, createRecordExclusive, newRecord } from "../state/records";
+import {
+  type WRecord,
+  archivedCycles,
+  createRecordExclusive,
+  newRecord,
+  readArchived,
+} from "../state/records";
 import type { Ctx } from "./context";
+import { allowDepsGranted } from "./grants";
 import { isTickAbort } from "./guard";
 import { kitNonce, prepareLaunch } from "./launch";
 import { LinearWrites } from "./linearWrites";
@@ -123,11 +132,34 @@ const worktreeName = (r: WRecord) =>
   `wm-${r.identifier.toLowerCase()}${r.routing.rerouteFrom ? `-${r.repo}` : ""}`;
 
 /**
- * §5.4 step 3: the issue worktree — the one already linked to the issue when it exists (a previous cycle, or a crash after
- * `worktree create`), else a new one. The git paths come from git itself and have no fallback: the agent's sandbox grants and
- * denies are spelled from them.
+ * C22: the git dirs an earlier cycle recorded for a worktree this claim reuses — read from the archived records (dispatcher-owned,
+ * §13.3 a), never from the worktree, whose links that cycle's agent could rewrite. Null when no archived cycle had the worktree.
  */
-async function provisionWorktree(ctx: Ctx, r: WRecord, repo: RepoConfig, entryId: string): Promise<void> {
+async function recordedGitDirs(
+  ctx: Ctx,
+  identifier: string,
+  worktreeId: string,
+): Promise<{ gitCommonDir: string; gitdirName: string } | null> {
+  for (const cycle of await archivedCycles(ctx.dirs, identifier)) {
+    const wt = (await readArchived(ctx.dirs, identifier, cycle))?.worktree;
+    if (wt?.id === worktreeId) return { gitCommonDir: wt.gitCommonDir, gitdirName: wt.gitdirName };
+  }
+  return null;
+}
+
+/**
+ * §5.4 step 3: the issue worktree — the one already linked to the issue when it exists (a previous cycle, or a crash after
+ * `worktree create`), else a new one. C22: its git dirs come from its own gitfile and commondir, accepted only in a linked
+ * worktree's layout and, for a reused worktree, only as an earlier cycle recorded them; the agent's sandbox grants and denies are
+ * spelled from them, so a mismatch blocks the issue (`kit_tampered`) before any git runs there. False when it blocked.
+ */
+async function provisionWorktree(
+  ctx: Ctx,
+  r: WRecord,
+  issue: LinearIssue,
+  repo: RepoConfig,
+  entryId: string,
+): Promise<boolean> {
   const name = worktreeName(r);
   const existing = (await ctx.orca.worktreePs()).worktrees.find(
     (x) => x.linkedLinearIssue === r.identifier && x.displayName === name && x.repoId === repo.orcaRepo,
@@ -142,19 +174,30 @@ async function provisionWorktree(ctx: Ctx, r: WRecord, repo: RepoConfig, entryId
         comment: "wingmate: claimed",
       });
   const shown = await ctx.orca.worktreeShow(created.id);
-  const baseSha = await ctx.git.revParse(shown.path, repo.base).catch(async (e: unknown) => {
+  let t: GitTarget;
+  try {
+    const recorded = existing ? await recordedGitDirs(ctx, r.identifier, created.id) : null;
+    t = await discoverGitLinks(shown.path, recorded);
+  } catch (e) {
+    if (errorCode(e) !== "git_dir_tampered") throw e;
+    const detail = (e instanceof Error ? e.message : String(e)).slice(0, 300);
+    const next =
+      "inspect the worktree's .git file and its gitdir's commondir, then move the issue back to Todo to re-queue it when it is safe";
+    await block(ctx, r, issue, "kit_tampered", detail, next);
+    return false;
+  }
+  const baseSha = await ctx.git.revParse(t, repo.base).catch(async (e: unknown) => {
+    if (errorCode(e) === "git_dir_tampered") throw e; // moved since they were read: the claim step fails and replays
     ctx.log.warn({ issue: r.identifier, err: errorText(e) }, "base ref unresolved; using the worktree head");
     return shown.head;
   });
-  const gitCommonDir = await ctx.git.commonDir(shown.path);
-  const gitdirName = basename(await ctx.git.gitDir(shown.path));
   r.worktree = {
     id: created.id,
     path: shown.path,
     branch: shown.branch.replace(/^refs\/heads\//, ""),
     baseSha,
-    gitCommonDir,
-    gitdirName,
+    gitCommonDir: t.commonDir,
+    gitdirName: basename(t.gitDir),
   };
   await ctx.journal.stepDone(entryId, "worktree", {
     id: created.id,
@@ -162,9 +205,26 @@ async function provisionWorktree(ctx: Ctx, r: WRecord, repo: RepoConfig, entryId
     reused: !!existing,
   });
   await saveRecord(ctx, r);
+  return true;
 }
 
-/** §5.4 step 4: kit (with tier `best` of both providers for review roles), install policy, hashes; then the repo's setup. */
+const WorktreeStep = z.object({ reused: z.boolean() });
+/**
+ * C27 (§5.4 step 4, amended): the repo setup runs outside the sandbox, so only in a worktree this claim created — never in one it
+ * reused (an earlier cycle's agent may have left a hook or a package script there) and never in a reroute's. The `worktree` step's
+ * receipt says which; a receipt that does not say counts as reused. Null when the setup runs.
+ */
+async function setupSkip(ctx: Ctx, entryId: string): Promise<"reused" | "reroute" | null> {
+  const entry = await ctx.journal.get(entryId);
+  if (entry.key.startsWith("reroute:")) return "reroute";
+  const step = WorktreeStep.safeParse(entry.steps.find((s) => s.name === "worktree")?.receipt);
+  return step.success && !step.data.reused ? null : "reused";
+}
+
+/**
+ * §5.4 step 4: kit (with tier `best` of both providers for review roles, and C28 the allow-deps grant as it stands at claim), install
+ * policy, hashes; then the repo's setup, only in a worktree this claim created (C27).
+ */
 async function installAndSetup(
   ctx: Ctx,
   r: WRecord,
@@ -206,6 +266,7 @@ async function installAndSetup(
     launch: tier,
     tiers,
     toolchainPaths: ctx.toolchainPaths,
+    allowDeps: await allowDepsGranted(ctx, r, issue),
   });
   await ctx.ledger.append({
     at: ctx.now(),
@@ -213,7 +274,15 @@ async function installAndSetup(
     type: "kit_installed",
     data: { hashes: res.hashes, nonce, courtesySettings: res.courtesySettings },
   });
-  if (repo.setup !== "none") {
+  const skip = repo.setup === "none" ? null : await setupSkip(ctx, entryId);
+  if (skip)
+    await ctx.ledger.append({
+      at: ctx.now(),
+      issue: r.identifier,
+      type: "setup_skipped",
+      data: { reason: skip },
+    });
+  else if (repo.setup !== "none") {
     const s = await run(repo.setup, { cwd: wt.path, timeoutMs: 10 * 60_000, env: agentEnv(kitDir) });
     await ctx.ledger.append({
       at: ctx.now(),
@@ -305,7 +374,7 @@ export async function provisionAndLaunch(
   tier: Tier,
 ): Promise<void> {
   const repo = repoFor(project, r.repo);
-  if (!r.worktree) await provisionWorktree(ctx, r, repo, entryId);
+  if (!r.worktree && !(await provisionWorktree(ctx, r, issue, repo, entryId))) return;
   if (!r.coordinator.terminalHandle) {
     await staleOutbox(ctx, r);
     if (!(await installAndSetup(ctx, r, issue, project, repo, entryId, tier))) return;

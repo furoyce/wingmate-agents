@@ -1,6 +1,7 @@
 // src/machine/watch.ts — §6.3 steps 4–7 for one record: coordinator liveness, stage timers, kit integrity, budgets.
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { gitTarget } from "../git/trust";
 import { verifyIntegrity } from "../kit/install";
 import { timerState } from "../policy/timers";
 import { errorCode } from "../shared/errors";
@@ -188,7 +189,8 @@ export async function integrity(a: Advance): Promise<StepOut> {
   if (!expected) return "next";
   let changed: string[];
   try {
-    changed = await verifyIntegrity(wt.path, wt.gitCommonDir, expected);
+    // C22: the worktree's git links are part of the check (`.git` when they moved), and its git status runs pinned
+    changed = await verifyIntegrity(wt.path, wt.gitCommonDir, expected, gitTarget(wt).gitDir);
   } catch (e) {
     if (errorCode(e) !== "integrity_unverifiable") throw e;
     if (!existsSync(wt.path)) return worktreeGone(a);

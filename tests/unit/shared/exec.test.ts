@@ -89,5 +89,20 @@ describe("exec.run", () => {
     expect(r.stdout).toBe("test");
     expect(r.code).toBe(0);
     expect(r.timedOut).toBe(false);
+    expect(r.truncated).toBe(false);
+  });
+
+  test("C25: output past the 8 MiB capture cap is reported as truncated (stdout or stderr); the text kept is a prefix", async () => {
+    const nine = 9 * 1024 * 1024;
+    const out = await run(["sh", "-c", `head -c ${nine} /dev/zero`]);
+    expect(out.code).toBe(0);
+    expect(out.truncated).toBe(true);
+    expect(out.stdout.length).toBeGreaterThanOrEqual(8 * 1024 * 1024);
+    expect(out.stdout.length).toBeLessThan(nine);
+    const err = await run(["sh", "-c", `head -c ${nine} /dev/zero >&2`]);
+    expect(err.truncated).toBe(true);
+    const exact = await run(["sh", "-c", `head -c ${8 * 1024 * 1024 - 1} /dev/zero`]);
+    expect(exact.truncated).toBe(false);
+    expect(exact.stdout.length).toBe(8 * 1024 * 1024 - 1);
   });
 });

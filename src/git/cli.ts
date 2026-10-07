@@ -1,11 +1,17 @@
 // src/git/cli.ts — GitPort over the git binary; never prompts, never writes outside the given cwd.
-import type { BranchHistory, GitPort } from "../ports";
+import type { BranchHistory, GitPort, GitTarget } from "../ports";
 import { WingmateError } from "../shared/errors";
 import { type RunOptions, type RunResult, run } from "../shared/exec";
 import { parseAddedLines } from "./diff";
 import { isBranchName } from "./refname";
+import { verifyGitLinks } from "./trust";
 
 export type Runner = (argv: string[], opts?: RunOptions) => Promise<RunResult>;
+/**
+ * Where a command runs: a dispatcher target — an issue worktree whose links are verified and whose git dirs are pinned (C22) — or a
+ * plain checkout directory, for the agent's own `gate` inside its sandbox.
+ */
+export type GitAt = GitTarget | string;
 
 /** A full SHA-1 or SHA-256 object name: nothing else may stand on the source side of a pushed refspec. */
 const OBJECT_NAME = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
@@ -25,6 +31,23 @@ export const DISPATCHER_GIT_ENV: Readonly<Record<string, string>> = {
   GIT_CONFIG_VALUE_1: "false",
 };
 
+/**
+ * C24 (§13.3 d): text-mode diffs. No `.gitattributes` — committed, or untracked (the work tree's apply to a diff of two commits too) —
+ * turns a file into "Binary files differ", and no textconv or external diff driver rewrites what the guards read.
+ */
+const TEXT = ["--text", "--no-textconv", "--no-ext-diff"];
+/** C22: a `git log` that never verifies a signature (`log.showSignature` would start gpg on the agent's commits). */
+const LOG = ["-c", "log.showSignature=false", "log"];
+/** C23: a GitHub repository URL — https, scp-like ssh or ssh:// — and its `owner/name`; GitHub names are case-insensitive. */
+const GITHUB_REMOTE =
+  /^(?:https:\/\/(?:[^@/\s]+@)?github\.com\/|ssh:\/\/git@github\.com\/|git@github\.com:)([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/i;
+const githubRepo = (url: string): string | null => {
+  const m = GITHUB_REMOTE.exec(url.trim());
+  return m ? `${m[1]}/${m[2]}`.toLowerCase() : null;
+};
+/** C26: the ref line `git push --porcelain` prints for a non-fast-forward rejection (its status words are not translated). */
+const NON_FAST_FORWARD = /^!\t[^\t]*\t\[rejected\] \((?:non-fast-forward|fetch first)\)$/m;
+
 /** Not `git_…`: an invalid branch is no infrastructure trouble, so a finish that keeps hitting it is counted (and quarantined). */
 function assertBranch(branch: string): void {
   if (!isBranchName(branch))
@@ -35,60 +58,95 @@ function assertBranch(branch: string): void {
     );
 }
 
+const mismatch = (message: string) =>
+  new WingmateError(
+    "remote_mismatch",
+    message,
+    "point the repository's origin at repos.<name>.github in config/projects.yaml (or fix the config), then run finish again",
+  );
+
+/** C23: the configured remote, which only ever stands on a command line as a GitHub URL (never a name git reads as an option). */
+function assertRemote(url: string): string {
+  const repo = githubRepo(url);
+  if (!repo) throw mismatch("the configured remote is not a GitHub repository URL; nothing was pushed");
+  return repo;
+}
+
 export class GitCli implements GitPort {
   constructor(private readonly exec: Runner = run) {}
 
-  private async g(cwd: string, args: string[], timeoutMs = 60_000): Promise<string> {
-    const r = await this.exec(["git", "-C", cwd, ...args], { timeoutMs, env: { ...DISPATCHER_GIT_ENV } });
+  /** C22: in a worktree target, only once its gitfile and commondir still name the recorded git dirs — and with those dirs pinned. */
+  private async run(at: GitAt, args: string[], timeoutMs: number): Promise<RunResult> {
+    if (typeof at === "string")
+      return this.exec(["git", "-C", at, ...args], { timeoutMs, env: { ...DISPATCHER_GIT_ENV } });
+    await verifyGitLinks(at);
+    return this.exec(["git", "-C", at.path, `--git-dir=${at.gitDir}`, `--work-tree=${at.path}`, ...args], {
+      timeoutMs,
+      env: { ...DISPATCHER_GIT_ENV, GIT_COMMON_DIR: at.commonDir },
+    });
+  }
+  private async g(at: GitAt, args: string[], timeoutMs = 60_000): Promise<string> {
+    const r = await this.run(at, args, timeoutMs);
+    const verb = args[args[0] === "-c" ? 2 : 0];
     if (r.code !== 0)
       throw new WingmateError(
         "git_failed",
-        `git ${args[0]} failed (${r.code}): ${r.stderr.trim().slice(0, 300)}`,
+        `git ${verb} failed (${r.code}): ${r.stderr.trim().slice(0, 300)}`,
       );
+    // C25: a diff or log cut at the capture cap would leave its later paths and lines unguarded — never read as if complete
+    if (r.truncated)
+      throw new WingmateError("diff_too_large", `git ${verb} output exceeds the 8 MiB capture`);
     return r.stdout;
   }
-  async revParse(cwd: string, ref: string): Promise<string> {
-    return (await this.g(cwd, ["rev-parse", "--verify", `${ref}^{commit}`])).trim();
+  /** Whether this repository has the commit `sha` (C26: a remote tip pushed from elsewhere may be unknown here). */
+  private async hasCommit(at: GitAt, sha: string): Promise<boolean> {
+    return (await this.run(at, ["rev-parse", "--verify", "--quiet", `${sha}^{commit}`], 30_000)).code === 0;
   }
-  async commonDir(cwd: string): Promise<string> {
-    return (await this.g(cwd, ["rev-parse", "--path-format=absolute", "--git-common-dir"])).trim();
+  async revParse(at: GitAt, ref: string): Promise<string> {
+    return (await this.g(at, ["rev-parse", "--verify", `${ref}^{commit}`])).trim();
   }
-  async gitDir(cwd: string): Promise<string> {
-    return (await this.g(cwd, ["rev-parse", "--absolute-git-dir"])).trim();
+  async commonDir(at: GitAt): Promise<string> {
+    return (await this.g(at, ["rev-parse", "--path-format=absolute", "--git-common-dir"])).trim();
+  }
+  /** `git rev-parse --absolute-git-dir`: a linked worktree's admin dir (its basename is the gitdir name; git de-duplicates them). */
+  async gitDir(at: GitAt): Promise<string> {
+    return (await this.g(at, ["rev-parse", "--absolute-git-dir"])).trim();
   }
   /**
    * `--no-renames`: a rename is reported as the deletion of its old path and the addition of its new one, so a file moved out of a
    * guarded path is still a changed path (and a moved file's lines are all added lines), whatever the owner's `diff.renames` is.
+   * C24: `T` too — a symlink replaced by a regular file (or the reverse) is a changed path, and the new file's lines are added lines.
    */
-  async changedPaths(cwd: string, baseSha: string, head = "HEAD"): Promise<string[]> {
-    const out = await this.g(cwd, [
+  async changedPaths(at: GitAt, baseSha: string, head = "HEAD"): Promise<string[]> {
+    const out = await this.g(at, [
       "diff",
       "--name-only",
       "-z",
+      ...TEXT,
       "--no-renames",
-      "--diff-filter=ACMRD",
+      "--diff-filter=ACMRDT",
       `${baseSha}...${head}`,
     ]);
     return out.split("\0").filter(Boolean);
   }
-  async addedLines(cwd: string, baseSha: string, head = "HEAD"): Promise<{ path: string; line: string }[]> {
+  async addedLines(at: GitAt, baseSha: string, head = "HEAD"): Promise<{ path: string; line: string }[]> {
     const diff = await this.g(
-      cwd,
+      at,
       [
         "diff",
-        "--no-ext-diff",
+        ...TEXT,
         "--no-color",
         "--no-renames",
         "--unified=0",
-        "--diff-filter=ACMR",
+        "--diff-filter=ACMRT",
         `${baseSha}...${head}`,
       ],
       120_000,
     );
     return parseAddedLines(diff);
   }
-  async commitsAhead(cwd: string, baseSha: string, head = "HEAD"): Promise<number> {
-    const n = Number((await this.g(cwd, ["rev-list", "--count", `${baseSha}..${head}`])).trim());
+  async commitsAhead(at: GitAt, baseSha: string, head = "HEAD"): Promise<number> {
+    const n = Number((await this.g(at, ["rev-list", "--count", `${baseSha}..${head}`])).trim());
     if (!Number.isInteger(n))
       throw new WingmateError("git_failed", "git rev-list --count returned no number");
     return n;
@@ -96,18 +154,21 @@ export class GitCli implements GitPort {
   /**
    * The push sends every commit of `baseSha..head`, not the net diff: a file or line that one commit added and a later one removed is
    * gone from `baseSha...head` yet still in the pushed pack. Each commit is read against its first parent (a merge too), with the
-   * same rename and filter rules as the net diff, and the messages with it.
+   * same rename and filter rules as the net diff, and the messages with it. C26: commits reachable from `since` (the remote branch's
+   * tip) are on the remote already and are left out — when this repository has that commit; otherwise the whole range is read.
    */
-  async historyChanges(cwd: string, baseSha: string, head: string): Promise<BranchHistory> {
-    const range = `${baseSha}..${head}`;
-    const log = ["log", "--no-color", "--no-renames", "--diff-merges=first-parent", "--format="];
-    const names = await this.g(cwd, [...log, "--name-only", "-z", "--diff-filter=ACMRD", range]);
-    const patch = await this.g(
-      cwd,
-      [...log, "-p", "--no-ext-diff", "--unified=0", "--diff-filter=ACMR", range],
-      120_000,
-    );
-    const messages = await this.g(cwd, ["log", "--format=%B", range]);
+  async historyChanges(
+    at: GitAt,
+    baseSha: string,
+    head: string,
+    since: string | null = null,
+  ): Promise<BranchHistory> {
+    const onRemote = since !== null && OBJECT_NAME.test(since) && (await this.hasCommit(at, since));
+    const range = [`${baseSha}..${head}`, ...(onRemote ? [`^${since}`] : [])];
+    const log = [...LOG, "--no-color", "--no-renames", "--diff-merges=first-parent", "--format=", ...TEXT];
+    const names = await this.g(at, [...log, "--name-only", "-z", "--diff-filter=ACMRDT", ...range]);
+    const patch = await this.g(at, [...log, "-p", "--unified=0", "--diff-filter=ACMRT", ...range], 120_000);
+    const messages = await this.g(at, [...LOG, "--format=%B", ...range]);
     return {
       paths: [...new Set(names.split("\0").filter(Boolean))],
       added: parseAddedLines(patch),
@@ -117,21 +178,41 @@ export class GitCli implements GitPort {
   /**
    * §13.3(d, h): the commit the guards cleared, by its object name, to the record's own branch — never `HEAD` (it could move
    * between the guards and the push), never a `+` (force) refspec, never a name git would read as an option. `-u` records an
-   * upstream only for a branch source, so git leaves the config alone for a commit id.
+   * upstream only for a branch source, so git leaves the config alone for a commit id. C23: to the configured URL, once origin is
+   * proven to name the same repository; C26: a non-fast-forward rejection is `push_rejected`, never retried as infrastructure.
    */
-  async push(cwd: string, branch: string, sha: string): Promise<void> {
+  async push(t: GitTarget, url: string, branch: string, sha: string): Promise<void> {
     assertBranch(branch);
     if (!OBJECT_NAME.test(sha))
       throw new WingmateError("sha_invalid", "git push: the commit to publish is not a full object name");
-    await this.g(cwd, ["push", "-u", "origin", `${sha}:refs/heads/${branch}`], 180_000);
+    const repo = assertRemote(url);
+    const origin = await this.run(t, ["config", "--get", "remote.origin.url"], 30_000);
+    if (origin.code > 1)
+      throw new WingmateError(
+        "git_failed",
+        `git config failed (${origin.code}): ${origin.stderr.trim().slice(0, 300)}`,
+      );
+    // the origin URL itself is never echoed: it can carry credentials
+    if (origin.code === 1 || githubRepo(origin.stdout) !== repo)
+      throw mismatch(`remote.origin.url does not name ${repo}; nothing was pushed`);
+    const r = await this.run(t, ["push", "--porcelain", "-u", url, `${sha}:refs/heads/${branch}`], 180_000);
+    if (r.code === 0) return;
+    if (NON_FAST_FORWARD.test(r.stdout))
+      throw new WingmateError(
+        "push_rejected",
+        `${branch}: the remote branch's tip is not an ancestor of the commit to publish (non-fast-forward); nothing is force-pushed`,
+      );
+    throw new WingmateError("git_failed", `git push failed (${r.code}): ${r.stderr.trim().slice(0, 300)}`);
   }
-  /** The SHA of exactly `refs/heads/<branch>` on origin (`ls-remote` patterns also match `…/<branch>` of other branches). */
-  async lsRemoteSha(cwd: string, branch: string): Promise<string | null> {
+  /** The SHA of exactly `refs/heads/<branch>` at `url` (`ls-remote` patterns also match `…/<branch>` of other branches). */
+  async lsRemoteSha(t: GitTarget, url: string, branch: string): Promise<string | null> {
     assertBranch(branch);
-    const out = await this.g(cwd, ["ls-remote", "--heads", "origin", branch]);
+    assertRemote(url);
+    const out = await this.g(t, ["ls-remote", "--heads", url, branch]);
     for (const line of out.split("\n")) {
       const [sha, ref] = line.split("\t");
-      if (sha && ref?.trim() === `refs/heads/${branch}`) return sha.trim();
+      const s = sha?.trim() ?? "";
+      if (ref?.trim() === `refs/heads/${branch}` && OBJECT_NAME.test(s)) return s;
     }
     return null;
   }

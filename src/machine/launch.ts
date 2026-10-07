@@ -1,6 +1,7 @@
 // src/machine/launch.ts — what every coordinator (re)launch needs first (Rulings R22/R24) and what the kit ledgered at install.
 import { mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { gitTarget } from "../git/trust";
 import { refreshSiblingDenies, verifyIntegrity } from "../kit/install";
 import { WingmateError, errorCode, errorText } from "../shared/errors";
 import type { WRecord } from "../state/records";
@@ -19,7 +20,9 @@ export async function prepareLaunch(ctx: Ctx, r: WRecord): Promise<void> {
   const wt = r.worktree;
   if (!wt) return;
   const expected = await kitHashes(ctx, r);
-  const changed = expected ? await verifyIntegrity(wt.path, wt.gitCommonDir, expected) : [];
+  const changed = expected
+    ? await verifyIntegrity(wt.path, wt.gitCommonDir, expected, gitTarget(wt).gitDir)
+    : [];
   if (changed.length)
     throw new WingmateError("kit_tampered", `${r.identifier}: ${changed.slice(0, 5).join(",")}`);
   await refreshSiblingDenies(ctx.kitDirFor(r.identifier), wt.gitCommonDir, wt.gitdirName, wt.branch);
@@ -75,9 +78,15 @@ export async function kitNonce(ctx: Ctx, r: WRecord): Promise<string | null> {
   return typeof n === "string" && n ? n : null;
 }
 
-/** The integrity-set hashes ledgered at the latest kit install (§6.3 step 6), or null before any install. */
+/**
+ * The integrity-set hashes ledgered at the latest kit install (§6.3 step 6) — or by a later `kit_rehashed`, when the tick rewrote a
+ * kit file itself (C28: launch.json's allowDeps) — or null before any install.
+ */
 export async function kitHashes(ctx: Ctx, r: WRecord): Promise<Record<string, string> | null> {
-  const h = (await latestKit(ctx, r))?.data.hashes;
+  const pinned = [...(await ctx.ledger.readIssue(r.identifier))]
+    .reverse()
+    .find((e) => e.type === "kit_installed" || e.type === "kit_rehashed");
+  const h = pinned?.data.hashes;
   if (!h || typeof h !== "object" || Array.isArray(h)) return null;
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(h)) if (typeof v === "string") out[k] = v;

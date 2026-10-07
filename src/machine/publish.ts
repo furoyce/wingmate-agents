@@ -4,6 +4,7 @@
 import { z } from "zod";
 import { type ProjectConfig, type RepoConfig, repoFor } from "../config/schema";
 import { isBranchName } from "../git/refname";
+import { gitTarget } from "../git/trust";
 import type { Intent } from "../kit/intents";
 import { readNoFollow, worktreeFile } from "../kit/local";
 import { MARK } from "../linear/markers";
@@ -17,6 +18,7 @@ import { isIdentifier } from "../shared/ids";
 import type { JournalEntry } from "../state/journal";
 import { PIPELINE, type WRecord } from "../state/records";
 import type { Ctx } from "./context";
+import { allowDepsGranted } from "./grants";
 import { isTickAbort } from "./guard";
 import { LinearWrites } from "./linearWrites";
 import type { Liveness } from "./liveness";
@@ -27,10 +29,20 @@ import { saveRecord } from "./save";
 import { addAttention, dropAttention, enterPipelineStage, transition } from "./states";
 import { addNote } from "./status";
 
+/** §13.3(e)'s grant rule lives with C28's launch.json sync; publish recomputes the dependency policy from it. */
+export { allowDepsGranted };
+
 type FinishIntent = Extract<Intent, { kind: "finish" }>;
 type Worktree = NonNullable<WRecord["worktree"]>;
 export interface GuardFailure {
-  code: "nothing_to_publish" | "path_guard" | "secret_detected" | "dependency_policy" | "validate_stale";
+  code:
+    | "nothing_to_publish"
+    | "path_guard"
+    | "secret_detected"
+    | "dependency_policy"
+    | "validate_stale"
+    | "diff_too_large"
+    | "push_rejected";
   lines: string[];
   /** F4: a finding is in a commit the push sends, where a fix committed on top leaves it. */
   committed?: boolean;
@@ -60,7 +72,10 @@ const TITLE_MAX = 120;
 const FINDINGS_SHOWN = 50;
 const PrReceipt = z.object({ number: z.number().int().positive(), url: z.string().url() });
 type Pr = z.infer<typeof PrReceipt>;
-const ms = (iso: string) => Date.parse(iso);
+/** C23 (§13.3 d): the configured GitHub URL every push and remote read goes to — never the name `origin`. */
+const githubUrl = (repo: RepoConfig) => `https://github.com/${repo.github}.git`;
+/** C22, C26: refusals raised inside a git step that close it instead of counting a failed step (publish blocks or refuses). */
+const NOT_A_STEP_FAILURE = new Set(["git_dir_tampered", "push_rejected"]);
 
 function projectOf(ctx: Ctx, r: WRecord): ProjectConfig {
   const p = ctx.cfg.projects[r.project];
@@ -74,28 +89,6 @@ async function agentText(wt: string, rel: string): Promise<string> {
   const f = await worktreeFile(wt, rel);
   if (!f.ok) throw new WingmateError("file_invalid", f.error);
   return (await readNoFollow(f.abs, SUMMARY_MAX_BYTES)).toString("utf8");
-}
-
-/**
- * §13.3(e): `allow-deps` counts only while the label is on the issue and its latest grant — the history entry that last added it — was
- * made by an approver as a human (no bot actor), before this cycle's claim or while the record was parked `awaiting-human` (the owner
- * granting it in answer to a question).
- */
-export async function allowDepsGranted(ctx: Ctx, r: WRecord, issue: LinearIssue): Promise<boolean> {
-  const labelId = ctx.meta.labels.find((l) => l.name === ctx.cfg.labels.allowDeps)?.id;
-  if (!labelId || !issue.labels.some((l) => l.id === labelId)) return false;
-  const grant = (await ctx.linear.issueHistory(issue.id, EPOCH))
-    .filter((h) => h.addedLabelIds.includes(labelId))
-    .sort((a, b) => ms(a.createdAt) - ms(b.createdAt))
-    .at(-1);
-  if (!grant || grant.botActorId || !grant.actorId || !ctx.cfg.workspace.approvers.includes(grant.actorId))
-    return false;
-  const at = ms(grant.createdAt);
-  if (at < ms(r.claimedAt)) return true;
-  return r.history.some((h, i) => {
-    const out = r.history[i + 1];
-    return h.to === "awaiting-human" && at >= ms(h.at) && (!out || at <= ms(out.at));
-  });
 }
 
 /** `gate validate`'s report shows `exit 0` under the `$ <argv>` line of every pinned command, and no other exit anywhere. */
@@ -170,8 +163,30 @@ function secretFindings(added: { path: string; line: string }[], history: Branch
  * and `validate` verified at that commit. The path guard and the secret scan also read every commit the push sends (F3): a path or
  * line one commit added and a later one removed is absent from the net diff, never from the pushed pack. Findings name patterns and
  * paths, never values, and where each was seen; `committed` marks a failure a commit holds (F4: the refusal then says to rewrite).
+ * C25: a guard read cut at the capture cap is never judged; it refuses with `diff_too_large`.
  */
 export async function runGuards(
+  ctx: Ctx,
+  r: WRecord,
+  issue: LinearIssue,
+  title: string,
+  body: string,
+  head?: string,
+): Promise<GuardFailure | null> {
+  try {
+    return await guards(ctx, r, issue, title, body, head);
+  } catch (e) {
+    if (errorCode(e) !== "diff_too_large") throw e;
+    return {
+      code: "diff_too_large",
+      lines: [
+        "the diff or the history the push sends exceeds the 8 MiB the guards read in full, so it was not checked: make the branch smaller (drop large generated, vendored or binary files from its commits)",
+      ],
+    };
+  }
+}
+
+async function guards(
   ctx: Ctx,
   r: WRecord,
   issue: LinearIssue,
@@ -183,11 +198,14 @@ export async function runGuards(
   if (!wt) throw new WingmateError("publish_no_worktree", `${r.identifier} has no worktree`);
   const project = projectOf(ctx, r);
   const repo = repoFor(project, r.repo);
-  const at = head ?? (await ctx.git.revParse(wt.path, "HEAD"));
-  if ((await ctx.git.commitsAhead(wt.path, wt.baseSha, at)) === 0)
+  const t = gitTarget(wt); // C22: every read verifies the worktree's links first and runs with its git dirs pinned
+  const at = head ?? (await ctx.git.revParse(t, "HEAD"));
+  if ((await ctx.git.commitsAhead(t, wt.baseSha, at)) === 0)
     return { code: "nothing_to_publish", lines: ["the branch has no commits beyond its base SHA"] };
-  const changed = await ctx.git.changedPaths(wt.path, wt.baseSha, at);
-  const history = await ctx.git.historyChanges(wt.path, wt.baseSha, at);
+  const changed = await ctx.git.changedPaths(t, wt.baseSha, at);
+  // C26: commits already on the remote branch (an earlier cycle's publish) are public — the history read starts at its tip
+  const since = await ctx.git.lsRemoteSha(t, githubUrl(repo), wt.branch);
+  const history = await ctx.git.historyChanges(t, wt.baseSha, at, since);
   const net = new Set(changed);
   const past = new Set(history.paths);
   const forbidden = [...project.forbiddenPaths, ...repo.forbiddenPaths];
@@ -201,7 +219,7 @@ export async function runGuards(
       ),
       committed: true,
     };
-  const added = await ctx.git.addedLines(wt.path, wt.baseSha, at);
+  const added = await ctx.git.addedLines(t, wt.baseSha, at);
   const secrets = secretFindings(added, history, `${title}\n${body}`);
   if (secrets.lines.length) return { code: "secret_detected", ...secrets };
   const manifests = depsChanged(changed);
@@ -258,8 +276,10 @@ const renderPrBody = (p: {
 
 /**
  * §8.1 `finish`, run for the outbox: true once the PR is open and the issue is In Review (`review`); false when the guards refused
- * (nothing is pushed: a first refusal delivered its pointer, the second of the cycle blocked the issue). A failed step throws with
- * its progress on disk, and the retried intent continues the same journal entry — no second push, PR, attachment or comment.
+ * (nothing is pushed: a first refusal delivered its pointer, the second of the cycle blocked the issue), when the push was rejected
+ * as non-fast-forward (C26: refused the same way), or when the worktree's git links were redirected (C22: blocked `kit_tampered`). A
+ * failed step throws with its progress on disk, and the retried intent continues the same journal entry — no second push, PR,
+ * attachment or comment.
  */
 export async function publish(
   ctx: Ctx,
@@ -288,17 +308,54 @@ export async function publish(
     gates,
     evidence: evidenceNames(r),
   });
-  const head = await ctx.git.revParse(wt.path, "HEAD"); // the one commit every guard reads and the push sends
-  // the completion comment's shorter summary prefix is scanned as it will be posted (a token cut at its end reads differently), so
-  // no Linear write after the push can refuse it
-  const scanned = `${body}\n${summary.slice(0, COMPLETION_SUMMARY_MAX)}`;
-  const failure = await runGuards(ctx, r, issue, title, scanned, head);
-  if (failure) return refusePublish(ctx, r, issue, failure, rec);
-  const limitations = intent.payload.repos
-    .filter((name) => name !== r.repo && Object.hasOwn(project.repos, name))
-    .map((name) => `repo ${name} is not published (one repository per issue in slice 1)`);
-  const draft = intent.payload.draft;
-  return pushAndComplete(ctx, r, issue, { wt, repo, head, title, body, summary, draft, limitations });
+  let head: string | null = null;
+  try {
+    head = await ctx.git.revParse(gitTarget(wt), "HEAD"); // the one commit every guard reads and the push sends
+    // the completion comment's shorter summary prefix is scanned as it will be posted (a token cut at its end reads differently),
+    // so no Linear write after the push can refuse it
+    const scanned = `${body}\n${summary.slice(0, COMPLETION_SUMMARY_MAX)}`;
+    const failure = await runGuards(ctx, r, issue, title, scanned, head);
+    if (failure) return await refusePublish(ctx, r, issue, failure, rec);
+    const limitations = intent.payload.repos
+      .filter((name) => name !== r.repo && Object.hasOwn(project.repos, name))
+      .map((name) => `repo ${name} is not published (one repository per issue in slice 1)`);
+    const draft = intent.payload.draft;
+    return await pushAndComplete(ctx, r, issue, { wt, repo, head, title, body, summary, draft, limitations });
+  } catch (e) {
+    if (errorCode(e) === "git_dir_tampered") return tamperedLinks(ctx, r, issue, e);
+    if (errorCode(e) === "push_rejected" && head)
+      return refusePublish(ctx, r, issue, await pushRejected(ctx, wt, repo, head), rec);
+    throw e;
+  }
+}
+
+/**
+ * C22: the worktree's gitfile or commondir no longer names the git dirs the claim recorded — an agent may have pointed git at a
+ * config of its own (`core.sshCommand`, `credential.helper`, `url.*.insteadOf`). Nothing more runs there: blocked `kit_tampered`,
+ * for the owner to inspect (no finding goes to the agent).
+ */
+async function tamperedLinks(ctx: Ctx, r: WRecord, issue: LinearIssue, e: unknown): Promise<false> {
+  ctx.log.warn(
+    { issue: r.identifier, code: "git_dir_tampered" },
+    "publish refused: the worktree's git links moved",
+  );
+  const detail = (e instanceof Error ? e.message : String(e)).slice(0, 300);
+  const next =
+    "inspect the worktree's .git file and its gitdir's commondir, then move the issue back to Todo to re-queue it when it is safe";
+  await block(ctx, r, issue, "kit_tampered", detail, next);
+  return false;
+}
+
+/** C26: a non-fast-forward rejection as a refusal finding — naming the remote tip the new commits must descend from. */
+async function pushRejected(ctx: Ctx, wt: Worktree, repo: RepoConfig, head: string): Promise<GuardFailure> {
+  const tip = (await ctx.git.lsRemoteSha(gitTarget(wt), githubUrl(repo), wt.branch)) ?? "its current tip";
+  return {
+    code: "push_rejected",
+    lines: [
+      `origin's ${wt.branch} is at ${tip}, which the commit to publish (${head}) does not descend from: the push was rejected as non-fast-forward, and Wingmate never force-pushes`,
+      `keep the commits already pushed: put the new ones on top of ${tip} (for example \`git rebase ${tip}\`); if this worktree does not have that commit (the branch was pushed to from elsewhere), ask the owner instead`,
+    ],
+  };
 }
 
 /**
@@ -322,11 +379,17 @@ async function publishEntry(ctx: Ctx, r: WRecord, head: string): Promise<Journal
   );
 }
 
-/** Appendix D `gitPush`: the cleared commit to the record's branch unless origin has it already; `ls-remote` proves it. */
-async function pushExact(ctx: Ctx, wt: Worktree, head: string): Promise<void> {
-  if ((await ctx.git.lsRemoteSha(wt.path, wt.branch)) !== head) await ctx.git.push(wt.path, wt.branch, head);
-  if ((await ctx.git.lsRemoteSha(wt.path, wt.branch)) !== head)
-    throw new WingmateError("push_unconfirmed", `${wt.branch}: origin does not show the pushed commit`);
+/**
+ * Appendix D `gitPush`: the cleared commit to the record's branch at the configured URL (C23) unless it is there already; `ls-remote`
+ * proves it.
+ */
+async function pushExact(ctx: Ctx, c: Cleared): Promise<void> {
+  const t = gitTarget(c.wt);
+  const url = githubUrl(c.repo);
+  if ((await ctx.git.lsRemoteSha(t, url, c.wt.branch)) !== c.head)
+    await ctx.git.push(t, url, c.wt.branch, c.head);
+  if ((await ctx.git.lsRemoteSha(t, url, c.wt.branch)) !== c.head)
+    throw new WingmateError("push_unconfirmed", `${c.wt.branch}: origin does not show the pushed commit`);
 }
 
 /** `gh pr create --head <branch>`, reusing the branch's open PR (Appendix D `prCreate`; never `--web`, never a merge). */
@@ -412,7 +475,7 @@ async function pushAndComplete(ctx: Ctx, r: WRecord, issue: LinearIssue, c: Clea
   const w = new LinearWrites(ctx);
   try {
     if (!done("push")) {
-      await pushExact(ctx, c.wt, c.head);
+      await pushExact(ctx, c);
       await ctx.journal.stepDone(entry.id, "push", { head: c.head, branch: c.wt.branch });
     }
     const pr = done("pr") ? prReceipt(entry) : await openPr(ctx, c);
@@ -444,7 +507,8 @@ async function pushAndComplete(ctx: Ctx, r: WRecord, issue: LinearIssue, c: Clea
     await saveRecord(ctx, r);
     return true;
   } catch (err) {
-    await stepFailed(ctx, r, entry.id, err);
+    if (NOT_A_STEP_FAILURE.has(errorCode(err))) await ctx.journal.abandon(entry.id, errorCode(err));
+    else await stepFailed(ctx, r, entry.id, err);
     throw err;
   }
 }

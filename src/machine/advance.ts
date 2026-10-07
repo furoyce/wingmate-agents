@@ -11,6 +11,7 @@ import { stopRequested } from "../state/heartbeat";
 import type { WRecord } from "../state/records";
 import { claimLinear, openClaimEntry, provisionAndLaunch } from "./claim";
 import type { Ctx } from "./context";
+import { allowDepsGrant } from "./grants";
 import { isRecordAbort, isTickAbort, recordCtx } from "./guard";
 import { doHandoff, doReroute } from "./handoff";
 import { comments, reviewFeedback } from "./humans";
@@ -248,7 +249,19 @@ async function blockNotice(a: Advance): Promise<StepOut> {
   return "next";
 }
 
-const STEPS = [overrides, blockNotice, replayClaim, outbox, comments, liveness, timers, integrity, budgets];
+// C28: the allow-deps grant reaches launch.json before `comments` delivers an answer, so a resumed agent's `gate security` sees it
+const STEPS = [
+  overrides,
+  blockNotice,
+  replayClaim,
+  outbox,
+  allowDepsGrant,
+  comments,
+  liveness,
+  timers,
+  integrity,
+  budgets,
+];
 
 /** The mirror, the record, then the status comment when a tick-level change made it stale (once per tick, Ruling R1). */
 async function settle(a: Advance, before: string[]): Promise<void> {

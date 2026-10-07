@@ -1,12 +1,13 @@
 // src/kit/install.ts — installs the kit into a worktree at claim and re-hashes it every tick (§8.0, §13.3 e/g).
 import { createHash } from "node:crypto";
-import type { Stats } from "node:fs";
+import { type Stats, existsSync } from "node:fs";
 import { lstat, mkdir, readFile, readdir, readlink } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { z } from "zod";
 import type { Config, ProjectConfig } from "../config/schema";
 import { DISPATCHER_GIT_ENV } from "../git/cli";
-import { WingmateError } from "../shared/errors";
+import { verifyGitLinks } from "../git/trust";
+import { WingmateError, errorCode } from "../shared/errors";
 import { run } from "../shared/exec";
 import { readText, writeAtomic } from "../state/fs";
 import type { WRecord } from "../state/records";
@@ -43,6 +44,8 @@ export interface InstallInput {
    */
   tiers?: Partial<Record<"claude" | "codex", { model: string; effort: string } | null>>;
   toolchainPaths: string[];
+  /** C28 (§13.3 e): the allow-deps grant as it stands at claim — `launch.json` `allowDeps`, which the agent-side `gate security` reads. */
+  allowDeps?: boolean;
 }
 
 export interface InstallResult {
@@ -114,17 +117,24 @@ export function canonicalGitConfig(text: string): string {
   return out.join("\n");
 }
 
+/** A regular file's integrity digest from its content and executable bit (C28: what the tick writes into the kit is pinned by it). */
+export const contentDigest = (content: string | Buffer, executable: boolean): string =>
+  createHash("sha256")
+    .update(`file\0${executable ? "x" : "-"}\0`)
+    .update(content)
+    .digest("hex");
+
 /** Content (with the executable bit) for files, the target for symlinks, the mode for anything else — nothing is followed or opened blindly (a FIFO would hang the tick). */
 async function digest(path: string, commonConfig: string): Promise<string> {
   const s = await lstat(path);
-  const h = createHash("sha256");
-  if (s.isSymbolicLink()) h.update(`symlink\0${await readlink(path)}`);
-  else if (!s.isFile()) h.update(`special\0${s.mode}`);
-  else {
-    h.update(`file\0${s.mode & 0o111 ? "x" : "-"}\0`);
-    h.update(path === commonConfig ? canonicalGitConfig(await readFile(path, "utf8")) : await readFile(path));
-  }
-  return h.digest("hex");
+  if (s.isSymbolicLink())
+    return createHash("sha256")
+      .update(`symlink\0${await readlink(path)}`)
+      .digest("hex");
+  if (!s.isFile()) return createHash("sha256").update(`special\0${s.mode}`).digest("hex");
+  const content =
+    path === commonConfig ? canonicalGitConfig(await readFile(path, "utf8")) : await readFile(path);
+  return contentDigest(content, (s.mode & 0o111) !== 0);
 }
 
 /** Hashes of the integrity set keyed by worktree-relative path (common-dir files outside the worktree keep their absolute path). */
@@ -157,21 +167,40 @@ function porcelainPaths(out: string): string[] {
   return paths;
 }
 
-/** Changed, added or removed files of the integrity set, plus modified/untracked files under the non-kit globs per `git status`. */
+/**
+ * Changed, added or removed files of the integrity set, plus modified/untracked files under the non-kit globs per `git status`. With
+ * the worktree's own `gitDir` (the dispatcher's checks, C22), its gitfile and commondir must still name that gitdir and `commonDir`
+ * — otherwise `.git` is reported changed and no git runs through them — and `git status` runs with both pinned.
+ */
 export async function verifyIntegrity(
   worktreePath: string,
   commonDir: string,
   expected: Record<string, string>,
+  gitDir?: string,
 ): Promise<string[]> {
   const now = await integrityHashes(worktreePath, commonDir);
   const changed = new Set<string>();
   for (const [k, v] of Object.entries(expected)) if (now[k] !== v) changed.add(k);
   for (const k of Object.keys(now)) if (!(k in expected)) changed.add(k);
   const globs = INTEGRITY_GLOBS.filter((g) => !g.startsWith(".wingmate"));
-  const st = await run(
-    ["git", "-C", worktreePath, "status", "--porcelain=v1", "-z", "--untracked-files=all", "--", ...globs],
-    { timeoutMs: 60_000, env: { ...DISPATCHER_GIT_ENV } }, // the index refresh runs no hook and no fsmonitor (D14)
-  );
+  let git = ["git", "-C", worktreePath];
+  const env: Record<string, string> = { ...DISPATCHER_GIT_ENV }; // the index refresh runs no hook and no fsmonitor (D14)
+  if (gitDir !== undefined) {
+    if (!existsSync(worktreePath))
+      throw new WingmateError("integrity_unverifiable", `the worktree ${worktreePath} is gone`);
+    try {
+      await verifyGitLinks({ path: worktreePath, gitDir, commonDir });
+    } catch (e) {
+      if (errorCode(e) !== "git_dir_tampered") throw e;
+      return [...changed.add(".git")].sort();
+    }
+    git = [...git, `--git-dir=${gitDir}`, `--work-tree=${worktreePath}`];
+    env.GIT_COMMON_DIR = commonDir;
+  }
+  const st = await run([...git, "status", "--porcelain=v1", "-z", "--untracked-files=all", "--", ...globs], {
+    timeoutMs: 60_000,
+    env,
+  });
   if (st.code !== 0)
     throw new WingmateError(
       "integrity_unverifiable",
@@ -388,7 +417,7 @@ function launchFile(i: InstallInput, repo: Repo, w: Worktree): Launch {
     commonDir: w.gitCommonDir,
     pinnedGates: repo.gates,
     ui: repo.ui,
-    allowDeps: false,
+    allowDeps: i.allowDeps ?? false,
     forbiddenPaths: [...i.project.forbiddenPaths, ...repo.forbiddenPaths],
     verifyCross: i.cfg.defaults.providers.verifyCross,
     workers: i.cfg.defaults.providers.workers,
