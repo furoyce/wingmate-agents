@@ -93,6 +93,11 @@ export class EnvToken implements Tokens {
     return checked(text.trim(), file);
   }
 
+  /** F6: a personal API key goes bare (`Authorization: <key>`): Linear refuses one sent as `Bearer <key>`. */
+  async authorization(): Promise<string> {
+    return this.getToken();
+  }
+
   /** Nothing is cached and a personal key is never re-minted: GraphQL's one retry after a 401 sends the same key, then reports it. */
   async invalidate(): Promise<void> {}
 

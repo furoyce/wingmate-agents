@@ -2,7 +2,11 @@
 import { describe, expect, test } from "bun:test";
 import { GraphQL } from "../../../src/linear/graphql";
 
-const tokens = { getToken: async () => "t", invalidate: async () => undefined };
+const tokens = {
+  getToken: async () => "t",
+  authorization: async () => "Bearer t",
+  invalidate: async () => undefined,
+};
 
 describe("GraphQL", () => {
   test("sends bearer token and returns data", async () => {
@@ -13,6 +17,18 @@ describe("GraphQL", () => {
     expect(await g.query<{ viewer: { id: string } }>("query { viewer { id } }", {})).toEqual({
       viewer: { id: "v" },
     });
+  });
+  test("F6: the Authorization header is exactly what the token source gives — a personal API key goes bare, never as Bearer", async () => {
+    const seen: (string | null)[] = [];
+    const g = new GraphQL(
+      { getToken: async () => "k", authorization: async () => "k-bare", invalidate: async () => undefined },
+      (async (_u: string | URL | Request, init?: RequestInit) => {
+        seen.push(new Headers(init?.headers).get("authorization"));
+        return new Response(JSON.stringify({ data: { ok: true } }));
+      }) as unknown as typeof fetch,
+    );
+    await g.query("q", {});
+    expect(seen).toEqual(["k-bare"]);
   });
   test("retries 429 with backoff then succeeds", async () => {
     let n = 0;
@@ -35,6 +51,7 @@ describe("GraphQL", () => {
     const g = new GraphQL(
       {
         getToken: async () => "t",
+        authorization: async () => "Bearer t",
         invalidate: async () => {
           invalidated++;
         },

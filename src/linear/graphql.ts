@@ -1,5 +1,5 @@
-// src/linear/graphql.ts — raw GraphQL over fetch: bearer token, bounded requests, 429/5xx/timeout backoff,
-// one 401 refresh, Zod-validated envelope, errors with context.
+// src/linear/graphql.ts — raw GraphQL over fetch: the token source's Authorization header (F6), bounded requests, 429/5xx/timeout
+// backoff, one 401 refresh, Zod-validated envelope, errors with context.
 import { z } from "zod";
 import { WingmateError } from "../shared/errors";
 import type { Tokens } from "./auth";
@@ -72,7 +72,8 @@ export class GraphQL {
     const timeoutMs = this.opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     let refreshed = false;
     for (let attempt = 0; ; attempt++) {
-      const token = await this.tokens.getToken();
+      // F6: the token's source spells the header (`Bearer <token>` for the app, a personal API key bare)
+      const authorization = await this.tokens.authorization();
       let res: Response;
       try {
         res = await fetchWithTimeout(
@@ -80,7 +81,7 @@ export class GraphQL {
           GRAPHQL_URL,
           {
             method: "POST",
-            headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+            headers: { "Content-Type": "application/json", Authorization: authorization },
             body: JSON.stringify({ query, variables }),
           },
           timeoutMs,

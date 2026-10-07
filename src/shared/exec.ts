@@ -13,6 +13,21 @@ export interface RunOptions {
   stdin?: string;
 }
 
+/**
+ * F4 (§13.3 a): variables no child process inherits. The owner's personal Linear key (`WINGMATE_LINEAR_TOKEN`, Task 13) is read in
+ * process by the dispatcher; no command it runs needs it — an agent, a doctor probe, a repo setup command, a build — and a shell that
+ * exported it would otherwise hand it to every one of them.
+ */
+export const WITHHELD_ENV: readonly string[] = ["WINGMATE_LINEAR_TOKEN"];
+
+/** This process's environment without the withheld variables, with `extra` over it: what a child process starts with. */
+export function childEnv(extra: Record<string, string> = {}): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [k, v] of Object.entries(process.env))
+    if (v !== undefined && !WITHHELD_ENV.includes(k)) env[k] = v;
+  return { ...env, ...extra };
+}
+
 const MAX_CAPTURE = 8 * 1024 * 1024;
 /** After a timeout kill, how long to keep waiting for the pipes to reach EOF before cancelling the readers. */
 const GRACE_MS = 2000;
@@ -66,7 +81,7 @@ export async function run(argv: string[], opts: RunOptions = {}): Promise<RunRes
   // not just the direct child. Detached children do not receive the terminal's Ctrl-C; that is
   // acceptable because run() serves the dispatcher and the `issue` verbs, not interactive humans.
   const proc = Bun.spawn(argv, {
-    env: { ...process.env, ...(opts.env ?? {}) },
+    env: childEnv(opts.env),
     stdout: "pipe",
     stderr: "pipe",
     detached: true,

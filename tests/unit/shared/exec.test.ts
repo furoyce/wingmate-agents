@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { run } from "../../../src/shared/exec";
+import { TOKEN_ENV } from "../../../src/linear/envToken";
+import { WITHHELD_ENV, childEnv, run } from "../../../src/shared/exec";
 
 const hasPerl = Bun.which("perl") !== null;
 const hasProcTools = Bun.which("pgrep") !== null && Bun.which("pkill") !== null;
@@ -104,5 +105,30 @@ describe("exec.run", () => {
     const exact = await run(["sh", "-c", `head -c ${8 * 1024 * 1024 - 1} /dev/zero`]);
     expect(exact.truncated).toBe(false);
     expect(exact.stdout.length).toBe(8 * 1024 * 1024 - 1);
+  });
+
+  test("F4: the owner's personal Linear key, exported in the dispatcher's shell, never reaches a child process; the rest of the environment does", async () => {
+    const saved = { key: process.env[TOKEN_ENV], other: process.env.WM_EXEC_TEST };
+    const restore = (k: string, v: string | undefined) => {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    };
+    process.env[TOKEN_ENV] = "lin_api_exec_test";
+    process.env.WM_EXEC_TEST = "passed-on";
+    try {
+      expect(WITHHELD_ENV).toContain(TOKEN_ENV);
+      const r = await run(["sh", "-c", `printf '%s|%s' "\${${TOKEN_ENV}-absent}" "$WM_EXEC_TEST"`]);
+      expect(r.stdout).toBe("absent|passed-on");
+      // an explicit value still arrives as given (the agent environment passes it blank)
+      const blank = await run(["sh", "-c", `printf '[%s]' "\${${TOKEN_ENV}-absent}"`], {
+        env: { [TOKEN_ENV]: "" },
+      });
+      expect(blank.stdout).toBe("[]");
+      expect(childEnv()[TOKEN_ENV]).toBeUndefined();
+      expect(childEnv({ A: "b" })).toMatchObject({ A: "b", WM_EXEC_TEST: "passed-on" });
+    } finally {
+      restore(TOKEN_ENV, saved.key);
+      restore("WM_EXEC_TEST", saved.other);
+    }
   });
 });

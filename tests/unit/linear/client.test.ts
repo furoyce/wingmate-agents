@@ -5,7 +5,11 @@ import { LinearClient } from "../../../src/linear/client";
 import { GraphQL } from "../../../src/linear/graphql";
 
 const read = (p: string): unknown => JSON.parse(readFileSync(p, "utf8"));
-const tokens = { getToken: async () => "t", invalidate: async () => undefined };
+const tokens = {
+  getToken: async () => "t",
+  authorization: async () => "Bearer t",
+  invalidate: async () => undefined,
+};
 
 describe("LinearClient", () => {
   test("listCandidates pages until hasNextPage is false and maps DTOs", async () => {

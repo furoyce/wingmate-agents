@@ -127,4 +127,12 @@ describe("EnvToken", () => {
   test("a personal key has no expiry Wingmate can read: expiresAt() is null", async () => {
     expect(await new EnvToken(dir, { env: { WINGMATE_LINEAR_TOKEN: KEY }, uid }).expiresAt()).toBeNull();
   });
+
+  test("F6: authorization() is the bare key, from the variable or the file — Linear refuses a personal key sent as Bearer", async () => {
+    expect(await new EnvToken(dir, { env: { WINGMATE_LINEAR_TOKEN: KEY }, uid }).authorization()).toBe(KEY);
+    writeKey(`${KEY}\n`);
+    expect(await new EnvToken(dir, { env: {}, uid }).authorization()).toBe(KEY);
+    const e = await refusal(new EnvToken(join(dir, "absent-config"), { env: {}, uid }).authorization());
+    expect(e.code).toBe("linear_credentials_missing");
+  });
 });

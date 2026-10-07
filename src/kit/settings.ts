@@ -585,6 +585,8 @@ export const agentEnv = (kitDir: string, role: Role = "coordinator"): Record<str
   GITHUB_TOKEN: "",
   GH_ENTERPRISE_TOKEN: "",
   GITHUB_ENTERPRISE_TOKEN: "",
+  // F4 (§13.3 a): the owner's personal Linear key (Task 13), blank even when the login shell Orca types the launch line into exports it
+  WINGMATE_LINEAR_TOKEN: "",
   GH_CONFIG_DIR: join(kitDir, "gh-empty"),
   GIT_CONFIG_NOSYSTEM: "1",
   GIT_CONFIG_GLOBAL: join(kitDir, "gitconfig"),

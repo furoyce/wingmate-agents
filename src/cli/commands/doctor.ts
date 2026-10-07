@@ -17,7 +17,8 @@ export const ROTATION_STEPS = [
   "1. Every agent is stopped and every active issue blocked (`wingmate stop --all`, done above).",
   "2. Linear: Settings → API → OAuth applications → Wingmate → rotate the client secret (all app tokens die with it).",
   "3. `wingmate install --client-id <id> --client-secret -` reads the new secret from stdin (paste it, then Enter) and stores it (0600); the cached token was dropped above.",
-  "4. GitHub: `gh auth refresh` (or revoke the token at github.com/settings/tokens and `gh auth login`).",
+  // F5: `gh auth refresh` issues a new token and leaves the old one valid, and `gh auth logout` revokes nothing (gh's manual)
+  "4. GitHub: revoke GitHub CLI's authorization at github.com/settings/applications (Authorized OAuth Apps → GitHub CLI → Revoke), which kills every gh token; if gh was logged in with a personal access token, delete it at github.com/settings/tokens. Then `gh auth login`.",
   "5. Inspect the worktrees named in the blocked comments, then `wingmate doctor`; re-queue issues by moving them to Todo.",
 ];
 

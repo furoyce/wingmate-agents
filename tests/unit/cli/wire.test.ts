@@ -147,10 +147,10 @@ async function live<T>(token: string | undefined, fn: (calls: Call[]) => Promise
 // A built context opens its pino log file under the temp home asynchronously, so these homes are kept, as the fake world keeps its
 // own: removing one right after a build would race that open.
 describe("buildRealCtx credential rules (Task 13)", () => {
-  test("read-only without credentials.json: every Linear read carries the personal key, and the context still refuses every write", async () => {
+  test("read-only without credentials.json: every Linear read carries the personal key (bare, F6: never as Bearer), and the context still refuses every write", async () => {
     await live(KEY, async (calls) => {
       const ctx = await buildRealCtx({ readOnly: true });
-      expect(calls).toEqual([{ url: GRAPHQL, auth: `Bearer ${KEY}` }]);
+      expect(calls).toEqual([{ url: GRAPHQL, auth: KEY }]);
       expect(ctx.tokens).toBeInstanceOf(EnvToken);
       expect(ctx.linearDown).toBeNull();
       await expect(ctx.linear.createComment("issue-1", "hello", { id: "c1" })).rejects.toMatchObject({

@@ -68,6 +68,11 @@ export async function readCredentials(dirs: Dirs): Promise<Credentials> {
 
 export interface Tokens {
   getToken(): Promise<string>;
+  /**
+   * F6: the `Authorization` header value for the token. Linear takes an OAuth access token as `Bearer <token>` and a personal API key
+   * bare (`Authorization: <key>`, Linear's GraphQL docs), so the token's source says which.
+   */
+  authorization(): Promise<string>;
   invalidate(): Promise<void>;
 }
 
@@ -134,6 +139,11 @@ export class TokenStore implements Tokens {
     };
     await writeCredentials(this.dirs, { clientId: c.clientId, clientSecret: c.clientSecret, token });
     return token.accessToken;
+  }
+
+  /** F6: the app's OAuth access token, as Linear takes one: `Bearer <token>`. */
+  async authorization(): Promise<string> {
+    return `Bearer ${await this.getToken()}`;
   }
 
   async invalidate(): Promise<void> {

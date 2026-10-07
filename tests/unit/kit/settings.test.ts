@@ -17,6 +17,7 @@ import {
   siblingBranches,
   siblingDenyWrite,
 } from "../../../src/kit/settings";
+import { TOKEN_ENV } from "../../../src/linear/envToken";
 import { run } from "../../../src/shared/exec";
 
 const input = {
@@ -581,6 +582,7 @@ describe("settings", () => {
       GITHUB_TOKEN: "",
       GH_ENTERPRISE_TOKEN: "",
       GITHUB_ENTERPRISE_TOKEN: "",
+      WINGMATE_LINEAR_TOKEN: "",
       GH_CONFIG_DIR: "/home/.local/share/wingmate/kit/JRF-404/gh-empty",
       GIT_CONFIG_NOSYSTEM: "1",
       GIT_CONFIG_GLOBAL: "/home/.local/share/wingmate/kit/JRF-404/gitconfig",
@@ -599,6 +601,21 @@ describe("settings", () => {
     expect(launchCommand(["claude"], env)).toStartWith(
       "GH_TOKEN='' GITHUB_TOKEN='' GH_ENTERPRISE_TOKEN='' GITHUB_ENTERPRISE_TOKEN='' ",
     );
+  });
+  test("F4: the owner's personal Linear key is blank in every agent's environment and launch line, whatever the dispatcher's own environment holds", () => {
+    const saved = process.env[TOKEN_ENV];
+    process.env[TOKEN_ENV] = "lin_api_settings_test";
+    try {
+      for (const role of ["coordinator", "worker", "code-reviewer"] as const) {
+        const env = agentEnv(input.kitDir, role);
+        expect(env[TOKEN_ENV]).toBe("");
+        expect(launchCommand(["claude"], env)).toContain(` ${TOKEN_ENV}='' `);
+        expect(launchCommand(["claude"], env)).not.toContain("lin_api_settings_test");
+      }
+    } finally {
+      if (saved === undefined) delete process.env[TOKEN_ENV];
+      else process.env[TOKEN_ENV] = saved;
+    }
   });
   test("F1: roleArgv — Claude runs with its role's kit settings file; tier standard has no --model/--effort; Codex via codexArgv", () => {
     const base = { sessionId: "u1", worktreePath: "/wt" };
@@ -753,7 +770,7 @@ describe("F13: shell quoting survives the login shell", () => {
       expect(r.stdout.split("\0").slice(0, -1)).toEqual(words);
     }
   });
-  test("launchCommand: env values with = and ~ prefixes arrive verbatim; the owner's exported tokens arrive blank (F9)", async () => {
+  test("launchCommand: env values with = and ~ prefixes arrive verbatim; the owner's exported tokens arrive blank (F9), the personal Linear key too (F4)", async () => {
     const home = mkdtempSync(join(tmpdir(), "wm-home-"));
     const cmd = launchCommand(["/usr/bin/env"], {
       ...agentEnv("/k"),
@@ -764,7 +781,12 @@ describe("F13: shell quoting survives the login shell", () => {
     });
     for (const sh of shells) {
       const r = await run(shellArgv(sh, cmd), {
-        env: { HOME: home, GITHUB_TOKEN: "owner-token", GH_ENTERPRISE_TOKEN: "owner-token" },
+        env: {
+          HOME: home,
+          GITHUB_TOKEN: "owner-token",
+          GH_ENTERPRISE_TOKEN: "owner-token",
+          WINGMATE_LINEAR_TOKEN: "owner-key", // F4: as a login shell that exports it would hold it
+        },
       });
       expect(r.code).toBe(0);
       const env = new Map(
@@ -777,7 +799,13 @@ describe("F13: shell quoting survives the login shell", () => {
         "k=v:=w",
       ]);
       expect(env.get("WINGMATE_ROLE")).toBe("coordinator");
-      for (const k of ["GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"])
+      for (const k of [
+        "GH_TOKEN",
+        "GITHUB_TOKEN",
+        "GH_ENTERPRISE_TOKEN",
+        "GITHUB_ENTERPRISE_TOKEN",
+        "WINGMATE_LINEAR_TOKEN",
+      ])
         expect(env.get(k)).toBe("");
     }
   });

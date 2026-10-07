@@ -57,6 +57,13 @@ describe("TokenStore", () => {
   test("credentials file is 0600", async () => {
     expect(statSync(join(root, "credentials.json")).mode & 0o777).toBe(0o600);
   });
+  test("F6: authorization() is `Bearer <app token>`, the form Linear takes for an OAuth access token", async () => {
+    const calls: string[] = [];
+    const ts = new TokenStore(dirs, clock, fakeFetch(calls));
+    expect(await ts.authorization()).toBe("Bearer tok-1");
+    expect(await ts.authorization()).toBe("Bearer tok-1");
+    expect(calls.length).toBe(1);
+  });
 });
 
 describe("TokenStore — fix round 1", () => {

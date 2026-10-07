@@ -219,6 +219,15 @@ describe("wingmate install (CLI)", () => {
     const auth = d.out.find((l) => /^FAIL +linear_auth/.test(l)) ?? "";
     expect(auth).toContain("--client-secret -");
   });
+
+  test("F5 (§13.3 g): the rotation steps revoke the gh token — GitHub CLI's OAuth authorization, or a personal access token — then log in again; never `gh auth refresh`, which leaves the old token valid", () => {
+    const gh = ROTATION_STEPS.find((s) => s.startsWith("4. GitHub")) ?? "";
+    expect(gh).toContain("github.com/settings/applications");
+    expect(gh).toContain("GitHub CLI → Revoke");
+    expect(gh).toContain("github.com/settings/tokens");
+    expect(gh).toContain("`gh auth login`");
+    expect(ROTATION_STEPS.join("\n")).not.toContain("gh auth refresh");
+  });
 });
 
 describe("wingmate doctor (CLI)", () => {

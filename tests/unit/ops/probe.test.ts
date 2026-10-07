@@ -13,6 +13,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
+import { TOKEN_ENV } from "../../../src/linear/envToken";
 import {
   CLASSIFY,
   PROBE_ID,
@@ -29,7 +30,7 @@ import {
   withCanary,
 } from "../../../src/ops/probe";
 import type { RunOptions } from "../../../src/shared/exec";
-import { run } from "../../../src/shared/exec";
+import { childEnv, run } from "../../../src/shared/exec";
 import { SANDBOX_STATUS_OK, fakeExec, gitIn, ok } from "../../fakes/fakeExec";
 import { world } from "../../sim/harness";
 
@@ -470,6 +471,7 @@ describe("claudeProbe (a real wm-doctor worktree; the agent simulated)", () => {
     expect(s.opts.env).toMatchObject({
       GH_TOKEN: "",
       GITHUB_TOKEN: "",
+      WINGMATE_LINEAR_TOKEN: "", // F4: the bypassPermissions probe could print its environment
       GH_CONFIG_DIR: join(kit, "gh-empty"),
       GIT_CONFIG_GLOBAL: join(kit, "gitconfig"),
       WINGMATE_ROLE: "coordinator",
@@ -613,6 +615,30 @@ describe("codexProbe (R8)", () => {
       "project_doc_max_bytes=0",
     ]);
     expect(seen[0]).not.toContain("--ask-for-approval");
+  });
+  test("F4: codex exec starts without the owner's personal Linear key, even when the doctor's shell exports it (Codex reads are unrestricted)", async () => {
+    const w = await world();
+    const saved = process.env[TOKEN_ENV];
+    process.env[TOKEN_ENV] = "lin_api_probe_test";
+    try {
+      const envs: Record<string, string>[] = [];
+      const exec = fakeExec([
+        {
+          match: (a) => a[0] === "codex",
+          reply: (_argv, opts) => {
+            envs.push(childEnv(opts.env)); // what run() hands the process
+            return ok("PROBE 1 exit=6 sig=net\nPROBE 2 exit=1 sig=eperm\n");
+          },
+        },
+      ]);
+      await codexProbe(w.ctx, { exec: exec.exec });
+      expect(envs).toHaveLength(1);
+      expect(envs[0]?.[TOKEN_ENV]).toBeUndefined();
+      expect(JSON.stringify(envs)).not.toContain("lin_api_probe_test");
+    } finally {
+      if (saved === undefined) delete process.env[TOKEN_ENV];
+      else process.env[TOKEN_ENV] = saved;
+    }
   });
   test("network reachable, a non-network failure, missing or conflicting lines: not proven blocked", async () => {
     const w = await world();
