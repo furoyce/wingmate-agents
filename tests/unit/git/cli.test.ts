@@ -567,6 +567,24 @@ describe("GitCli", () => {
       expect(await Bun.file(join(d, "FETCH_HEAD")).exists()).toBe(false);
     expect(await g.fetchCommit(t, URL, tip)).toBe(false);
   });
+  test("F3: isAncestor is `merge-base --is-ancestor` on the pinned target — exit 0 true, 1 false, anything else null; a non-object name is refused before git runs", async () => {
+    const { dir, base, t } = await linkedTarget();
+    const head = (await git(["-C", dir, "rev-parse", "feature"])).trim();
+    const seen: string[][] = [];
+    const hermetic: Runner = (argv, opts) => {
+      seen.push(argv);
+      return run(argv, { ...opts, env: { ...opts?.env, ...HERMETIC } });
+    };
+    const g = new GitCli(hermetic);
+    expect(await g.isAncestor(t, base, head)).toBe(true);
+    expect(seen).toEqual([[...pinned(t), "merge-base", "--is-ancestor", base, head]]);
+    expect(await g.isAncestor(t, head, base)).toBe(false);
+    expect(await g.isAncestor(t, "1".repeat(40), head)).toBeNull(); // an object this repository does not have
+    seen.length = 0;
+    for (const bad of ["main", "--all", "c".repeat(39)])
+      await expect(g.isAncestor(t, bad, head)).rejects.toMatchObject({ code: "sha_invalid" });
+    expect(seen).toEqual([]);
+  });
 });
 
 describe("GhCli", () => {

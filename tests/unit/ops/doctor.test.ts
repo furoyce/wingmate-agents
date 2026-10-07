@@ -234,6 +234,7 @@ describe("doctor — every check", () => {
     expect(c?.detail).not.toContain("oauthAccount");
     expect(rep.ok).toBe(true); // non-blocking
     w.orca.rows.clear();
+    w.orca.mains.clear(); // the world's own main checkouts too (F1/F2)
     expect(check(await doctor(w.ctx, opts()), "claude_trust")?.detail).toContain(
       "main checkout not in the fleet",
     );

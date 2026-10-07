@@ -1,11 +1,11 @@
 // src/machine/claim.ts — the §5.4 sequence as one journal entry with ordered steps; provisionAndLaunch is also the replay path
 // (tick, unfinished claim steps) and the reroute launch.
-import { basename } from "node:path";
+import { basename, join } from "node:path";
 import { z } from "zod";
 import { type ProjectConfig, type RepoConfig, repoFor } from "../config/schema";
 import { qualifiedBase } from "../git/refname";
 import { githubUrl, remoteBranch } from "../git/remote";
-import { discoverGitLinks } from "../git/trust";
+import { discoverGitLinks, mainCheckoutTarget } from "../git/trust";
 import { pointerBrief } from "../kit/brief";
 import { installKit } from "../kit/install";
 import { staleIntents } from "../kit/intents";
@@ -13,7 +13,7 @@ import { agentEnv, coordinatorArgv, launchCommand } from "../kit/settings";
 import { MARK } from "../linear/markers";
 import { resolveTier } from "../policy/providers";
 import { capMinFor } from "../policy/timers";
-import type { GitPort, GitTarget, LinearIssue } from "../ports";
+import type { FleetSnapshot, GitPort, GitTarget, LinearIssue } from "../ports";
 import { WingmateError, errorCode, errorText } from "../shared/errors";
 import { run } from "../shared/exec";
 import { newUlid, newUuid } from "../shared/ids";
@@ -149,18 +149,42 @@ async function recordedGitDirs(
   return null;
 }
 
-/** C30's verdict on the claim's base: GitHub's commit, verified here; or why the local base ref is not that commit. */
+/**
+ * Why a claim's base did not verify (F3). `stale`: the local base ref is in the history of GitHub's commit — this clone has not fetched
+ * since GitHub's base moved. `diverged`: it is not, git cannot tell, it names no commit, or a ref named after GitHub's commit stands
+ * ready to replace it — a rewrite (an agent's sandbox may write packed-refs), kept as evidence and handled as tampering.
+ * `unverifiable`: GitHub has no such branch, or the repository's main checkout cannot be used.
+ */
+export type BaseVerdict = "stale" | "diverged" | "unverifiable";
+/** C30's verdict on the claim's base: GitHub's commit, verified here; or why it was not (F3). */
 export type BaseCheck =
   | { ok: true; sha: string; fetched: boolean }
-  | { ok: false; remote: string | null; local: string | null; fetched: boolean; detail: string };
+  | {
+      ok: false;
+      verdict: BaseVerdict;
+      remote: string | null;
+      local: string | null;
+      fetched: boolean;
+      detail: string;
+    };
+type BaseRefusal = Extract<BaseCheck, { ok: false }>;
 /** Twelve characters of a commit name: a blocked comment's detail never carries a full digest. */
 const short = (sha: string | null) => (sha ? sha.slice(0, 12) : "unresolved");
+const unverifiable = (detail: string): BaseRefusal => ({
+  ok: false,
+  verdict: "unverifiable",
+  remote: null,
+  local: null,
+  fetched: false,
+  detail,
+});
 
 /**
  * C30 (Ruling R29): the claim's base is the remote truth — `refs/heads/<base branch>` of the configured GitHub URL (`git ls-remote`),
  * that commit fetched from the same URL when this repository lacks it — and the local qualified base ref must resolve to exactly it.
  * An agent's sandbox may rewrite the shared git dir's `packed-refs`, so a local `origin/main` alone can name a commit an agent made;
- * a clone that has not fetched since GitHub's base moved mismatches too (fail closed). The detail becomes the blocked comment's.
+ * a clone that has not fetched since GitHub's base moved mismatches too (fail closed). F3: the two are told apart by ancestry before
+ * anyone fetches over the evidence. The detail becomes the blocked comment's.
  */
 export async function verifyBase(
   git: GitPort,
@@ -171,26 +195,98 @@ export async function verifyBase(
   const branch = remoteBranch(repo.base);
   const base = qualifiedBase(repo.base);
   const remote = await git.lsRemoteSha(t, url, branch);
-  if (remote === null) {
-    const detail = `GitHub has no branch ${branch} in ${repo.github}, so the base ${base} cannot be verified`;
-    return { ok: false, remote, local: null, fetched: false, detail };
-  }
+  if (remote === null)
+    return unverifiable(
+      `GitHub has no branch ${branch} in ${repo.github}, so the base ${base} cannot be verified`,
+    );
   const fetched = await git.fetchCommit(t, url, remote);
   const local = await git.revParse(t, base).catch((e: unknown) => {
     if (errorCode(e) === "git_dir_tampered") throw e; // moved since they were read: the claim step fails and replays
     return null;
   });
   if (local === remote) return { ok: true, sha: remote, fetched };
+  // F3: a clone that has not fetched since GitHub's base moved holds an ancestor of GitHub's commit; a rewritten ref need not
+  if (local !== null && (await git.isAncestor(t, local, remote)) === true) {
+    const detail = `${base} is at ${short(local)} here, behind GitHub's ${branch} at ${short(remote)}: this clone has not fetched since`;
+    return { ok: false, verdict: "stale", remote, local, fetched, detail };
+  }
   const detail =
     local === null
-      ? `${base} does not resolve here; GitHub's ${branch} is at ${short(remote)}`
-      : `${base} resolves to ${short(local)} here, but GitHub's ${branch} is at ${short(remote)}`;
-  return { ok: false, remote, local, fetched, detail };
+      ? `${base} does not resolve to a commit here; GitHub's ${branch} is at ${short(remote)}: the ref may have been rewritten`
+      : `${base} resolves to ${short(local)} here, which is not in the history of GitHub's ${branch} at ${short(remote)}: the ref may have been rewritten`;
+  return { ok: false, verdict: "diverged", remote, local, fetched, detail };
 }
 
 /**
- * C30: blocked as a failed setup is (§5.4 step 4) — attention and a ledger event naming both commits, then the Blocked label and comment,
- * the claim entry abandoned. Nothing ran in the worktree: no kit, no setup, no terminal.
+ * F1/F2: Orca resolves a `--base-branch` without a slash as `refs/heads/<name>` before the name itself (Orca 1.4.x `worktree create`),
+ * so a ref of that name — an agent's sandbox can add one through packed-refs — would stand in for the commit.
+ */
+const shadowRef = (sha: string) => `refs/heads/${sha}`;
+
+/**
+ * F1/F2 (C30): the base, verified before Orca creates the issue worktree — in the repository's main checkout (`worktree ps`,
+ * `isMainWorktree`), whose git dir is the common dir every worktree shares — so that Orca creates it from GitHub's commit. Orca's
+ * `git worktree add` runs as the owner, outside the sandbox, and a post-checkout hook under a relative `core.hooksPath` (husky's
+ * `.husky/_`) runs from the tree it checks out: it may only ever check out GitHub's commit, never a ref an agent can rewrite.
+ */
+async function baseBeforeCreate(
+  ctx: Ctx,
+  repo: RepoConfig,
+  fleet: FleetSnapshot,
+): Promise<{ check: BaseCheck; commonDir: string | null }> {
+  const main = fleet.worktrees.find((w) => w.repoId === repo.orcaRepo && w.isMainWorktree === true);
+  if (!main) {
+    const detail = `Orca lists no main checkout of ${repo.github}, so the base cannot be verified before a worktree is created`;
+    return { check: unverifiable(detail), commonDir: null };
+  }
+  let t: GitTarget;
+  try {
+    t = await mainCheckoutTarget(main.path);
+  } catch (e) {
+    const code = errorCode(e);
+    if (code !== "main_checkout_unusable" && code !== "git_dir_tampered") throw e;
+    const detail = (e instanceof Error ? e.message : String(e)).slice(0, 300);
+    if (code === "main_checkout_unusable") return { check: unverifiable(detail), commonDir: null };
+    return { check: { ...unverifiable(detail), verdict: "diverged" }, commonDir: join(main.path, ".git") };
+  }
+  const check = await verifyBase(ctx.git, t, repo);
+  if (!check.ok) return { check, commonDir: t.commonDir };
+  const shadow = await ctx.git.revParse(t, shadowRef(check.sha)).catch((e: unknown) => {
+    if (errorCode(e) === "git_dir_tampered") throw e;
+    return null;
+  });
+  if (shadow === null) return { check, commonDir: t.commonDir };
+  const branch = remoteBranch(repo.base);
+  const detail = `a ref refs/heads/${short(check.sha)}… named after GitHub's ${branch} commit exists here and resolves to ${short(shadow)}: Orca would create the worktree from it`;
+  return {
+    check: {
+      ok: false,
+      verdict: "diverged",
+      remote: check.sha,
+      local: shadow,
+      fetched: check.fetched,
+      detail,
+    },
+    commonDir: t.commonDir,
+  };
+}
+
+/** F3: what a base block asks of the owner — a stale clone fetches; a diverged ref is evidence, kept before anything fetches over it. */
+function baseNext(verdict: BaseVerdict, commonDir: string | null): string {
+  const requeue = "then move the issue back to Todo to re-queue it";
+  if (verdict === "stale")
+    return `this clone is behind GitHub: run \`git fetch origin\` in the repository's main checkout, ${requeue}`;
+  if (verdict === "diverged") {
+    const packed = `${commonDir ?? "<the repository's .git>"}/packed-refs`;
+    return `treat this as possible tampering and keep the evidence: copy ${packed} aside first, run \`wingmate stop --all\` and follow the rotation steps (docs/linear-app-setup.md); only then, in the repository's main checkout, run \`git fetch origin\` and delete any ref the detail names that git never makes (\`git update-ref -d <ref>\`); ${requeue}`;
+  }
+  return `fix the cause the detail names (repos.<name>.base against the repository's branches on GitHub, or Orca's main checkout of the repository), ${requeue}`;
+}
+
+/**
+ * C30: blocked as a failed setup is (§5.4 step 4) — attention (F3: `base_diverged` for a possible rewrite), a ledger event naming both
+ * commits and the verdict, then the Blocked label and comment, the claim entry abandoned. F1/F2: a claim that would create its worktree
+ * blocks before Orca creates anything; one that reuses a worktree, before anything runs there — no kit, no setup, no terminal either way.
  */
 async function baseMismatch(
   ctx: Ctx,
@@ -198,29 +294,32 @@ async function baseMismatch(
   issue: LinearIssue,
   entryId: string,
   repo: RepoConfig,
-  check: Extract<BaseCheck, { ok: false }>,
-  created: boolean,
+  check: BaseRefusal,
+  at: { commonDir: string | null; reused: boolean },
 ): Promise<void> {
   const base = qualifiedBase(repo.base);
   const branch = remoteBranch(repo.base);
-  const { remote, local } = check;
-  ctx.log.warn({ issue: r.identifier, base, remote, local }, "claim refused: the local base is not GitHub's");
-  addAttention(r, "base_mismatch");
-  const data = { base, branch, remote, local, created };
+  const { remote, local, verdict } = check;
+  ctx.log.warn(
+    { issue: r.identifier, base, remote, local, verdict },
+    "claim refused: the base is not verified as GitHub's",
+  );
+  addAttention(r, verdict === "diverged" ? "base_diverged" : "base_mismatch");
+  const data = { base, branch, remote, local, verdict, reused: at.reused };
   await ctx.ledger.append({ at: ctx.now(), issue: r.identifier, type: "base_mismatch", data });
-  const packed = `${r.worktree?.gitCommonDir ?? "the repository's .git"}/packed-refs`;
-  const next = `run \`git fetch origin\` in the repository's main checkout and check that ${base} then names GitHub's ${branch} (if it still does not, an agent may have rewritten ${packed}: inspect it)${created ? "; remove the worktree this claim created from the local base" : ""}; then move the issue back to Todo to re-queue it`;
-  await block(ctx, r, issue, "base_mismatch", check.detail, next);
+  await block(ctx, r, issue, "base_mismatch", check.detail, baseNext(verdict, at.commonDir));
   await ctx.journal.abandon(entryId, "base_mismatch");
 }
 
 /**
  * §5.4 step 3: the issue worktree — the one already linked to the issue when it exists (a previous cycle, or a crash after
- * `worktree create`), else a new one. C22: its git dirs come from its own gitfile and commondir, accepted only in a linked
- * worktree's layout and, for a reused worktree, only as an earlier cycle recorded them; the agent's sandbox grants and denies are
- * spelled from them, so a mismatch blocks the issue (`kit_tampered`) before any git runs there. C30: `baseSha` is GitHub's base commit,
- * and the local base ref (F7: its full ref) must name it, else `base_mismatch`; F7: a worktree this claim created must start at that
- * commit (Orca's `head`), else `kit_tampered` — both before kit, setup or launch. False when it blocked.
+ * `worktree create`), else a new one. F1/F2 (C30): a new one only once its base is verified in the repository's main checkout, and
+ * created from that commit, so Orca never checks out a ref an agent could rewrite. C22: its git dirs come from its own gitfile and
+ * commondir, accepted only in a linked worktree's layout and, for a reused worktree, only as an earlier cycle recorded them; the
+ * agent's sandbox grants and denies are spelled from them, so a mismatch blocks the issue (`kit_tampered`) before any git runs there.
+ * C30: a reused worktree's base is checked there (the local base ref — F7: its full ref — must name GitHub's commit), else
+ * `base_mismatch`; F7: a worktree this claim created must start at the verified commit (Orca's `head`), else `kit_tampered` — all
+ * before kit, setup or launch. False when it blocked.
  */
 async function provisionWorktree(
   ctx: Ctx,
@@ -230,18 +329,32 @@ async function provisionWorktree(
   entryId: string,
 ): Promise<boolean> {
   const name = worktreeName(r);
-  const existing = (await ctx.orca.worktreePs()).worktrees.find(
+  const fleet = await ctx.orca.worktreePs();
+  const existing = fleet.worktrees.find(
     (x) => x.linkedLinearIssue === r.identifier && x.displayName === name && x.repoId === repo.orcaRepo,
   );
-  const created = existing
-    ? { id: existing.worktreeId, path: existing.path }
-    : await ctx.orca.worktreeCreate({
-        repoId: repo.orcaRepo,
-        name,
-        baseBranch: repo.base,
-        linearIssue: r.identifier,
-        comment: "wingmate: claimed",
+  let verified: string | null = null;
+  let created: { id: string; path: string };
+  if (existing) created = { id: existing.worktreeId, path: existing.path };
+  else {
+    const pre = await baseBeforeCreate(ctx, repo, fleet);
+    if (!pre.check.ok) {
+      await baseMismatch(ctx, r, issue, entryId, repo, pre.check, {
+        commonDir: pre.commonDir,
+        reused: false,
       });
+      return false;
+    }
+    verified = pre.check.sha;
+    // F1/F2: from the verified commit itself, never the configured base's name (§5.4 step 3, amended)
+    created = await ctx.orca.worktreeCreate({
+      repoId: repo.orcaRepo,
+      name,
+      baseBranch: verified,
+      linearIssue: r.identifier,
+      comment: "wingmate: claimed",
+    });
+  }
   const shown = await ctx.orca.worktreeShow(created.id);
   let t: GitTarget;
   try {
@@ -256,8 +369,10 @@ async function provisionWorktree(
     return false;
   }
   // C30: GitHub's base commit (ls-remote of the configured URL), which the local base ref — F7: its full ref, never the short name git
-  // would disambiguate across the shared git dir's ref namespaces — must name
-  const check = await verifyBase(ctx.git, t, repo);
+  // would disambiguate across the shared git dir's ref namespaces — must name: checked here, through the git dirs an earlier cycle
+  // recorded (C22), for a reused worktree; a created one's base was verified before Orca made it (F1/F2)
+  const check: BaseCheck =
+    verified !== null ? { ok: true, sha: verified, fetched: false } : await verifyBase(ctx.git, t, repo);
   r.worktree = {
     id: created.id,
     path: shown.path,
@@ -267,16 +382,17 @@ async function provisionWorktree(
     gitdirName: basename(t.gitDir),
   };
   if (!check.ok) {
-    await baseMismatch(ctx, r, issue, entryId, repo, check, !existing);
+    await baseMismatch(ctx, r, issue, entryId, repo, check, { commonDir: t.commonDir, reused: true });
     return false;
   }
   if (!existing && shown.head !== check.sha) {
     // F7: a worktree this claim created must start at the verified base commit — its setup runs outside the sandbox on the premise
-    // that it holds nothing an agent made (C27). Short commit names only: the detail is the blocked comment's.
+    // that it holds nothing an agent made (C27). F1/F2: Orca was given that commit, so a ref named after it (refs/heads/<commit>,
+    // planted after the check) is what can stand in for it. Short commit names only: the detail is the blocked comment's.
     const base = qualifiedBase(repo.base);
-    const detail = `the new worktree starts at ${short(shown.head)}, not at ${base} (${short(check.sha)}): a ref in the repository's shared git dir may stand in for the base`;
+    const detail = `the new worktree starts at ${short(shown.head)}, not at the verified ${base} commit ${short(check.sha)} it was created from: a ref in the repository's shared git dir may stand in for that commit`;
     const next =
-      "inspect the refs under the repository's .git named like the base (tags, heads, refs/), remove this worktree, then move the issue back to Todo to re-queue it";
+      "treat it as possible tampering (runbook: tampering): inspect the refs under the repository's .git named after that commit or like the base (refs/heads/<commit>, tags, heads), remove this worktree, then move the issue back to Todo to re-queue it";
     await block(ctx, r, issue, "kit_tampered", detail, next);
     return false;
   }

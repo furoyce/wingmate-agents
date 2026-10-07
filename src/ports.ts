@@ -221,7 +221,8 @@ export interface BranchHistory {
 /**
  * C22 (§13.3 d): where a dispatcher git command runs — the issue worktree, its own gitdir (`<commonDir>/worktrees/<gitdirName>`) and
  * the repo's common dir, as the claim recorded them. The worktree's gitfile and its gitdir's `commondir` must still name these two,
- * and git runs with them pinned (`--git-dir`, `--work-tree`, `GIT_COMMON_DIR`).
+ * and git runs with them pinned (`--git-dir`, `--work-tree`, `GIT_COMMON_DIR`). F1/F2: or the repository's main checkout, whose
+ * `.git` directory is its git dir and its common dir both (`mainCheckoutTarget`).
  */
 export interface GitTarget {
   readonly path: string;
@@ -252,6 +253,11 @@ export interface GitPort {
    * (the configured GitHub URL): no ref moves, no FETCH_HEAD, no tags, no submodules, no maintenance. True when it fetched.
    */
   fetchCommit(t: GitTarget, url: string, sha: string): Promise<boolean>;
+  /**
+   * F3: whether commit `ancestor` is in the history of commit `descendant` (`git merge-base --is-ancestor`); null when git cannot tell
+   * (an object it does not have). A clone that has not fetched holds an ancestor of GitHub's base; a rewritten ref need not.
+   */
+  isAncestor(t: GitTarget, ancestor: string, descendant: string): Promise<boolean | null>;
 }
 /**
  * C29: `repo` is the configured `repos.<name>.github`. gh is told the repository (`--repo`) and runs outside every worktree, so it never

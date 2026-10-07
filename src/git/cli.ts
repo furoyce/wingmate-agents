@@ -239,4 +239,14 @@ export class GitCli implements GitPort {
       throw new WingmateError("git_failed", "git fetch: the commit is still missing after the fetch");
     return true;
   }
+  /**
+   * F3: `git merge-base --is-ancestor <ancestor> <descendant>` — exit 0 is true, 1 is false, anything else (an object this repository
+   * does not have) is null. Both are full object names, so neither can read as an option.
+   */
+  async isAncestor(t: GitTarget, ancestor: string, descendant: string): Promise<boolean | null> {
+    if (!OBJECT_NAME.test(ancestor) || !OBJECT_NAME.test(descendant))
+      throw new WingmateError("sha_invalid", "git merge-base: a commit to compare is not a full object name");
+    const r = await this.run(t, ["merge-base", "--is-ancestor", ancestor, descendant], 60_000);
+    return r.code === 0 ? true : r.code === 1 ? false : null;
+  }
 }

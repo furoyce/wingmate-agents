@@ -14,7 +14,7 @@ export const TRANSITIONS: Record<Stage, Partial<Record<Stage, string[]>>> = {
     blocked: [
       "launch_failed",
       "setup_failed",
-      "base_mismatch", // C30 (Ruling R29): the local base ref is not GitHub's base commit
+      "base_mismatch", // C30 (Ruling R29): the base did not verify as GitHub's commit (F1/F2: before any create; F3: stale, diverged, unverifiable)
       "launch_not_ready",
       "owner_stop",
       "kit_tampered",

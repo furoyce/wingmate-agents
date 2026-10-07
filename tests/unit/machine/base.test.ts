@@ -6,6 +6,7 @@ import { mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { GitCli } from "../../../src/git/cli";
+import { mainCheckoutTarget } from "../../../src/git/trust";
 import { verifyBase } from "../../../src/machine/claim";
 import type { GitTarget } from "../../../src/ports";
 import { run } from "../../../src/shared/exec";
@@ -93,33 +94,41 @@ describe("C30: verifyBase — the claim's base is GitHub's (Ruling R29)", () => 
     expect(c.fetches()).toEqual([]);
   });
 
-  test("packed-refs rewritten to an agent's commit (no loose ref to shadow it) is base_mismatch, naming both commits by 12 characters only", async () => {
+  test("packed-refs rewritten to an agent's commit (no loose ref to shadow it) is base_mismatch, verdict diverged (F3: not in GitHub's history), naming both commits by 12 characters only", async () => {
     const { r, t, plant } = await repos();
     await git(["-C", t.path, ...ID, "commit", "-q", "--allow-empty", "-m", "agent"]);
     const agent = await git(["-C", t.path, "rev-parse", "HEAD"]);
     plant(agent);
     expect(await git(["-C", t.path, "rev-parse", "refs/remotes/origin/main"])).toBe(agent); // the poisoned base git now reads
-    const v = await verifyBase(cli(() => r).git, t, REPO);
-    expect(v).toMatchObject({ ok: false, remote: r, local: agent, fetched: false });
+    const c = cli(() => r);
+    const v = await verifyBase(c.git, t, REPO);
+    expect(v).toMatchObject({ ok: false, verdict: "diverged", remote: r, local: agent, fetched: false });
+    expect(c.seen.filter((a) => a.includes("merge-base"))).toEqual([
+      [...pinned(t), "merge-base", "--is-ancestor", agent, r],
+    ]);
     const detail = v.ok ? "" : v.detail;
     expect(detail).toContain("refs/remotes/origin/main");
+    expect(detail).toContain("not in the history");
     expect(detail).toContain(agent.slice(0, 12));
     expect(detail).toContain(r.slice(0, 12));
     expect(detail).not.toContain(agent);
     expect(detail).not.toContain(r);
   });
 
-  test("GitHub ahead of this clone: its commit is fetched from the configured URL first (no ref moves); origin/main is still behind, so the base mismatches", async () => {
+  test("GitHub ahead of this clone: its commit is fetched from the configured URL first (no ref moves); origin/main is still behind, so the base mismatches — verdict stale (F3: an ancestor of GitHub's commit)", async () => {
     const { main, r, t, ahead } = await repos();
     const tip = await ahead();
     const refs = await git(["-C", main, "for-each-ref"]);
     const c = cli(() => tip);
-    expect(await verifyBase(c.git, t, REPO)).toMatchObject({
+    const v = await verifyBase(c.git, t, REPO);
+    expect(v).toMatchObject({
       ok: false,
+      verdict: "stale",
       remote: tip,
       local: r,
       fetched: true,
     });
+    expect(v.ok ? "" : v.detail).toContain("behind GitHub's main");
     expect(c.fetches()).toEqual([
       [
         ...pinned(t),
@@ -149,12 +158,50 @@ describe("C30: verifyBase — the claim's base is GitHub's (Ruling R29)", () => 
     const { main, r, t } = await repos();
     const none = cli(() => "");
     const gone = await verifyBase(none.git, t, REPO);
-    expect(gone).toMatchObject({ ok: false, remote: null, fetched: false });
+    expect(gone).toMatchObject({ ok: false, verdict: "unverifiable", remote: null, fetched: false });
     expect(gone.ok ? "" : gone.detail).toContain("furoyce/bouncr.lol");
     expect(none.fetches()).toEqual([]);
     await git(["-C", main, "update-ref", "-d", "refs/remotes/origin/main"]);
     const missing = await verifyBase(cli(() => r).git, t, REPO);
-    expect(missing).toMatchObject({ ok: false, remote: r, local: null });
+    // F3: a ref that names no commit cannot be shown to be behind GitHub: kept as evidence, like a rewrite
+    expect(missing).toMatchObject({ ok: false, verdict: "diverged", remote: r, local: null });
     expect(missing.ok ? "" : missing.detail).toContain("does not resolve");
+  });
+
+  test("F3: packed-refs pointing origin/main at a commit this repository does not have is diverged, never stale", async () => {
+    const { r, t, plant } = await repos();
+    plant("2".repeat(40));
+    const v = await verifyBase(cli(() => r).git, t, REPO);
+    expect(v).toMatchObject({ ok: false, verdict: "diverged", remote: r, local: null });
+  });
+});
+
+describe("F1/F2: the base checked in the repository's main checkout, before any issue worktree exists", () => {
+  test("the main checkout's .git is pinned as the git dir and the common dir: ls-remote, then the local ref, read there", async () => {
+    const { main, r } = await repos();
+    const m = await mainCheckoutTarget(main);
+    expect(m).toEqual({ path: main, gitDir: join(main, ".git"), commonDir: join(main, ".git") });
+    const c = cli(() => r);
+    expect(await verifyBase(c.git, m, REPO)).toEqual({ ok: true, sha: r, fetched: false });
+    expect(c.seen.filter((a) => a.includes("ls-remote"))).toEqual([
+      [...pinned(m), "ls-remote", "--heads", URL, "main"],
+    ]);
+  });
+
+  test("a stale main checkout fetches GitHub's commit into the shared object store (no ref moves) and is stale; a poisoned one is diverged", async () => {
+    const { main, r, t, ahead, plant } = await repos();
+    const m = await mainCheckoutTarget(main);
+    const tip = await ahead();
+    expect(await verifyBase(cli(() => tip).git, m, REPO)).toMatchObject({
+      ok: false,
+      verdict: "stale",
+      local: r,
+      remote: tip,
+      fetched: true,
+    });
+    expect(await git(["-C", t.path, "cat-file", "-t", tip])).toBe("commit"); // every worktree of the repo has it now
+    await git(["-C", t.path, ...ID, "commit", "-q", "--allow-empty", "-m", "agent"]);
+    plant(await git(["-C", t.path, "rev-parse", "HEAD"]));
+    expect(await verifyBase(cli(() => tip).git, m, REPO)).toMatchObject({ ok: false, verdict: "diverged" });
   });
 });

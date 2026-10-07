@@ -30,12 +30,24 @@ export class FakeGit implements GitPort {
   missing = new Set<string>();
   /** What `fetchCommit` fetched, and from where. */
   fetched: { url: string; sha: string }[] = [];
+  /** `${ancestor}..${descendant}` pairs where the first is in the second's history (F3: a stale clone); no other pair is. */
+  ancestors = new Set<string>();
+  /** Refs a test planted, each resolving to its own commit (F1/F2: `refs/heads/<GitHub's commit>`, which Orca takes for the base). */
+  planted = new Map<string, string>();
   /** Real git dirs of worktrees the fake Orca created on disk (makeWorld wires them); other paths get made-up ones. */
   commonDirs = new Map<string, string>();
   gitDirs = new Map<string, string>();
 
   async revParse(at: GitAt, ref: string): Promise<string> {
     await pathOf(at);
+    const planted = this.planted.get(ref);
+    if (planted !== undefined) return planted;
+    // a branch named after a remote tip's commit exists only when a test plants it: git never makes one
+    if (
+      ref.startsWith("refs/heads/") &&
+      [...this.remoteSha.values()].includes(ref.slice("refs/heads/".length))
+    )
+      throw new Error(`git rev-parse failed (128): fatal: ${ref}: Needed a single revision`);
     const sha = ref === "HEAD" ? "headsha" : "basesha";
     if (this.missing.has(sha))
       throw new Error(`git rev-parse failed (128): fatal: ${ref}: bad object ${sha}`);
@@ -77,6 +89,10 @@ export class FakeGit implements GitPort {
     if (!this.missing.delete(sha)) return false;
     this.fetched.push({ url, sha });
     return true;
+  }
+  async isAncestor(at: GitTarget, ancestor: string, descendant: string) {
+    await pathOf(at);
+    return this.ancestors.has(`${ancestor}..${descendant}`);
   }
 }
 

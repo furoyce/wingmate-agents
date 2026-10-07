@@ -1,7 +1,7 @@
 // tests/fakes/fakeOrca.ts — in-memory OrcaPort: fleet rows, terminals, workers and receipts are programmable. With `root` set, a
 // worktree is a real linked git worktree on disk (the kit, the outbox and the integrity check need real files and a real git).
-import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync } from "node:fs";
+import { basename, join } from "node:path";
 import { OrcaError } from "../../src/orca/cli";
 import type {
   AutomationRow,
@@ -82,7 +82,37 @@ export class FakeOrca implements OrcaPort {
    * there; F7 tests set another commit (a ref an agent made shadowing the base name).
    */
   startCommit = "basesha";
+  /**
+   * Repos whose main checkout `worktree ps` lists (`isMainWorktree`; F1/F2: a claim verifies its base there before it creates a
+   * worktree). With `root` it is `<root>/repos/<repoId>`, whose `.git` directory is made when first listed and becomes a real
+   * repository with the first worktree of the repo. A main row a test puts in `rows` for the repo is listed instead.
+   */
+  mains = new Set<string>();
   private seq = 0;
+
+  private mainRows(): FleetRow[] {
+    const listed = new Set([...this.rows.values()].filter((r) => r.isMainWorktree).map((r) => r.repoId));
+    return [...this.mains]
+      .filter((repoId) => !listed.has(repoId))
+      .map((repoId) => {
+        const path = this.root ? join(this.root, "repos", repoId) : `/repos/${repoId}`;
+        if (this.root) mkdirSync(join(path, ".git"), { recursive: true });
+        return {
+          worktreeId: `${repoId}::${path}`,
+          repoId,
+          path,
+          branch: "main",
+          displayName: basename(path),
+          linkedLinearIssue: null,
+          status: "inactive",
+          liveTerminalCount: 0,
+          lastOutputAt: null,
+          childWorktreeIds: [],
+          agents: [],
+          isMainWorktree: true,
+        };
+      });
+  }
 
   private tookEffect(verb: string) {
     if (this.failAfter !== verb) return;
@@ -102,7 +132,7 @@ export class FakeOrca implements OrcaPort {
   /** A real linked worktree of the repo's main checkout (created on first use, one empty commit on `main`). */
   private async realWorktree(root: string, repoId: string, name: string, branch: string): Promise<string> {
     const main = join(root, "repos", repoId);
-    if (!existsSync(join(main, ".git"))) {
+    if (!existsSync(join(main, ".git", "HEAD"))) {
       await git(["init", "-q", "-b", "main", main]);
       await git(["-C", main, ...ID, "commit", "-q", "--allow-empty", "-m", "init"]);
     }
@@ -116,7 +146,7 @@ export class FakeOrca implements OrcaPort {
   async worktreePs(): Promise<FleetSnapshot> {
     await this.rec("worktreePs", null);
     return {
-      worktrees: [...this.rows.values()].map((r) => structuredClone(r)),
+      worktrees: [...[...this.rows.values()].map((r) => structuredClone(r)), ...this.mainRows()],
       truncated: false,
       omittedHostIds: this.partial ? ["ssh-1"] : [],
     };

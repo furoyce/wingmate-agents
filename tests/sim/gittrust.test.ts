@@ -190,7 +190,7 @@ describe("C30: the claim's base is GitHub's — the local origin/main must name 
     expect(w.git.fetched).toEqual([]); // the commit is here: nothing to fetch
   });
 
-  test("a local origin/main naming another commit than GitHub's main blocks base_mismatch before the kit, the setup or a terminal: attention, ledger, journal abandoned, short commit names only", async () => {
+  test("F1/F2: a local origin/main naming another commit than GitHub's main blocks base_mismatch before Orca creates any worktree: attention, ledger, journal abandoned, short commit names only", async () => {
     const w = await world();
     const runs = tracedSetup(w);
     w.git.remoteSha.set("main", GITHUB_MAIN);
@@ -199,15 +199,18 @@ describe("C30: the claim's base is GitHub's — the local origin/main must name 
     const r = await rec(w);
     expect(r.stage).toBe("blocked");
     expect(r.history.at(-1)?.cause).toBe("base_mismatch");
-    expect(r.attention).toContain("base_mismatch");
-    expect(r.worktree?.id).toBeTruthy(); // recorded, so the blocked comment names it and stop/release cover it
+    // nothing was checked out from the local base: Orca was never asked to create the worktree
+    expect(w.orca.calls.filter((c) => c.verb === "worktreeCreate")).toEqual([]);
+    expect(r.worktree).toBeNull();
+    expect(w.git.remoteReads[0]).toEqual({ url: URL, branch: "main" }); // read in the main checkout, before any create
     expect((await ledgerOf(w, "base_mismatch")).map((e) => e.data)).toEqual([
       {
         base: "refs/remotes/origin/main",
         branch: "main",
         remote: GITHUB_MAIN,
         local: "basesha",
-        created: true,
+        verdict: "diverged",
+        reused: false,
       },
     ]);
     expect(await ledgerOf(w, "kit_installed")).toEqual([]);
@@ -218,6 +221,103 @@ describe("C30: the claim's base is GitHub's — the local origin/main must name 
     expect(blockedComment(w)).toContain(GITHUB_MAIN.slice(0, 12));
     expect(blockedComment(w)).not.toContain(GITHUB_MAIN);
     expect((await w.ctx.journal.all()).find((e) => e.kind === "claim")?.state).toBe("abandoned");
+  });
+
+  test("F1/F2: a verified base is read in the main checkout first, then Orca creates the worktree from GitHub's commit itself — never from the configured ref name", async () => {
+    const w = await world();
+    const order: string[] = [];
+    const lsRemote = w.git.lsRemoteSha.bind(w.git);
+    w.git.lsRemoteSha = async (at, url, branch) => {
+      order.push(`ls-remote ${at.path}`);
+      return lsRemote(at, url, branch);
+    };
+    w.orca.onCall = (verb) => {
+      if (verb === "worktreeCreate") order.push("worktreeCreate");
+    };
+    const r = await claimed(w);
+    const api = w.cfg.projects.bouncr?.repos.api?.orcaRepo ?? "";
+    expect(order).toEqual([`ls-remote ${join(w.root, "orca", "repos", api)}`, "worktreeCreate"]);
+    const create = w.orca.calls.find((c) => c.verb === "worktreeCreate")?.args as { baseBranch: string };
+    expect(create.baseBranch).toBe("basesha"); // GitHub's main (FakeGit's remote), not origin/main
+    expect(wtOf(r).baseSha).toBe("basesha");
+    expect(r.stage).toBe("working");
+  });
+
+  test("F1/F2: a ref named refs/heads/<GitHub's commit> — which Orca would take for the base — blocks diverged before any create", async () => {
+    const w = await world();
+    w.git.planted.set("refs/heads/basesha", "agentsha");
+    labeledByOwner(w, todo("i1", "JRF-501"));
+    expect((await runTick(w)).claims).toEqual(["JRF-501"]);
+    const r = await rec(w);
+    expect(r.history.at(-1)?.cause).toBe("base_mismatch");
+    expect(r.attention).toContain("base_diverged");
+    expect(w.orca.calls.filter((c) => c.verb === "worktreeCreate")).toEqual([]);
+    expect((await ledgerOf(w, "base_mismatch")).map((e) => e.data.verdict)).toEqual(["diverged"]);
+    expect(blockedComment(w)).toContain("refs/heads/basesha");
+    expect(terminalCreates(w)).toBe(0);
+  });
+
+  test("F1/F2: without the repository's main checkout in Orca's fleet the base cannot be verified first: blocked, nothing created", async () => {
+    const w = await world();
+    w.orca.mains.clear();
+    labeledByOwner(w, todo("i1", "JRF-501"));
+    expect((await runTick(w)).claims).toEqual(["JRF-501"]);
+    const r = await rec(w);
+    expect(r.history.at(-1)?.cause).toBe("base_mismatch");
+    expect(r.attention).toContain("base_mismatch");
+    expect(w.orca.calls.filter((c) => c.verb === "worktreeCreate")).toEqual([]);
+    expect(w.git.remoteReads).toEqual([]);
+    expect((await ledgerOf(w, "base_mismatch")).map((e) => e.data.verdict)).toEqual(["unverifiable"]);
+    expect(blockedComment(w)).toContain("main checkout");
+  });
+
+  test("F1/F2: a main checkout whose .git holds a commondir file (git would read its refs elsewhere) blocks diverged before any git runs or anything is created", async () => {
+    const w = await world();
+    const api = w.cfg.projects.bouncr?.repos.api?.orcaRepo ?? "";
+    const gitDir = join(w.root, "orca", "repos", api, ".git");
+    mkdirSync(gitDir, { recursive: true });
+    writeFileSync(join(gitDir, "commondir"), `${forged("x")}\n`);
+    labeledByOwner(w, todo("i1", "JRF-501"));
+    expect((await runTick(w)).claims).toEqual(["JRF-501"]);
+    const r = await rec(w);
+    expect(r.history.at(-1)?.cause).toBe("base_mismatch");
+    expect(r.attention).toContain("base_diverged");
+    expect(w.git.remoteReads).toEqual([]);
+    expect(w.orca.calls.filter((c) => c.verb === "worktreeCreate")).toEqual([]);
+    expect(blockedComment(w)).toContain("commondir");
+  });
+
+  test("F3: a clone behind GitHub (its origin/main an ancestor of GitHub's main) is stale — attention base_mismatch, fetch and re-queue; a diverged ref is kept as evidence and handled as tampering", async () => {
+    const stale = await world();
+    stale.git.remoteSha.set("main", GITHUB_MAIN);
+    stale.git.ancestors.add(`basesha..${GITHUB_MAIN}`);
+    labeledByOwner(stale, todo("i1", "JRF-501"));
+    await runTick(stale);
+    const s = await rec(stale);
+    expect(s.attention).toContain("base_mismatch");
+    expect(s.attention).not.toContain("base_diverged");
+    expect((await ledgerOf(stale, "base_mismatch")).map((e) => e.data.verdict)).toEqual(["stale"]);
+    expect(blockedComment(stale)).toContain("behind GitHub");
+    expect(blockedComment(stale)).toContain("git fetch origin");
+    expect(blockedComment(stale)).not.toContain("stop --all");
+
+    const diverged = await world();
+    diverged.git.remoteSha.set("main", GITHUB_MAIN); // basesha is not an ancestor: a rewritten ref
+    labeledByOwner(diverged, todo("i1", "JRF-501"));
+    await runTick(diverged);
+    const d = await rec(diverged);
+    expect(d.attention).toContain("base_diverged");
+    expect(d.attention).not.toContain("base_mismatch");
+    const comment = blockedComment(diverged);
+    expect(comment).toContain("not in the history of GitHub's main");
+    const api = diverged.cfg.projects.bouncr?.repos.api?.orcaRepo ?? "";
+    // the evidence first: packed-refs copied aside before the stop, the rotation and only then a fetch
+    const copy = comment.indexOf(
+      `copy ${join(diverged.root, "orca", "repos", api, ".git")}/packed-refs aside`,
+    );
+    expect(copy).toBeGreaterThan(-1);
+    expect(comment.indexOf("wingmate stop --all")).toBeGreaterThan(copy);
+    expect(comment.indexOf("git fetch origin")).toBeGreaterThan(comment.indexOf("wingmate stop --all"));
   });
 
   test("a commit this repository lacks is fetched from the configured URL before the comparison; the claim then goes on", async () => {
@@ -234,6 +334,7 @@ describe("C30: the claim's base is GitHub's — the local origin/main must name 
     const r = await claimed(w);
     await released(w, r);
     w.git.remoteSha.set("main", GITHUB_MAIN);
+    w.git.ancestors.add(`basesha..${GITHUB_MAIN}`); // GitHub moved on: a stale clone
     advance(w, 5);
     expect((await runTick(w)).claims).toEqual(["JRF-501"]);
     const again = await rec(w);
@@ -241,7 +342,11 @@ describe("C30: the claim's base is GitHub's — the local origin/main must name 
     expect(again.history.at(-1)?.cause).toBe("base_mismatch");
     expect(again.worktree?.id).toBe(wtOf(r).id);
     expect(terminalCreates(w)).toBe(1); // cycle 1's only
-    expect((await ledgerOf(w, "base_mismatch")).at(-1)?.data.created).toBe(false);
+    expect(w.orca.calls.filter((c) => c.verb === "worktreeCreate")).toHaveLength(1); // cycle 1's only
+    expect((await ledgerOf(w, "base_mismatch")).at(-1)?.data).toMatchObject({
+      verdict: "stale",
+      reused: true,
+    });
   });
 
   test("a base branch GitHub does not have blocks base_mismatch: the base cannot be verified", async () => {

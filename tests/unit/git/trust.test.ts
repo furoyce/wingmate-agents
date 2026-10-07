@@ -13,7 +13,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { discoverGitLinks, gitTarget, verifyGitLinks } from "../../../src/git/trust";
+import { discoverGitLinks, gitTarget, mainCheckoutTarget, verifyGitLinks } from "../../../src/git/trust";
 import { run } from "../../../src/shared/exec";
 
 const HERMETIC = { GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
@@ -153,5 +153,53 @@ describe("C22: the worktree's git links (§13.3 d)", () => {
     // lexically every path still reads <common>/worktrees/wm-jrf-1 and ../.., but git lands in the copy and in its parent
     await expect(verifyGitLinks(t)).rejects.toMatchObject(tampered);
     await expect(discoverGitLinks(l.wt, null)).rejects.toMatchObject(tampered);
+  });
+});
+
+describe("F1/F2: the main checkout as a git target (the claim's base check before any worktree exists)", () => {
+  const pinnedRefs = (main: string) =>
+    run(["git", "-C", main, `--git-dir=${join(main, ".git")}`, `--work-tree=${main}`, "for-each-ref"], {
+      env: { ...HERMETIC, GIT_COMMON_DIR: join(main, ".git") },
+    });
+
+  test("a plain clone's .git directory is its git dir and its common dir, and verifies before every command", async () => {
+    const l = await linked();
+    const t = await mainCheckoutTarget(l.main);
+    expect(t).toEqual({ path: l.main, gitDir: l.common, commonDir: l.common });
+    await verifyGitLinks(t);
+  });
+
+  test("a .git that is a symlink, a gitfile or missing is main_checkout_unusable: no record could vouch for where it leads", async () => {
+    const l = await linked();
+    const unusable = { code: "main_checkout_unusable" };
+    await expect(mainCheckoutTarget(l.wt)).rejects.toMatchObject(unusable); // a linked worktree: its .git is a gitfile
+    await expect(mainCheckoutTarget(join(l.root, "nowhere"))).rejects.toMatchObject(unusable);
+    const viaLink = join(l.root, "via-link");
+    mkdirSync(viaLink);
+    symlinkSync(l.common, join(viaLink, ".git"));
+    await expect(mainCheckoutTarget(viaLink)).rejects.toMatchObject(unusable);
+  });
+
+  test("git reads refs through a commondir planted in a main checkout's .git even with GIT_COMMON_DIR pinned, so one there is git_dir_tampered", async () => {
+    const l = await linked();
+    const t = await mainCheckoutTarget(l.main);
+    expect((await pinnedRefs(l.main)).stdout).toContain("refs/heads/main");
+    const fake = join(l.root, "fake.git");
+    await git(["init", "-q", "--bare", fake]);
+    writeFileSync(join(l.common, "commondir"), `${fake}\n`);
+    expect((await pinnedRefs(l.main)).stdout).not.toContain("refs/heads/main"); // the refs come from the fake now
+    await expect(mainCheckoutTarget(l.main)).rejects.toMatchObject(tampered);
+    await expect(verifyGitLinks(t)).rejects.toMatchObject(tampered);
+  });
+
+  test("a target whose git dir is not <path>/.git, or whose .git was replaced after it was taken, is refused before git runs", async () => {
+    const l = await linked();
+    await expect(verifyGitLinks({ path: l.wt, gitDir: l.common, commonDir: l.common })).rejects.toMatchObject(
+      tampered,
+    );
+    const t = await mainCheckoutTarget(l.main);
+    renameSync(l.common, join(l.root, "moved.git"));
+    symlinkSync(join(l.root, "moved.git"), l.common);
+    await expect(verifyGitLinks(t)).rejects.toMatchObject(tampered);
   });
 });
