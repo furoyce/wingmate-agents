@@ -1,0 +1,669 @@
+{
+  "id": "0b331184-f352-4ab6-a000-ec0415106d0e",
+  "ok": true,
+  "result": {
+    "issue": {
+      "id": "8954bc5a-d232-4715-8dd8-7ae6d40e46a7",
+      "identifier": "JRF-402",
+      "title": "feature: bouncr game add leaderboard",
+      "url": "https://linear.app/jrf/issue/JRF-402/feature-bouncr-game-add-leaderboard",
+      "description": "add leaderboard for the all players in the world to complete, it will display th…",
+      "state": {
+        "id": "9961332a-2edb-4274-b4df-8ac8df40a623",
+        "name": "In Review",
+        "type": "started",
+        "color": "#0f783c"
+      },
+      "team": {
+        "id": "8ce71278-319b-4c81-997e-796ef354aea7",
+        "name": "JRF",
+        "key": "JRF",
+        "color": "#789c00"
+      },
+      "project": {
+        "id": "0ca67822-6416-447b-b7b2-08ab2a7346dd",
+        "name": "Bouncr",
+        "color": "#f2994a"
+      },
+      "cycle": {
+        "id": "56eadbb1-0aa5-434e-8193-26a727698bcc",
+        "name": null
+      },
+      "assignee": {
+        "id": "71aef180-1742-4a76-8d49-51f14e8ada1e",
+        "displayName": "royce.code",
+        "avatarUrl": "https://public.linear.app/dfcf61c2-72c0-4d39-9485-96576cabb555/7eef5c2d-203b-4bab-a484-fd8f238b2d45/3b02c7dd-4f76-45e1-b28c-16022ca3308d"
+      },
+      "labels": [
+        {
+          "id": "a8ec6a45-f6ed-47cc-aaee-e3dccdde7486",
+          "name": "agent-ready",
+          "color": "#06B6D4"
+        },
+        {
+          "id": "d97b103c-6a00-438e-b90a-38cfc0e109c0",
+          "name": "Blocked",
+          "color": "#EF4444"
+        }
+      ],
+      "priority": 2,
+      "priorityLabel": "high",
+      "estimate": null,
+      "dueDate": null,
+      "branchName": "roycecode/jrf-402-feature-bouncr-game-add-leaderboard",
+      "createdAt": "2026-10-01T12:18:11.866Z",
+      "updatedAt": "2026-10-02T21:00:29.555Z"
+    },
+    "meta": {
+      "requested": {
+        "id": "JRF-402",
+        "current": false,
+        "include": {
+          "comments": true,
+          "children": true,
+          "attachments": true,
+          "relations": true,
+          "activity": true
+        },
+        "depth": 2
+      },
+      "resolved": {
+        "id": "8954bc5a-d232-4715-8dd8-7ae6d40e46a7",
+        "identifier": "JRF-402",
+        "workspaceId": "dfcf61c2-72c0-4d39-9485-96576cabb555",
+        "workspaceName": "JRF"
+      },
+      "partial": false,
+      "includeErrors": [],
+      "sections": {
+        "comments": {
+          "returned": 3,
+          "cap": 500,
+          "capReached": false,
+          "hasMore": false
+        },
+        "children": {
+          "returned": 0,
+          "cap": 200,
+          "capReached": false,
+          "mayHaveMore": false
+        },
+        "attachments": {
+          "returned": 2,
+          "cap": 100,
+          "capReached": false,
+          "hasMore": false
+        },
+        "relations": {
+          "returned": 0,
+          "cap": 100,
+          "capReached": false,
+          "hasMore": false
+        },
+        "activity": {
+          "returned": 20,
+          "cap": 250,
+          "capReached": false,
+          "hasMore": false
+        }
+      }
+    },
+    "comments": [
+      {
+        "id": "ee2be362-5f59-4d75-9ec9-1c19bcdc9a52",
+        "body": "Applied migrations 0006/0007 atomically to the confirmed Bouncr database in jr-l…",
+        "bodyTruncated": false,
+        "createdAt": "2026-10-02T21:00:58.276Z",
+        "updatedAt": "2026-10-02T21:00:58.151Z",
+        "parentId": null,
+        "user": {
+          "id": "71aef180-1742-4a76-8d49-51f14e8ada1e",
+          "displayName": "royce.code",
+          "avatarUrl": "https://public.linear.app/dfcf61c2-72c0-4d39-9485-96576cabb555/7eef5c2d-203b-4bab-a484-fd8f238b2d45/3b02c7dd-4f76-45e1-b28c-16022ca3308d"
+        }
+      },
+      {
+        "id": "fd7241dc-737c-48ec-8b0a-522e9e0a211a",
+        "body": "Tested source is merged: [web PR #5](https://github.com/furoyce/BOUNCR-game/pull…",
+        "bodyTruncated": false,
+        "createdAt": "2026-10-02T18:04:18.543Z",
+        "updatedAt": "2026-10-02T18:04:18.520Z",
+        "parentId": null,
+        "user": {
+          "id": "71aef180-1742-4a76-8d49-51f14e8ada1e",
+          "displayName": "royce.code",
+          "avatarUrl": "https://public.linear.app/dfcf61c2-72c0-4d39-9485-96576cabb555/7eef5c2d-203b-4bab-a484-fd8f238b2d45/3b02c7dd-4f76-45e1-b28c-16022ca3308d"
+        }
+      },
+      {
+        "id": "14da8894-6f39-4dd4-b699-767d4344399e",
+        "body": "Implemented changes are held on local branches: web `furoyce/bouncr-auto-JRF-402…",
+        "bodyTruncated": false,
+        "createdAt": "2026-10-02T08:49:14.929Z",
+        "updatedAt": "2026-10-02T08:49:14.905Z",
+        "parentId": null,
+        "user": {
+          "id": "71aef180-1742-4a76-8d49-51f14e8ada1e",
+          "displayName": "royce.code",
+          "avatarUrl": "https://public.linear.app/dfcf61c2-72c0-4d39-9485-96576cabb555/7eef5c2d-203b-4bab-a484-fd8f238b2d45/3b02c7dd-4f76-45e1-b28c-16022ca3308d"
+        }
+      }
+    ],
+    "children": [],
+    "attachments": [
+      {
+        "id": "847921d6-4c7b-43c1-99c1-84d138e6f64e",
+        "title": "Add web game per-level leaderboards (JRF-402)",
+        "url": "https://github.com/furoyce/BOUNCR-game/pull/5",
+        "source": {
+          "type": "github",
+          "pullRequestId": "4719711474"
+        },
+        "subtitle": null,
+        "createdAt": "2026-10-02T17:59:41.813Z",
+        "metadataOnly": true
+      },
+      {
+        "id": "adb73230-e8a6-41aa-ba35-40e93c9973e3",
+        "title": "Add opt-in per-level leaderboard API (JRF-402)",
+        "url": "https://github.com/furoyce/project-1/pull/2",
+        "source": {
+          "type": "github",
+          "pullRequestId": "4719711064"
+        },
+        "subtitle": null,
+        "createdAt": "2026-10-02T17:59:38.725Z",
+        "metadataOnly": true
+      }
+    ],
+    "relations": [],
+    "activity": [
+      {
+        "id": "79c5bf5b-2dca-4623-94c7-9d32d18f5d46",
+        "createdAt": "2026-10-02T21:00:29.518Z",
+        "updatedAt": "2026-10-02T21:00:29.518Z",
+        "actor": {
+          "id": "71aef180-1742-4a76-8d49-51f14e8ada1e",
+          "displayName": "royce.code",
+          "avatarUrl": "https://public.linear.app/dfcf61c2-72c0-4d39-9485-96576cabb555/7eef5c2d-203b-4bab-a484-fd8f238b2d45/3b02c7dd-4f76-45e1-b28c-16022ca3308d",
+          "kind": "user"
+        },
+        "changes": [
+          {
+            "field": "labelsAdded",
+            "to": [
+              {
+                "id": "d97b103c-6a00-438e-b90a-38cfc0e109c0",
+                "name": "Blocked",
+                "color": "#EF4444"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "def67022-b2fc-42a1-9343-fbda748a0199",
+        "createdAt": "2026-10-02T20:59:22.752Z",
+        "updatedAt": "2026-10-02T20:59:22.752Z",
+        "actor": {
+          "id": "71aef180-1742-4a76-8d49-51f14e8ada1e",
+          "displayName": "royce.code",
+          "avatarUrl": "https://public.linear.app/dfcf61c2-72c0-4d39-9485-96576cabb555/7eef5c2d-203b-4bab-a484-fd8f238b2d45/3b02c7dd-4f76-45e1-b28c-16022ca3308d",
+          "kind": "user"
+        },
+        "changes": [
+          {
+            "field": "labelsRemoved",
+            "from": [
+              {
+                "id": "2e17910d-5e01-4b32-b1a9-de37b48cd11e",
+                "name": "In-Agent",
+                "color": "#06B6D4"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "98c3161a-e7e6-4904-9f4a-767d42fae134",
+        "createdAt": "2026-10-02T18:57:49.435Z",
+        "updatedAt": "2026-10-02T18:57:49.435Z",
+        "actor": {
+          "id": "71aef180-1742-4a76-8d49-51f14e8ada1e",
+          "displayName": "royce.code",
+          "avatarUrl": "https://public.linear.app/dfcf61c2-72c0-4d39-9485-96576cabb555/7eef5c2d-203b-4bab-a484-fd8f238b2d45/3b02c7dd-4f76-45e1-b28c-16022ca3308d",
+          "kind": "user"
+        },
+        "changes": [
+          {
+            "field": "labelsAdded",
+            "to": [
+              {
+                "id": "2e17910d-5e01-4b32-b1a9-de37b48cd11e",
+                "name": "In-Agent",
+                "color": "#06B6D4"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "1f1731eb-059f-428c-b858-14384efb86e9",
+        "createdAt": "2026-10-02T18:57:47.739Z",
+        "updatedAt": "2026-10-02T18:57:47.739Z",
+        "actor": {
+          "id": "71aef180-1742-4a76-8d49-51f14e8ada1e",
+          "displayName": "royce.code",
+          "avatarUrl": "https://public.linear.app/dfcf61c2-72c0-4d39-9485-96576cabb555/7eef5c2d-203b-4bab-a484-fd8f238b2d45/3b02c7dd-4f76-45e1-b28c-16022ca3308d",
+          "kind": "user"
+        },
+        "changes": [
+          {
+            "field": "labelsRemoved",
+            "from": [
+              {
+                "id": "d97b103c-6a00-438e-b90a-38cfc0e109c0",
+                "name": "Blocked",
+                "color": "#EF4444"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "6d320a03-0ab9-465a-a3fe-b5d5a78e7e6d",
+        "createdAt": "2026-10-02T18:04:16.558Z",
+        "updatedAt": "2026-10-02T18:04:16.558Z",
+        "actor": {
+          "id": "71aef180-1742-4a76-8d49-51f14e8ada1e",
+          "displayName": "royce.code",
+          "avatarUrl": "https://public.linear.app/dfcf61c2-72c0-4d39-9485-96576cabb555/7eef5c2d-203b-4bab-a484-fd8f238b2d45/3b02c7dd-4f76-45e1-b28c-16022ca3308d",
+          "kind": "user"
+        },
+        "changes": [
+          {
+            "field": "labelsAdded",
+            "to": [
+              {
+                "id": "d97b103c-6a00-438e-b90a-38cfc0e109c0",
+                "name": "Blocked",
+                "color": "#EF4444"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "9e425b06-6172-4749-be49-e03e06078833",
+        "createdAt": "2026-10-02T18:04:15.198Z",
+        "updatedAt": "2026-10-02T18:04:15.198Z",
+        "actor": {
+          "id": "71aef180-1742-4a76-8d49-51f14e8ada1e",
+          "displayName": "royce.code",
+          "avatarUrl": "https://public.linear.app/dfcf61c2-72c0-4d39-9485-96576cabb555/7eef5c2d-203b-4bab-a484-fd8f238b2d45/3b02c7dd-4f76-45e1-b28c-16022ca3308d",
+          "kind": "user"
+        },
+        "changes": [
+          {
+            "field": "labelsRemoved",
+            "from": [
+              {
+                "id": "5333f3f8-2744-4027-bda8-6c3f4c3826c6",
+                "name": "Review-Ready",
+                "color": "#F59E0B"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "51d969b1-91d2-4275-ad46-d256f719cbba",
+        "createdAt": "2026-10-02T18:04:12.593Z",
+        "updatedAt": "2026-10-02T18:04:12.593Z",
+        "actor": {
+          "id": "71aef180-1742-4a76-8d49-51f14e8ada1e",
+          "displayName": "royce.code",
+          "avatarUrl": "https://public.linear.app/dfcf61c2-72c0-4d39-9485-96576cabb555/7eef5c2d-203b-4bab-a484-fd8f238b2d45/3b02c7dd-4f76-45e1-b28c-16022ca3308d",
+          "kind": "user"
+        },
+        "changes": [
+          {
+            "field": "state",
+            "from": {
+              "id": "3803d97c-d0d3-434b-8927-8725e57982de",
+              "name": "Done",
+              "type": "completed",
+              "color": "#5e6ad2"
+            },
+            "to": {
+              "id": "9961332a-2edb-4274-b4df-8ac8df40a623",
+              "name": "In Review",
+              "type": "started",
+              "color": "#0f783c"
+            }
+          }
+        ]
+      },
+      {
+        "id": "b3e3fd68-cbbe-489d-8c55-e172e85a4d9e",
+        "createdAt": "2026-10-02T18:02:12.038Z",
+        "updatedAt": "2026-10-02T18:02:12.038Z",
+        "actor": {
+          "id": "ab46b1ec-155d-475c-af2b-ee7dadde9cc1",
+          "displayName": "GitHub",
+          "avatarUrl": "https://client-api.linear.app/icons/brands/GitHubIcon.svg",
+          "name": "GitHub",
+          "type": "integration",
+          "subType": "github",
+          "kind": "bot"
+        },
+        "changes": [
+          {
+            "field": "state",
+            "from": {
+              "id": "bc5dd9e3-b509-4f69-a036-b0edce6276f4",
+              "name": "In Progress",
+              "type": "started",
+              "color": "#f2c94c"
+            },
+            "to": {
+              "id": "3803d97c-d0d3-434b-8927-8725e57982de",
+              "name": "Done",
+              "type": "completed",
+              "color": "#5e6ad2"
+            }
+          }
+        ]
+      },
+      {
+        "id": "dc7463d9-91fa-4b07-8b51-894dd4261826",
+        "createdAt": "2026-10-02T18:01:33.762Z",
+        "updatedAt": "2026-10-02T18:01:33.762Z",
+        "actor": {
+          "id": "ab46b1ec-155d-475c-af2b-ee7dadde9cc1",
+          "displayName": "GitHub",
+          "avatarUrl": "https://client-api.linear.app/icons/brands/GitHubIcon.svg",
+          "name": "GitHub",
+          "type": "integration",
+          "subType": "github",
+          "kind": "bot"
+        },
+        "changes": [
+          {
+            "field": "state",
+            "from": {
+              "id": "9961332a-2edb-4274-b4df-8ac8df40a623",
+              "name": "In Review",
+              "type": "started",
+              "color": "#0f783c"
+            },
+            "to": {
+              "id": "bc5dd9e3-b509-4f69-a036-b0edce6276f4",
+              "name": "In Progress",
+              "type": "started",
+              "color": "#f2c94c"
+            }
+          }
+        ]
+      },
+      {
+        "id": "3c479048-0ad1-4b78-a014-85830adcbdf3",
+        "createdAt": "2026-10-02T18:00:43.059Z",
+        "updatedAt": "2026-10-02T18:00:43.059Z",
+        "actor": {
+          "id": "71aef180-1742-4a76-8d49-51f14e8ada1e",
+          "displayName": "royce.code",
+          "avatarUrl": "https://public.linear.app/dfcf61c2-72c0-4d39-9485-96576cabb555/7eef5c2d-203b-4bab-a484-fd8f238b2d45/3b02c7dd-4f76-45e1-b28c-16022ca3308d",
+          "kind": "user"
+        },
+        "changes": [
+          {
+            "field": "state",
+            "from": {
+              "id": "bc5dd9e3-b509-4f69-a036-b0edce6276f4",
+              "name": "In Progress",
+              "type": "started",
+              "color": "#f2c94c"
+            },
+            "to": {
+              "id": "9961332a-2edb-4274-b4df-8ac8df40a623",
+              "name": "In Review",
+              "type": "started",
+              "color": "#0f783c"
+            }
+          }
+        ]
+      },
+      {
+        "id": "c6a90591-1ad4-4f1a-9c9b-72f330b530ed",
+        "createdAt": "2026-10-02T18:00:34.374Z",
+        "updatedAt": "2026-10-02T18:00:34.374Z",
+        "actor": {
+          "id": "71aef180-1742-4a76-8d49-51f14e8ada1e",
+          "displayName": "royce.code",
+          "avatarUrl": "https://public.linear.app/dfcf61c2-72c0-4d39-9485-96576cabb555/7eef5c2d-203b-4bab-a484-fd8f238b2d45/3b02c7dd-4f76-45e1-b28c-16022ca3308d",
+          "kind": "user"
+        },
+        "changes": [
+          {
+            "field": "labelsAdded",
+            "to": [
+              {
+                "id": "5333f3f8-2744-4027-bda8-6c3f4c3826c6",
+                "name": "Review-Ready",
+                "color": "#F59E0B"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "441f25b4-9efc-4af3-ac10-e050110e339d",
+        "createdAt": "2026-10-02T18:00:30.642Z",
+        "updatedAt": "2026-10-02T18:00:30.642Z",
+        "actor": {
+          "id": "71aef180-1742-4a76-8d49-51f14e8ada1e",
+          "displayName": "royce.code",
+          "avatarUrl": "https://public.linear.app/dfcf61c2-72c0-4d39-9485-96576cabb555/7eef5c2d-203b-4bab-a484-fd8f238b2d45/3b02c7dd-4f76-45e1-b28c-16022ca3308d",
+          "kind": "user"
+        },
+        "changes": [
+          {
+            "field": "labelsRemoved",
+            "from": [
+              {
+                "id": "2e17910d-5e01-4b32-b1a9-de37b48cd11e",
+                "name": "In-Agent",
+                "color": "#06B6D4"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "c8591796-d6be-4b86-876c-de74c3c12e9c",
+        "createdAt": "2026-10-02T17:59:41.813Z",
+        "updatedAt": "2026-10-02T17:59:41.813Z",
+        "actor": {
+          "id": "5c07d33f-5e8f-484b-8100-67908589ec45",
+          "displayName": "Linear",
+          "avatarUrl": "https://static.linear.app/assets/pwa/icon_maskable_512.png",
+          "name": "Linear",
+          "type": "workflow",
+          "subType": null,
+          "kind": "bot"
+        },
+        "changes": [
+          {
+            "field": "attachment",
+            "to": {
+              "id": "847921d6-4c7b-43c1-99c1-84d138e6f64e",
+              "title": "Add web game per-level leaderboards (JRF-402)",
+              "url": "https://github.com/furoyce/BOUNCR-game/pull/5"
+            }
+          }
+        ]
+      },
+      {
+        "id": "1f304629-ffaa-49ca-b5e6-93e274510a5e",
+        "createdAt": "2026-10-02T17:59:38.725Z",
+        "updatedAt": "2026-10-02T17:59:38.725Z",
+        "actor": {
+          "id": "5c07d33f-5e8f-484b-8100-67908589ec45",
+          "displayName": "Linear",
+          "avatarUrl": "https://static.linear.app/assets/pwa/icon_maskable_512.png",
+          "name": "Linear",
+          "type": "workflow",
+          "subType": null,
+          "kind": "bot"
+        },
+        "changes": [
+          {
+            "field": "attachment",
+            "to": {
+              "id": "adb73230-e8a6-41aa-ba35-40e93c9973e3",
+              "title": "Add opt-in per-level leaderboard API (JRF-402)",
+              "url": "https://github.com/furoyce/project-1/pull/2"
+            }
+          }
+        ]
+      },
+      {
+        "id": "b44d4ee9-5b83-4923-b8e3-751b582fb67c",
+        "createdAt": "2026-10-02T15:58:34.137Z",
+        "updatedAt": "2026-10-02T15:58:34.137Z",
+        "actor": {
+          "id": "71aef180-1742-4a76-8d49-51f14e8ada1e",
+          "displayName": "royce.code",
+          "avatarUrl": "https://public.linear.app/dfcf61c2-72c0-4d39-9485-96576cabb555/7eef5c2d-203b-4bab-a484-fd8f238b2d45/3b02c7dd-4f76-45e1-b28c-16022ca3308d",
+          "kind": "user"
+        },
+        "changes": [
+          {
+            "field": "labelsAdded",
+            "to": [
+              {
+                "id": "2e17910d-5e01-4b32-b1a9-de37b48cd11e",
+                "name": "In-Agent",
+                "color": "#06B6D4"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "66bf6ebb-70ae-476b-876e-971f5d03a0da",
+        "createdAt": "2026-10-02T15:58:32.349Z",
+        "updatedAt": "2026-10-02T15:58:32.349Z",
+        "actor": {
+          "id": "71aef180-1742-4a76-8d49-51f14e8ada1e",
+          "displayName": "royce.code",
+          "avatarUrl": "https://public.linear.app/dfcf61c2-72c0-4d39-9485-96576cabb555/7eef5c2d-203b-4bab-a484-fd8f238b2d45/3b02c7dd-4f76-45e1-b28c-16022ca3308d",
+          "kind": "user"
+        },
+        "changes": [
+          {
+            "field": "labelsRemoved",
+            "from": [
+              {
+                "id": "d97b103c-6a00-438e-b90a-38cfc0e109c0",
+                "name": "Blocked",
+                "color": "#EF4444"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "1cbfae1b-e98b-40a3-aece-b21efce30a45",
+        "createdAt": "2026-10-02T08:48:47.243Z",
+        "updatedAt": "2026-10-02T08:48:47.243Z",
+        "actor": {
+          "id": "71aef180-1742-4a76-8d49-51f14e8ada1e",
+          "displayName": "royce.code",
+          "avatarUrl": "https://public.linear.app/dfcf61c2-72c0-4d39-9485-96576cabb555/7eef5c2d-203b-4bab-a484-fd8f238b2d45/3b02c7dd-4f76-45e1-b28c-16022ca3308d",
+          "kind": "user"
+        },
+        "changes": [
+          {
+            "field": "labelsAdded",
+            "to": [
+              {
+                "id": "d97b103c-6a00-438e-b90a-38cfc0e109c0",
+                "name": "Blocked",
+                "color": "#EF4444"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "d4866496-7cd4-41ed-b5e8-be097a23dd8d",
+        "createdAt": "2026-10-02T08:48:33.819Z",
+        "updatedAt": "2026-10-02T08:48:33.819Z",
+        "actor": {
+          "id": "71aef180-1742-4a76-8d49-51f14e8ada1e",
+          "displayName": "royce.code",
+          "avatarUrl": "https://public.linear.app/dfcf61c2-72c0-4d39-9485-96576cabb555/7eef5c2d-203b-4bab-a484-fd8f238b2d45/3b02c7dd-4f76-45e1-b28c-16022ca3308d",
+          "kind": "user"
+        },
+        "changes": [
+          {
+            "field": "labelsRemoved",
+            "from": [
+              {
+                "id": "2e17910d-5e01-4b32-b1a9-de37b48cd11e",
+                "name": "In-Agent",
+                "color": "#06B6D4"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "8a881a25-8425-447c-a6fd-e580ec38f57d",
+        "createdAt": "2026-10-02T04:03:24.367Z",
+        "updatedAt": "2026-10-02T04:03:24.367Z",
+        "actor": {
+          "id": "71aef180-1742-4a76-8d49-51f14e8ada1e",
+          "displayName": "royce.code",
+          "avatarUrl": "https://public.linear.app/dfcf61c2-72c0-4d39-9485-96576cabb555/7eef5c2d-203b-4bab-a484-fd8f238b2d45/3b02c7dd-4f76-45e1-b28c-16022ca3308d",
+          "kind": "user"
+        },
+        "changes": [
+          {
+            "field": "labelsAdded",
+            "to": [
+              {
+                "id": "2e17910d-5e01-4b32-b1a9-de37b48cd11e",
+                "name": "In-Agent",
+                "color": "#06B6D4"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "f088d09d-78cc-490f-9699-a2183b973b9b",
+        "createdAt": "2026-10-01T12:43:41.411Z",
+        "updatedAt": "2026-10-01T12:43:41.411Z",
+        "actor": {
+          "id": "71aef180-1742-4a76-8d49-51f14e8ada1e",
+          "displayName": "royce.code",
+          "avatarUrl": "https://public.linear.app/dfcf61c2-72c0-4d39-9485-96576cabb555/7eef5c2d-203b-4bab-a484-fd8f238b2d45/3b02c7dd-4f76-45e1-b28c-16022ca3308d",
+          "kind": "user"
+        },
+        "changes": [
+          {
+            "field": "title",
+            "from": "bouncr add leaderboard",
+            "to": "feature: bouncr game add leaderboard"
+          }
+        ]
+      }
+    ]
+  },
+  "_meta": {
+    "runtimeId": "c75f606e-8651-49ea-afcd-1514da5b1aa5"
+  }
+}

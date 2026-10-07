@@ -1,0 +1,42 @@
+{
+  "data": {
+    "comments": {
+      "pageInfo": {
+        "hasNextPage": false,
+        "endCursor": null
+      },
+      "nodes": [
+        {
+          "id": "c-app",
+          "body": "<!-- wingmate:question id=01H -->\n**Wingmate needs your decision**",
+          "createdAt": "2026-10-06T09:00:00.000Z",
+          "parent": null,
+          "issue": {
+            "id": "i1"
+          },
+          "user": null,
+          "botActor": {
+            "id": "app-1"
+          },
+          "externalUser": null
+        },
+        {
+          "id": "c-human",
+          "body": "2",
+          "createdAt": "2026-10-06T09:30:00.000Z",
+          "parent": {
+            "id": "c-app"
+          },
+          "issue": {
+            "id": "i1"
+          },
+          "user": {
+            "id": "71aef180-1742-4a76-8d49-51f14e8ada1e"
+          },
+          "botActor": null,
+          "externalUser": null
+        }
+      ]
+    }
+  }
+}

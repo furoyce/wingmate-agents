@@ -1,0 +1,200 @@
+{
+  "id": "e42377d4-9009-494b-8899-51e8d8274d18",
+  "ok": true,
+  "_meta": {
+    "runtimeId": "c75f606e-8651-49ea-afcd-1514da5b1aa5"
+  },
+  "result": {
+    "orphanCount": 0,
+    "automations": [
+      {
+        "id": "2631faa3-9ab9-4b64-81d8-9ced947506c4",
+        "name": "automation-1",
+        "prompt": "REDACTED",
+        "precheck": {
+          "command": "REDACTED",
+          "timeoutSeconds": 60
+        },
+        "agentId": "codex",
+        "runContext": {
+          "kind": "workspace-run",
+          "projectId": "github:furoyce/bouncr-game",
+          "hostId": "local",
+          "projectHostSetupId": "d77b22cb-74e2-42ac-b06e-5d90a0fd6c89",
+          "repoId": "d77b22cb-74e2-42ac-b06e-5d90a0fd6c89",
+          "path": "/Users/owner/orca/BOUNCR-game"
+        },
+        "sourceContext": {
+          "kind": "task-source",
+          "provider": "github",
+          "projectId": "github:furoyce/bouncr-game",
+          "hostId": "local",
+          "projectHostSetupId": "d77b22cb-74e2-42ac-b06e-5d90a0fd6c89",
+          "repoId": "d77b22cb-74e2-42ac-b06e-5d90a0fd6c89",
+          "providerIdentity": {
+            "provider": "github",
+            "owner": "furoyce",
+            "repo": "BOUNCR-game"
+          },
+          "accountLabel": null
+        },
+        "projectId": "d77b22cb-74e2-42ac-b06e-5d90a0fd6c89",
+        "executionTargetType": "local",
+        "executionTargetId": "local",
+        "schedulerOwner": "local_host_service",
+        "workspaceMode": "new_per_run",
+        "workspaceId": null,
+        "baseBranch": "origin/main",
+        "reuseSession": false,
+        "timezone": "America/New_York",
+        "rrule": "0 */2 * * *",
+        "dtstart": 1790908520224,
+        "enabled": false,
+        "nextRunAt": 1790949600000,
+        "missedRunPolicy": "run_once_within_grace",
+        "missedRunGraceMinutes": 120,
+        "createdAt": 1790859569351,
+        "updatedAt": 1790944087491,
+        "lastRunAt": 1790944087491
+      },
+      {
+        "id": "45780f47-375e-428b-8b34-41348010e95a",
+        "name": "automation-2",
+        "prompt": "REDACTED",
+        "precheck": {
+          "command": "REDACTED",
+          "timeoutSeconds": 120
+        },
+        "agentId": "codex",
+        "runContext": {
+          "kind": "workspace-run",
+          "projectId": "github:furoyce/jr-learning-plus",
+          "hostId": "local",
+          "projectHostSetupId": "463253fe-ee53-426d-90c2-6fc4e4abd008",
+          "repoId": "463253fe-ee53-426d-90c2-6fc4e4abd008",
+          "path": "/Users/owner/orca/jr-learning-plus"
+        },
+        "sourceContext": {
+          "kind": "task-source",
+          "provider": "github",
+          "projectId": "github:furoyce/jr-learning-plus",
+          "hostId": "local",
+          "projectHostSetupId": "463253fe-ee53-426d-90c2-6fc4e4abd008",
+          "repoId": "463253fe-ee53-426d-90c2-6fc4e4abd008",
+          "providerIdentity": {
+            "provider": "github",
+            "owner": "furoyce",
+            "repo": "jr-learning-plus"
+          },
+          "accountLabel": null
+        },
+        "projectId": "463253fe-ee53-426d-90c2-6fc4e4abd008",
+        "executionTargetType": "local",
+        "executionTargetId": "local",
+        "schedulerOwner": "local_host_service",
+        "workspaceMode": "existing",
+        "workspaceId": "463253fe-ee53-426d-90c2-6fc4e4abd008::/Users/owner/orca/workspaces/jr-learning-plus/family-learning-studio",
+        "baseBranch": null,
+        "reuseSession": true,
+        "timezone": "America/New_York",
+        "rrule": "FREQ=DAILY;BYHOUR=9;BYMINUTE=0",
+        "dtstart": 1791008902022,
+        "enabled": true,
+        "nextRunAt": 1791291600000,
+        "missedRunPolicy": "run_once_within_grace",
+        "missedRunGraceMinutes": 720,
+        "createdAt": 1791000393892,
+        "updatedAt": 1791205218248,
+        "lastRunAt": 1791205218248
+      },
+      {
+        "id": "c9c6b386-d734-46e0-a50b-1ea5df964b47",
+        "name": "automation-3",
+        "prompt": "REDACTED",
+        "precheck": null,
+        "agentId": "codex",
+        "runContext": {
+          "kind": "workspace-run",
+          "projectId": "github:furoyce/project-2",
+          "hostId": "local",
+          "projectHostSetupId": "d2386ea3-2a51-46b2-93b4-7f36da9e673d",
+          "repoId": "d2386ea3-2a51-46b2-93b4-7f36da9e673d",
+          "path": "/Users/owner/work/project-2"
+        },
+        "sourceContext": {
+          "kind": "task-source",
+          "provider": "github",
+          "projectId": "github:furoyce/project-2",
+          "hostId": "local",
+          "projectHostSetupId": "d2386ea3-2a51-46b2-93b4-7f36da9e673d",
+          "repoId": "d2386ea3-2a51-46b2-93b4-7f36da9e673d",
+          "providerIdentity": {
+            "provider": "github",
+            "owner": "furoyce",
+            "repo": "project-2"
+          },
+          "accountLabel": null
+        },
+        "projectId": "d2386ea3-2a51-46b2-93b4-7f36da9e673d",
+        "executionTargetType": "local",
+        "executionTargetId": "local",
+        "schedulerOwner": "local_host_service",
+        "workspaceMode": "existing",
+        "workspaceId": "d2386ea3-2a51-46b2-93b4-7f36da9e673d::/Users/owner/work/project-2",
+        "baseBranch": null,
+        "reuseSession": false,
+        "timezone": "America/New_York",
+        "rrule": "FREQ=DAILY;COUNT=1;BYHOUR=9;BYMINUTE=0;BYSECOND=0",
+        "dtstart": 1790908366953,
+        "enabled": true,
+        "nextRunAt": 1791291600000,
+        "missedRunPolicy": "run_once_within_grace",
+        "missedRunGraceMinutes": 720,
+        "createdAt": 1790908366976,
+        "updatedAt": 1791205226941,
+        "lastRunAt": 1791205226941
+      }
+    ],
+    "items": [
+      {
+        "automationId": "2631faa3-9ab9-4b64-81d8-9ced947506c4",
+        "selector": {
+          "kind": "self"
+        },
+        "usageSummary": {
+          "knownRuns": 4,
+          "unavailableRuns": 8,
+          "estimatedCostUsd": 0.20632554,
+          "lastRunStatus": "completed",
+          "lastRunAt": 1790942407166
+        }
+      },
+      {
+        "automationId": "45780f47-375e-428b-8b34-41348010e95a",
+        "selector": {
+          "kind": "self"
+        },
+        "usageSummary": {
+          "knownRuns": 1,
+          "unavailableRuns": 4,
+          "estimatedCostUsd": null,
+          "lastRunStatus": "skipped_precheck",
+          "lastRunAt": 1791205212982
+        }
+      },
+      {
+        "automationId": "c9c6b386-d734-46e0-a50b-1ea5df964b47",
+        "selector": {
+          "kind": "self"
+        },
+        "usageSummary": {
+          "knownRuns": 4,
+          "unavailableRuns": 0,
+          "estimatedCostUsd": 0.110188,
+          "lastRunStatus": "completed",
+          "lastRunAt": 1791205213342
+        }
+      }
+    ]
+  }
+}

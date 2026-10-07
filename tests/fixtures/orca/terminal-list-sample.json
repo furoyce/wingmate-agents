@@ -1,0 +1,76 @@
+{
+  "id": "5066c6e2-fc0f-4e87-8e5f-ed4c17f8f99d",
+  "ok": true,
+  "_meta": {
+    "runtimeId": "c75f606e-8651-49ea-afcd-1514da5b1aa5"
+  },
+  "result": {
+    "hostScope": {
+      "hostIds": [
+        "local"
+      ],
+      "omittedHostIds": []
+    },
+    "topologyRevisions": {
+      "1f1e7f87-e283-4432-beaf-92efba56ddb9::/Users/owner/orca/workspaces/wingmate-agents/orca-linear-wingmate-agents": 12
+    },
+    "totalCount": 3,
+    "truncated": false,
+    "terminals": [
+      {
+        "handle": "term_1179dbbc-70eb-4a8b-a386-7ab5e1070746",
+        "ptyId": "1f1e7f87-e283-4432-beaf-92efba56ddb9::/Users/owner/orca/workspaces/wingmate-agents/orca-linear-wingmate-agents@@47f89115",
+        "incarnationId": "70263805-e9bf-422e-a32c-6ce3da2fcf7f",
+        "orphaned": false,
+        "worktreeId": "1f1e7f87-e283-4432-beaf-92efba56ddb9::/Users/owner/orca/workspaces/wingmate-agents/orca-linear-wingmate-agents",
+        "worktreePath": "/Users/owner/orca/workspaces/wingmate-agents/orca-linear-wingmate-agents",
+        "branch": "refs/heads/orca-linear-wingmate-agents",
+        "tabId": "4ed0a1a5-a1d5-4135-85bc-e89586112001",
+        "leafId": "ecaa1fac-9dc4-4de8-86b4-b89f9408eb14",
+        "title": "✳ Claude Code API Usage Billing label research",
+        "connected": true,
+        "writable": true,
+        "lastOutputAt": 1791290152644,
+        "preview": "50",
+        "executionHostId": "local",
+        "agentIdentity": "claude-agent-teams"
+      },
+      {
+        "handle": "term_3232b4fe-7340-400b-9dd0-cb2d95900a3e",
+        "ptyId": "1f1e7f87-e283-4432-beaf-92efba56ddb9::/Users/owner/orca/workspaces/wingmate-agents/orca-linear-wingmate-agents@@3b5be698",
+        "incarnationId": "fe569541-c6aa-4535-8890-ed6e1c30c40a",
+        "orphaned": false,
+        "worktreeId": "1f1e7f87-e283-4432-beaf-92efba56ddb9::/Users/owner/orca/workspaces/wingmate-agents/orca-linear-wingmate-agents",
+        "worktreePath": "/Users/owner/orca/workspaces/wingmate-agents/orca-linear-wingmate-agents",
+        "branch": "refs/heads/orca-linear-wingmate-agents",
+        "tabId": "4ed0a1a5-a1d5-4135-85bc-e89586112001",
+        "leafId": "e5d4ba72-6561-4e5f-b8b0-4b7797f1bd83",
+        "title": "✳ general-purpose",
+        "connected": true,
+        "writable": true,
+        "lastOutputAt": 1791286039053,
+        "preview": "──⏵⏵ bypass permissions on (shift+tab to cycle) · ← 8 agentsBingmate-agents | ██…",
+        "executionHostId": "local",
+        "agentIdentity": "claude"
+      },
+      {
+        "handle": "term_02dc0f7f-4ef5-4de1-a1b2-d519479e884a",
+        "ptyId": "1f1e7f87-e283-4432-beaf-92efba56ddb9::/Users/owner/orca/workspaces/wingmate-agents/orca-linear-wingmate-agents@@a65c0765",
+        "incarnationId": "c4f39426-c308-4512-9e6d-d9b01da8a4f9",
+        "orphaned": false,
+        "worktreeId": "1f1e7f87-e283-4432-beaf-92efba56ddb9::/Users/owner/orca/workspaces/wingmate-agents/orca-linear-wingmate-agents",
+        "worktreePath": "/Users/owner/orca/workspaces/wingmate-agents/orca-linear-wingmate-agents",
+        "branch": "refs/heads/orca-linear-wingmate-agents",
+        "tabId": "4ed0a1a5-a1d5-4135-85bc-e89586112001",
+        "leafId": "465c84d4-f550-46ee-a986-776c1df996fb",
+        "title": "◐ general-purpose",
+        "connected": true,
+        "writable": true,
+        "lastOutputAt": 1791290152765,
+        "preview": "Wrangling…",
+        "executionHostId": "local",
+        "agentIdentity": "claude"
+      }
+    ]
+  }
+}

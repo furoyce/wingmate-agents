@@ -1,0 +1,58 @@
+{
+  "id": "ff9268c1-d7cb-4513-b2a1-d78cca73fb04",
+  "ok": true,
+  "_meta": {
+    "runtimeId": "c75f606e-8651-49ea-afcd-1514da5b1aa5"
+  },
+  "result": {
+    "hostScope": {
+      "hostIds": [
+        "local"
+      ],
+      "omittedHostIds": []
+    },
+    "truncated": false,
+    "worktrees": [
+      {
+        "workspaceKind": "git",
+        "worktreeId": "1f1e7f87-e283-4432-beaf-92efba56ddb9::/Users/owner/orca/workspaces/wingmate-agents/wm-spike-3a04789d",
+        "repoId": "1f1e7f87-e283-4432-beaf-92efba56ddb9",
+        "hostId": "local",
+        "terminalPlatform": "darwin",
+        "repo": "wingmate-agents",
+        "path": "/Users/owner/orca/workspaces/wingmate-agents/wm-spike-3a04789d",
+        "branch": "refs/heads/wm-spike-3a04789d",
+        "isArchived": false,
+        "isMainWorktree": false,
+        "hasHostSidebarActivity": false,
+        "worktreeInstanceId": "3b6ac381-72e1-4685-a99e-2544ba515a68",
+        "parentWorktreeId": null,
+        "childWorktreeIds": [],
+        "displayName": "wm-spike-3a04789d",
+        "workspaceStatus": "in-progress",
+        "sortOrder": 1791290796772,
+        "lastActivityAt": 1791290740742,
+        "createdAt": 1791290724471,
+        "creatorProvenance": {
+          "kind": "host"
+        },
+        "linkedIssue": null,
+        "linkedPR": null,
+        "linkedLinearIssue": null,
+        "linkedGitLabMR": null,
+        "linkedGitLabIssue": null,
+        "comment": "wingmate spike",
+        "isPinned": false,
+        "isActive": false,
+        "unread": true,
+        "liveTerminalCount": 0,
+        "hasAttachedPty": false,
+        "lastOutputAt": null,
+        "preview": "",
+        "status": "inactive",
+        "agents": []
+      }
+    ],
+    "totalCount": 1
+  }
+}
