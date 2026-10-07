@@ -14,6 +14,7 @@ import { z } from "zod";
 import { DISPATCHER_GIT_ENV } from "../git/cli";
 import { discoverGitLinks, verifyGitLinks } from "../git/trust";
 import {
+  AGENT_GIT_EMAIL,
   CREDENTIAL_ENV_PATTERN,
   agentEnv,
   blankedEnv,
@@ -558,7 +559,7 @@ export async function claudeProbe(ctx: Ctx, d: ClaudeProbeDeps): Promise<ClaudeP
     await mkdir(join(kitDir, "probe"), { recursive: true });
     await writeAtomic(
       join(kitDir, "gitconfig"),
-      `[credential]\n\thelper =\n[core]\n\thooksPath = ${join(kitDir, "no-hooks")}\n[user]\n\tname = Wingmate Probe\n\temail = wingmate@users.noreply.github.com\n`,
+      `[credential]\n\thelper =\n[core]\n\thooksPath = ${join(kitDir, "no-hooks")}\n[user]\n\tname = Wingmate Probe\n\temail = ${AGENT_GIT_EMAIL}\n`,
     );
     const settingsFile = join(kitDir, "claude-settings.json");
     const blankEnv = userClaudeCredentialEnv(ctx.home); // SEC-1: as the kit writes them, so probe 13 tests the real block

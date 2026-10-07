@@ -186,6 +186,12 @@ describe("installKit", () => {
       `hooksPath = ${join(kitDir, "no-hooks")}`,
     );
     expect(readFileSync(join(kitDir, "gitconfig"), "utf8")).toContain("[credential]\n\thelper =\n");
+    // agent commits credit nobody: a reserved .invalid address no GitHub account can verify (a GitHub user "Wingmate" exists,
+    // so wingmate@users.noreply.github.com would credit that stranger on every PR the dispatcher opens)
+    expect(readFileSync(join(kitDir, "gitconfig"), "utf8")).toContain(
+      "[user]\n\tname = Wingmate\n\temail = wingmate@noreply.invalid\n",
+    );
+    expect(readFileSync(join(kitDir, "gitconfig"), "utf8")).not.toContain("users.noreply.github.com");
     expect(JSON.parse(readFileSync(join(kitDir, "env.json"), "utf8"))).toEqual(agentEnv(kitDir));
     const settings = JSON.parse(readFileSync(join(kitDir, "claude-settings.json"), "utf8")) as {
       sandbox: { network: { strictAllowlist: boolean } };

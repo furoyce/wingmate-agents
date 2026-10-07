@@ -772,6 +772,21 @@ describe("claudeProbe (a real wm-doctor worktree; the agent simulated)", () => {
   });
 });
 
+describe("claudeProbe commit identity", () => {
+  test("the probe commits as the kit does: a reserved .invalid address no GitHub account can claim", async () => {
+    const w = await world();
+    let gitconfig = "";
+    const exec = fakeClaude(async (cwd, kit) => {
+      gitconfig = readFileSync(join(kit, "gitconfig"), "utf8");
+      await commit(cwd);
+      return stream(lines(), { kit });
+    }, []);
+    expect(await claudeProbe(w.ctx, { exec: exec.exec, cwd: "/wt/self" })).toMatchObject({ ok: true });
+    expect(gitconfig).toContain("[user]\n\tname = Wingmate Probe\n\temail = wingmate@noreply.invalid\n");
+    expect(gitconfig).not.toContain("users.noreply.github.com");
+  });
+});
+
 describe("claudeProbe setup (R34: its first live run met a repository without origin/main)", () => {
   test("the scratch worktree starts at the commit Orca reports for doctor's checkout; origin/main only when none is reported", async () => {
     const sha = "ddfb2bf3a729d18115b278435a578c12f4e49136";

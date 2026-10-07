@@ -183,6 +183,12 @@ const SPAWN_DENY = [
  */
 const WINGMATE_BIN_READ = "~/.local/share/wingmate/bin/**";
 /**
+ * The commit e-mail of every agent (the kit gitconfig) and of doctor's probe: a reserved `.invalid` address (RFC 2606) that no
+ * GitHub account can verify, so pushed agent commits credit nobody. A `<name>@users.noreply.github.com` address credits the
+ * GitHub user of that name, and a user "Wingmate" exists.
+ */
+export const AGENT_GIT_EMAIL = "wingmate@noreply.invalid";
+/**
  * Claude Code grants a linked worktree's git common dir as a whole: its sandbox config builder adds the detected common dir to
  * `allowWrite` (read from the 2.1.291 and 2.1.292 binaries), so inside `<common>` the allowWrite entries are inert and only denyWrite
  * restricts (F7). Its own denies there cover `hooks`, `config(.lock)`, `config.worktree(.lock)`, `commondir`,

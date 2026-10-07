@@ -16,6 +16,7 @@ import { type Launch, writeLocal } from "./local";
 import { PROMPTS } from "./prompts";
 import { PROTOCOL_MD } from "./protocol";
 import {
+  AGENT_GIT_EMAIL,
   type Role,
   SPAWN_ROLES,
   type SettingsInput,
@@ -401,7 +402,7 @@ async function writeKitDir(i: InstallInput, settings: Record<Role, object>): Pro
     await writeAtomic(roleSettingsFile(i.kitDir, role), JSON.stringify(settings[role], null, 2), 0o644);
   await writeAtomic(
     join(i.kitDir, "gitconfig"),
-    `[credential]\n\thelper =\n[core]\n\thooksPath = ${join(i.kitDir, "no-hooks")}\n[user]\n\tname = Wingmate\n\temail = wingmate@users.noreply.github.com\n`,
+    `[credential]\n\thelper =\n[core]\n\thooksPath = ${join(i.kitDir, "no-hooks")}\n[user]\n\tname = Wingmate\n\temail = ${AGENT_GIT_EMAIL}\n`,
   );
   await writeAtomic(
     join(i.kitDir, "env.json"),
