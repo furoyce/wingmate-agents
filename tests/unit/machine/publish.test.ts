@@ -549,9 +549,9 @@ describe("publish success and replay (§6.6, I4, I9)", () => {
     const { w, identifier } = await setup();
     const seen: { title: string; body: string; head: string }[] = [];
     const create = w.gh.prCreate.bind(w.gh);
-    w.gh.prCreate = async (cwd, a) => {
+    w.gh.prCreate = async (repo, a) => {
       seen.push({ title: a.title, body: a.body, head: a.head });
-      return create(cwd, a);
+      return create(repo, a);
     };
     expect(await call(w, identifier)).toBe(true);
     expect(seen[0]?.title).toBe("iOS leaderboard (JRF-601)");
@@ -564,9 +564,9 @@ describe("publish success and replay (§6.6, I4, I9)", () => {
     const { w, identifier } = await setup();
     const titles: string[] = [];
     const create = w.gh.prCreate.bind(w.gh);
-    w.gh.prCreate = async (cwd, a) => {
+    w.gh.prCreate = async (repo, a) => {
       titles.push(a.title);
-      return create(cwd, a);
+      return create(repo, a);
     };
     const title = `${"Rework the scoring service ".repeat(6)}JRF-601`;
     expect(await call(w, identifier, finishIntent(identifier, { title }))).toBe(true);
@@ -651,6 +651,12 @@ describe("publish success and replay (§6.6, I4, I9)", () => {
     const { w, identifier } = await setup();
     expect(await call(w, identifier)).toBe(true);
     expect(w.git.pushUrls).toEqual(["https://github.com/furoyce/bouncr.lol.git"]);
+  });
+
+  test("C29: the PR is opened in the configured repository (repos.<name>.github), never in one gh resolves from the worktree", async () => {
+    const { w, identifier } = await setup();
+    expect(await call(w, identifier)).toBe(true);
+    expect(w.gh.repos).toEqual(["furoyce/bouncr.lol"]);
   });
 
   test("C26: when the branch is already on the remote, the history read starts at its tip: commits an earlier publish pushed are not read again", async () => {

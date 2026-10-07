@@ -11,6 +11,10 @@ labels:
   allowDeps: allow-deps
 defaults:
   timezone: America/New_York
+  # Agents' network allowlist (§13.3 b): the pilots are JavaScript repos, so the npm registry (npm, pnpm, bun) and yarn's. Any other
+  # host (PyPI, CocoaPods, a CDN, …) is the owner's call, added per repo under repos.<name>.sandbox.allowedDomains; never a GitHub
+  # host (github.com, api.github.com, *.githubusercontent.com) — the dispatcher owns every fetch and push.
+  sandbox: { allowedDomains: [registry.npmjs.org, registry.yarnpkg.com] }
   # D14 extension (spike 2026-10-06 §3.5): Codex sandboxes do not block reads outside the worktree, so Codex runs only as a
   # read-only verifier/reviewer in the pilot (§13.3 c): coordinatorCascade and workers stay [claude]; add codex to either list
   # (e.g. coordinatorCascade: [claude, codex]) only after the owner accepts the extension.

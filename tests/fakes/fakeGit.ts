@@ -22,14 +22,24 @@ export class FakeGit implements GitPort {
   pushed: string[] = [];
   /** The remote URL of every push (C23: the configured GitHub URL). */
   pushUrls: string[] = [];
-  remoteSha = new Map<string, string>();
+  /** The remote's branch tips: the base branch `main` is at `basesha` (C30), the commit every base ref resolves to here. */
+  remoteSha = new Map<string, string>([["main", "basesha"]]);
+  /** Every remote read, in order (C30: the claim reads the base branch of the configured URL). */
+  remoteReads: { url: string; branch: string }[] = [];
+  /** Commits this repository lacks until `fetchCommit` brings them (C30); a ref naming one does not resolve meanwhile. */
+  missing = new Set<string>();
+  /** What `fetchCommit` fetched, and from where. */
+  fetched: { url: string; sha: string }[] = [];
   /** Real git dirs of worktrees the fake Orca created on disk (makeWorld wires them); other paths get made-up ones. */
   commonDirs = new Map<string, string>();
   gitDirs = new Map<string, string>();
 
   async revParse(at: GitAt, ref: string): Promise<string> {
     await pathOf(at);
-    return ref === "HEAD" ? "headsha" : "basesha";
+    const sha = ref === "HEAD" ? "headsha" : "basesha";
+    if (this.missing.has(sha))
+      throw new Error(`git rev-parse failed (128): fatal: ${ref}: bad object ${sha}`);
+    return sha;
   }
   /** Test helpers (no longer on the port: the claim reads the git dirs from the worktree's own links, C22). */
   async commonDir(cwd: string) {
@@ -56,9 +66,17 @@ export class FakeGit implements GitPort {
     this.pushUrls.push(url);
     this.remoteSha.set(branch, sha);
   }
-  async lsRemoteSha(at: GitTarget, _url: string, branch: string) {
+  async lsRemoteSha(at: GitTarget, url: string, branch: string) {
     await pathOf(at);
+    this.remoteReads.push({ url, branch });
     return this.remoteSha.get(branch) ?? null;
+  }
+  /** As GitCli: nothing when the commit is here; else it is fetched from `url` (and is here afterwards). */
+  async fetchCommit(at: GitTarget, url: string, sha: string) {
+    await pathOf(at);
+    if (!this.missing.delete(sha)) return false;
+    this.fetched.push({ url, sha });
+    return true;
   }
 }
 
@@ -66,11 +84,14 @@ export class FakeGh implements GhPort {
   prs: { number: number; url: string; head: string }[] = [];
   /** `gh pr view` state per PR number (default OPEN); tests merge or close PRs here. */
   states = new Map<number, string>();
+  /** The repository each call named, in order (C29: `repos.<name>.github`, never a worktree path). */
+  repos: string[] = [];
 
   async prCreate(
-    _cwd: string,
+    repo: string,
     a: { head: string; base: string; title: string; body: string; draft: boolean },
   ) {
+    this.repos.push(repo);
     const existing = this.prs.find((p) => p.head === a.head);
     if (existing) return { number: existing.number, url: existing.url };
     const number = this.prs.length + 1;
@@ -78,7 +99,8 @@ export class FakeGh implements GhPort {
     this.prs.push({ number, url, head: a.head });
     return { number, url };
   }
-  async prView(_cwd: string, number: number) {
+  async prView(repo: string, number: number) {
+    this.repos.push(repo);
     const p = this.prs.find((x) => x.number === number);
     if (!p) throw new Error("no pr");
     return { state: this.states.get(number) ?? "OPEN", headRefName: p.head, url: p.url };

@@ -253,7 +253,11 @@ export async function doctor(ctx: Ctx, o: DoctorOptions): Promise<DoctorReport> 
     if (!o.tokenExpiresAt) return { ok: false, detail: "no token source" };
     const exp = await o.tokenExpiresAt();
     if (!exp)
-      return { ok: false, detail: "no app token: run `wingmate install --client-id … --client-secret …`" };
+      return {
+        ok: false,
+        detail:
+          "no app token: run `wingmate install --client-id <id> --client-secret -` (the secret on stdin)",
+      };
     const left = Date.parse(exp) - nowMs;
     return left >= DAY_MS
       ? { ok: true, detail: `app token valid until ${exp}` }

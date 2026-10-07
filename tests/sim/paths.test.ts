@@ -458,5 +458,8 @@ describe("§13.3(h) cleanup after Done", () => {
     expect(after.worktree).toBeNull();
     expect(after.attention).not.toContain("cleanup_failed");
     expect(w.orca.removed).toEqual([r.worktree?.id ?? ""]);
+    // C29: the PR state is read in the PR's configured repository (repos.api.github), never through the worktree
+    expect(w.gh.repos.length).toBeGreaterThan(0);
+    expect([...new Set(w.gh.repos)]).toEqual(["furoyce/bouncr.lol"]);
   });
 });

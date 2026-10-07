@@ -43,7 +43,10 @@ export function recordCtx(ctx: Ctx, project: string, identifier: string): Ctx {
   });
 }
 
-/** The write verbs of each port: Linear and GitHub writes, Orca mutations, git push (reads pass through unguarded). */
+/**
+ * The write verbs of each port: Linear and GitHub writes, Orca mutations, git push and the claim's fetch (C30: it writes the repository's
+ * object store); reads pass through unguarded.
+ */
 export const WRITE_VERBS = {
   linear: ["updateIssue", "createComment", "updateComment", "createAttachment", "createIssue", "subscribe"],
   orca: [
@@ -61,7 +64,7 @@ export const WRITE_VERBS = {
     "automationsCreate",
     "automationsEdit",
   ],
-  git: ["push"],
+  git: ["push", "fetchCommit"],
   gh: ["prCreate"],
 } as const;
 

@@ -1,6 +1,6 @@
 // src/machine/cleanup.ts — §6.3 step 7 / §13.3(h): a `done`/`cancelled` record's worktree is removed after the grace hours, by its
 // recorded id, never while an open PR references its branch (then retried daily).
-import { errorCode, errorText } from "../shared/errors";
+import { WingmateError, errorCode, errorText } from "../shared/errors";
 import type { Ctx } from "./context";
 import { isRecordAbort, isTickAbort, recordCtx } from "./guard";
 import { refreshRepoSiblings } from "./launch";
@@ -28,7 +28,11 @@ async function cleanupOne(ctx: Ctx, rec: Reconciled, identifier: string): Promis
   };
   for (const pr of r.prs.filter((p) => p.state === "OPEN")) {
     try {
-      pr.state = (await ctx.gh.prView(old.path, pr.number)).state;
+      // C29: read in the PR's configured repository, never through the worktree
+      const github = ctx.cfg.projects[r.project]?.repos[pr.repo]?.github;
+      if (!github)
+        throw new WingmateError("unknown_repo", `repo ${pr.repo} is not configured in ${r.project}`);
+      pr.state = (await ctx.gh.prView(github, pr.number)).state;
     } catch (e) {
       ctx.log.warn(
         { issue: identifier, pr: pr.number, err: errorText(e) },

@@ -4,13 +4,13 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { doctorCommand } from "../../../src/cli/commands/doctor";
+import { ROTATION_STEPS, doctorCommand } from "../../../src/cli/commands/doctor";
 import { installCommand } from "../../../src/cli/commands/install";
 import { pauseCommand } from "../../../src/cli/commands/pause";
 import { statusCommand } from "../../../src/cli/commands/status";
 import { FLAG_KEPT, NO_FLAG, flagLines, stopCommand } from "../../../src/cli/commands/stop";
 import { main, parseArgv } from "../../../src/cli/index";
-import { type OpsCtx, liveDoctorOptions } from "../../../src/cli/ops";
+import { type OpsCtx, liveDoctorOptions, readStdinLine } from "../../../src/cli/ops";
 import { type RealCtxOptions, buildRealCtx } from "../../../src/cli/wire";
 import type { InstallOptions, InstallResult } from "../../../src/ops/install";
 import { readPause } from "../../../src/ops/pause";
@@ -122,6 +122,102 @@ describe("wingmate install (CLI)", () => {
       automationId: "auto-1",
       viewUrls: ["https://linear.app/jrf/view/x"],
     });
+  });
+
+  /** stdin as the CLI reads it, in chunks that need not end on a line boundary. */
+  async function* chunks(...parts: string[]): AsyncGenerator<Uint8Array> {
+    for (const p of parts) yield new TextEncoder().encode(p);
+  }
+  const captured = () => {
+    let seen: InstallOptions | null = null;
+    return {
+      install: async (_ctx: OpsCtx, o: InstallOptions) => {
+        seen = o;
+        return fakeResult();
+      },
+      seen: () => seen as InstallOptions | null,
+    };
+  };
+
+  test("C31: --client-secret - reads the secret from one line of stdin, so it never stands on the command line; nothing echoes it", async () => {
+    const w = await world();
+    const t = io(w);
+    const cap = captured();
+    const code = await installCommand(parseArgv(["install", "--client-id", "cid", "--client-secret", "-"]), {
+      ...t.deps,
+      stdin: chunks("sekrit-fr", "om-stdin\r\nsecond line, never read\n"),
+      install: cap.install,
+    });
+    expect(code).toBe(0);
+    expect(cap.seen()).toMatchObject({ clientId: "cid", clientSecret: "sekrit-from-stdin" });
+    expect([...t.out, ...t.err].join("\n")).not.toContain("sekrit");
+    expect(t.err).toEqual([]); // no warning: the secret was never on the command line
+  });
+
+  test("C31: a literal --client-secret still works, with a warning that it is visible in ps and the shell history (the secret itself is never printed)", async () => {
+    const w = await world();
+    const t = io(w);
+    const cap = captured();
+    const code = await installCommand(
+      parseArgv(["install", "--client-id", "cid", "--client-secret", "sekrit-on-argv"]),
+      { ...t.deps, install: cap.install },
+    );
+    expect(code).toBe(0);
+    expect(cap.seen()).toMatchObject({ clientSecret: "sekrit-on-argv" });
+    const warning = t.err.join("\n");
+    expect(warning).toContain("ps");
+    expect(warning).toContain("shell history");
+    expect(warning).toContain("--client-secret -");
+    expect([...t.out, ...t.err].join("\n")).not.toContain("sekrit-on-argv");
+  });
+
+  test("C31: --client-secret - with no line on stdin (or a blank one) is a usage error: nothing is built or installed", async () => {
+    for (const stdin of [chunks(), chunks("\n"), chunks("   \r\n")]) {
+      const w = await world();
+      const t = io(w);
+      const cap = captured();
+      const code = await installCommand(
+        parseArgv(["install", "--client-id", "cid", "--client-secret", "-"]),
+        {
+          ...t.deps,
+          stdin,
+          install: cap.install,
+        },
+      );
+      expect(code).toBe(2);
+      expect(t.err.join("\n")).toContain("stdin");
+      expect(t.builds).toEqual([]);
+      expect(cap.seen()).toBeNull();
+    }
+  });
+
+  test("C31: readStdinLine returns the first line without its line ending, across chunk boundaries; the whole input when no newline comes", async () => {
+    expect(await readStdinLine(chunks("ab", "c\nd\n"))).toBe("abc");
+    expect(await readStdinLine(chunks("abc\r\n"))).toBe("abc");
+    expect(await readStdinLine(chunks("no newline at all"))).toBe("no newline at all");
+    expect(await readStdinLine(chunks())).toBe("");
+    // no unbounded read: a first line past 4096 characters is no pasted secret
+    await expect(readStdinLine(chunks("x".repeat(5000)))).rejects.toMatchObject({ code: "usage" });
+  });
+
+  test("C31: the usage, doctor's hint and the rotation steps give the secret on stdin (--client-secret -), never on the command line", async () => {
+    const w = await world();
+    const t = io(w);
+    expect(await installCommand(parseArgv(["install", "--bogus"]), t.deps)).toBe(2);
+    expect(t.err.join("\n")).toContain("--client-secret -");
+    expect(ROTATION_STEPS.join("\n")).toContain("--client-secret -");
+    expect(ROTATION_STEPS.join("\n")).not.toMatch(/--client-secret <|--client-secret …/);
+    const d = io(w);
+    await doctorCommand(parseArgv(["doctor", "--quick"]), {
+      ...d.deps,
+      doctorOverrides: {
+        exec: fakeExec().exec,
+        versions: async () => ({ claude: "2.1.291", codex: null }),
+        tokenExpiresAt: async () => null,
+      },
+    });
+    const auth = d.out.find((l) => /^FAIL +linear_auth/.test(l)) ?? "";
+    expect(auth).toContain("--client-secret -");
   });
 });
 

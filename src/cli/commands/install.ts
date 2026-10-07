@@ -1,15 +1,24 @@
-// src/cli/commands/install.ts — `wingmate install [--enable] [--client-id <id> --client-secret <secret>] [--json]` (§4.3, §11.1, §11.5).
+// src/cli/commands/install.ts — `wingmate install [--enable] [--client-id <id> --client-secret -] [--json]` (§4.3, §11.1, §11.5); C31:
+// `--client-secret -` reads the OAuth client secret from one line of stdin, so it never stands on the command line.
 import { doctor } from "../../ops/doctor";
 import { type InstallResult, install } from "../../ops/install";
 import { upsertViews, viewDefinitions, viewRecipe } from "../../ops/views";
 import { WingmateError } from "../../shared/errors";
 import type { Argv } from "../index";
-import { type OpsDeps, UsageError, buildOps, liveDoctorOptions, readFlags } from "../ops";
+import { type OpsDeps, UsageError, buildOps, liveDoctorOptions, readFlags, readStdinLine } from "../ops";
 import { stderr, stdout } from "./tick";
 
-const USAGE = "usage: wingmate install [--enable] [--client-id <id> --client-secret <secret>] [--json]";
+const USAGE = [
+  "usage: wingmate install [--enable] [--client-id <id> --client-secret -] [--json]",
+  "  --client-secret - reads the OAuth client secret from one line of stdin; never put the secret itself on the command line",
+].join("\n");
+/** C31: a literal secret still works, but `ps` and the shell history show every argument. The secret itself is never printed. */
+const ARGV_SECRET_WARNING =
+  "warning: a client secret given on the command line is visible in ps and in the shell history; pass --client-secret - and give it on stdin";
 export interface InstallCommandDeps extends OpsDeps {
   install?: typeof install;
+  /** C31: what `--client-secret -` reads its one line from (default: this process's stdin). */
+  stdin?: AsyncIterable<Uint8Array | string>;
 }
 
 function print(r: InstallResult, out: (l: string) => void, cfg: Parameters<typeof viewRecipe>[0]): void {
@@ -49,11 +58,19 @@ export async function installCommand(argv: Argv, deps: InstallCommandDeps = {}):
     return 2;
   }
   const clientId = flags.value.get("client-id");
-  const clientSecret = flags.value.get("client-secret");
-  if ((clientId === undefined) !== (clientSecret === undefined)) {
+  const given = flags.value.get("client-secret");
+  if ((clientId === undefined) !== (given === undefined)) {
     err(`${USAGE}\n--client-id and --client-secret go together`);
     return 2;
   }
+  let clientSecret = given;
+  if (given === "-") {
+    clientSecret = (await readStdinLine(deps.stdin)).trim();
+    if (!clientSecret) {
+      err(`${USAGE}\n--client-secret -: stdin gave no secret (one line expected)`);
+      return 2;
+    }
+  } else if (given !== undefined) err(ARGV_SECRET_WARNING);
   const ctx = await buildOps(deps, { readOnly: false, linearOptional: true });
   const graphql = ctx.graphql;
   try {

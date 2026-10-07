@@ -3,6 +3,7 @@
 import type { Ctx } from "../machine/context";
 import type { DoctorOptions } from "../ops/doctor";
 import type { GraphQLLike } from "../ops/views";
+import { WingmateError } from "../shared/errors";
 import { VERSION } from "../shared/version";
 import type { Argv } from "./index";
 import { type RealCtxOptions, buildRealCtx } from "./wire";
@@ -46,6 +47,28 @@ export function readFlags(
     } else throw new UsageError(usage);
   }
   return { bool, value };
+}
+
+/** A first line longer than this is not a secret someone typed or pasted; reading stops there. */
+const STDIN_LINE_MAX = 4096;
+
+/**
+ * C31: the first line of stdin without its line ending — how a secret reaches a command without standing on its command line, where
+ * `ps` and the shell history show it. EOF ends the line too; no input at all is "".
+ */
+export async function readStdinLine(
+  input: AsyncIterable<Uint8Array | string> = process.stdin,
+): Promise<string> {
+  const decoder = new TextDecoder();
+  let text = "";
+  for await (const chunk of input) {
+    text += typeof chunk === "string" ? chunk : decoder.decode(chunk, { stream: true });
+    const nl = text.indexOf("\n");
+    if (nl >= 0) return text.slice(0, nl).replace(/\r$/, "");
+    if (text.length > STDIN_LINE_MAX)
+      throw new WingmateError("usage", `the first line of stdin is longer than ${STDIN_LINE_MAX} characters`);
+  }
+  return `${text}${decoder.decode()}`.replace(/\r$/, "");
 }
 
 /** The doctor a live command runs: probes on, this CLI's version, the app token minted when fewer than 24 h remain (§11.1). */

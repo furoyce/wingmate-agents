@@ -24,4 +24,19 @@ describe("loadConfig", () => {
     expect(comment).toContain("D14 extension");
     expect(comment).toContain("workers");
   });
+  test("C32: agents reach the JavaScript package registries (the pilots are JavaScript repos) and no GitHub host; the comment says more hosts are the owner's call", async () => {
+    const cfg = await loadConfig("config/projects.yaml");
+    expect(cfg.defaults.sandbox.allowedDomains).toEqual(["registry.npmjs.org", "registry.yarnpkg.com"]);
+    const every = [
+      ...cfg.defaults.sandbox.allowedDomains,
+      ...Object.values(cfg.projects).flatMap((p) =>
+        Object.values(p.repos).flatMap((r) => r.sandbox.allowedDomains),
+      ),
+    ];
+    for (const host of every) expect(host).not.toMatch(/github/i);
+    const yaml = await Bun.file("config/projects.yaml").text();
+    const comment = /((?:^[ \t]*#.*\n)+)[ \t]*sandbox:/m.exec(yaml)?.[1] ?? "";
+    expect(comment).toContain("owner");
+    expect(comment).toContain("GitHub");
+  });
 });

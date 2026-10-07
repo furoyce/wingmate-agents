@@ -4,6 +4,7 @@ import { basename } from "node:path";
 import { z } from "zod";
 import { type ProjectConfig, type RepoConfig, repoFor } from "../config/schema";
 import { qualifiedBase } from "../git/refname";
+import { githubUrl, remoteBranch } from "../git/remote";
 import { discoverGitLinks } from "../git/trust";
 import { pointerBrief } from "../kit/brief";
 import { installKit } from "../kit/install";
@@ -12,7 +13,7 @@ import { agentEnv, coordinatorArgv, launchCommand } from "../kit/settings";
 import { MARK } from "../linear/markers";
 import { resolveTier } from "../policy/providers";
 import { capMinFor } from "../policy/timers";
-import type { GitTarget, LinearIssue } from "../ports";
+import type { GitPort, GitTarget, LinearIssue } from "../ports";
 import { WingmateError, errorCode, errorText } from "../shared/errors";
 import { run } from "../shared/exec";
 import { newUlid, newUuid } from "../shared/ids";
@@ -148,13 +149,78 @@ async function recordedGitDirs(
   return null;
 }
 
+/** C30's verdict on the claim's base: GitHub's commit, verified here; or why the local base ref is not that commit. */
+export type BaseCheck =
+  | { ok: true; sha: string; fetched: boolean }
+  | { ok: false; remote: string | null; local: string | null; fetched: boolean; detail: string };
+/** Twelve characters of a commit name: a blocked comment's detail never carries a full digest. */
+const short = (sha: string | null) => (sha ? sha.slice(0, 12) : "unresolved");
+
+/**
+ * C30 (Ruling R29): the claim's base is the remote truth — `refs/heads/<base branch>` of the configured GitHub URL (`git ls-remote`),
+ * that commit fetched from the same URL when this repository lacks it — and the local qualified base ref must resolve to exactly it.
+ * An agent's sandbox may rewrite the shared git dir's `packed-refs`, so a local `origin/main` alone can name a commit an agent made;
+ * a clone that has not fetched since GitHub's base moved mismatches too (fail closed). The detail becomes the blocked comment's.
+ */
+export async function verifyBase(
+  git: GitPort,
+  t: GitTarget,
+  repo: Pick<RepoConfig, "github" | "base">,
+): Promise<BaseCheck> {
+  const url = githubUrl(repo);
+  const branch = remoteBranch(repo.base);
+  const base = qualifiedBase(repo.base);
+  const remote = await git.lsRemoteSha(t, url, branch);
+  if (remote === null) {
+    const detail = `GitHub has no branch ${branch} in ${repo.github}, so the base ${base} cannot be verified`;
+    return { ok: false, remote, local: null, fetched: false, detail };
+  }
+  const fetched = await git.fetchCommit(t, url, remote);
+  const local = await git.revParse(t, base).catch((e: unknown) => {
+    if (errorCode(e) === "git_dir_tampered") throw e; // moved since they were read: the claim step fails and replays
+    return null;
+  });
+  if (local === remote) return { ok: true, sha: remote, fetched };
+  const detail =
+    local === null
+      ? `${base} does not resolve here; GitHub's ${branch} is at ${short(remote)}`
+      : `${base} resolves to ${short(local)} here, but GitHub's ${branch} is at ${short(remote)}`;
+  return { ok: false, remote, local, fetched, detail };
+}
+
+/**
+ * C30: blocked as a failed setup is (§5.4 step 4) — attention and a ledger event naming both commits, then the Blocked label and comment,
+ * the claim entry abandoned. Nothing ran in the worktree: no kit, no setup, no terminal.
+ */
+async function baseMismatch(
+  ctx: Ctx,
+  r: WRecord,
+  issue: LinearIssue,
+  entryId: string,
+  repo: RepoConfig,
+  check: Extract<BaseCheck, { ok: false }>,
+  created: boolean,
+): Promise<void> {
+  const base = qualifiedBase(repo.base);
+  const branch = remoteBranch(repo.base);
+  const { remote, local } = check;
+  ctx.log.warn({ issue: r.identifier, base, remote, local }, "claim refused: the local base is not GitHub's");
+  addAttention(r, "base_mismatch");
+  const data = { base, branch, remote, local, created };
+  await ctx.ledger.append({ at: ctx.now(), issue: r.identifier, type: "base_mismatch", data });
+  const packed = `${r.worktree?.gitCommonDir ?? "the repository's .git"}/packed-refs`;
+  const next = `run \`git fetch origin\` in the repository's main checkout and check that ${base} then names GitHub's ${branch} (if it still does not, an agent may have rewritten ${packed}: inspect it)${created ? "; remove the worktree this claim created from the local base" : ""}; then move the issue back to Todo to re-queue it`;
+  await block(ctx, r, issue, "base_mismatch", check.detail, next);
+  await ctx.journal.abandon(entryId, "base_mismatch");
+}
+
 /**
  * §5.4 step 3: the issue worktree — the one already linked to the issue when it exists (a previous cycle, or a crash after
  * `worktree create`), else a new one. C22: its git dirs come from its own gitfile and commondir, accepted only in a linked
  * worktree's layout and, for a reused worktree, only as an earlier cycle recorded them; the agent's sandbox grants and denies are
- * spelled from them, so a mismatch blocks the issue (`kit_tampered`) before any git runs there. F7: `baseSha` is read from the base's
- * full ref, and a worktree this claim created must start at it (Orca's `head`), else `kit_tampered` before kit, setup or launch.
- * False when it blocked.
+ * spelled from them, so a mismatch blocks the issue (`kit_tampered`) before any git runs there. C30: `baseSha` is GitHub's base commit,
+ * and the local base ref (F7: its full ref) must name it, else `base_mismatch`; F7: a worktree this claim created must start at that
+ * commit (Orca's `head`), else `kit_tampered` — both before kit, setup or launch. False when it blocked.
  */
 async function provisionWorktree(
   ctx: Ctx,
@@ -189,26 +255,26 @@ async function provisionWorktree(
     await block(ctx, r, issue, "kit_tampered", detail, next);
     return false;
   }
-  // F7: the full ref, never the short name git would disambiguate across the shared git dir's ref namespaces
-  const base = qualifiedBase(repo.base);
-  const resolved = await ctx.git.revParse(t, base).catch((e: unknown) => {
-    if (errorCode(e) === "git_dir_tampered") throw e; // moved since they were read: the claim step fails and replays
-    ctx.log.warn({ issue: r.identifier, base, err: errorText(e) }, "base ref unresolved");
-    return null;
-  });
+  // C30: GitHub's base commit (ls-remote of the configured URL), which the local base ref — F7: its full ref, never the short name git
+  // would disambiguate across the shared git dir's ref namespaces — must name
+  const check = await verifyBase(ctx.git, t, repo);
   r.worktree = {
     id: created.id,
     path: shown.path,
     branch: shown.branch.replace(/^refs\/heads\//, ""),
-    baseSha: resolved ?? shown.head,
+    baseSha: check.ok ? check.sha : (check.remote ?? check.local ?? shown.head),
     gitCommonDir: t.commonDir,
     gitdirName: basename(t.gitDir),
   };
-  if (!existing && (resolved === null || shown.head !== resolved)) {
-    // F7: a worktree this claim created must start at the base commit — its setup runs outside the sandbox on the premise that it
-    // holds nothing an agent made (C27). Short commit names only: the detail is the blocked comment's.
-    const short = (sha: string | null) => (sha ? sha.slice(0, 12) : "unresolved");
-    const detail = `the new worktree starts at ${short(shown.head)}, not at ${base} (${short(resolved)}): a ref in the repository's shared git dir may stand in for the base`;
+  if (!check.ok) {
+    await baseMismatch(ctx, r, issue, entryId, repo, check, !existing);
+    return false;
+  }
+  if (!existing && shown.head !== check.sha) {
+    // F7: a worktree this claim created must start at the verified base commit — its setup runs outside the sandbox on the premise
+    // that it holds nothing an agent made (C27). Short commit names only: the detail is the blocked comment's.
+    const base = qualifiedBase(repo.base);
+    const detail = `the new worktree starts at ${short(shown.head)}, not at ${base} (${short(check.sha)}): a ref in the repository's shared git dir may stand in for the base`;
     const next =
       "inspect the refs under the repository's .git named like the base (tags, heads, refs/), remove this worktree, then move the issue back to Todo to re-queue it";
     await block(ctx, r, issue, "kit_tampered", detail, next);

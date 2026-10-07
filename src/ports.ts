@@ -247,11 +247,20 @@ export interface GitPort {
   push(t: GitTarget, url: string, branch: string, sha: string): Promise<void>;
   /** The commit `refs/heads/<branch>` points at on `url`, or null when that branch is not there. */
   lsRemoteSha(t: GitTarget, url: string, branch: string): Promise<string | null>;
+  /**
+   * C30: the commit `sha` present in this repository — nothing when it is here already, else exactly that object fetched from `url`
+   * (the configured GitHub URL): no ref moves, no FETCH_HEAD, no tags, no submodules, no maintenance. True when it fetched.
+   */
+  fetchCommit(t: GitTarget, url: string, sha: string): Promise<boolean>;
 }
+/**
+ * C29: `repo` is the configured `repos.<name>.github`. gh is told the repository (`--repo`) and runs outside every worktree, so it never
+ * resolves the repository — or runs git — through a worktree's agent-writable links.
+ */
 export interface GhPort {
   prCreate(
-    cwd: string,
+    repo: string,
     a: { head: string; base: string; title: string; body: string; draft: boolean },
   ): Promise<{ number: number; url: string }>;
-  prView(cwd: string, number: number): Promise<{ state: string; headRefName: string; url: string }>;
+  prView(repo: string, number: number): Promise<{ state: string; headRefName: string; url: string }>;
 }

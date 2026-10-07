@@ -17,7 +17,8 @@ export type GitAt = GitTarget | string;
 const OBJECT_NAME = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 
 /**
- * D14: the environment of every git process the dispatcher starts in a worktree, directly or through gh. Its config has command scope,
+ * D14: the environment of every git process the dispatcher starts, directly or through gh (C29: gh runs outside every worktree, so its
+ * own git calls find no repository; this stays as a second layer). Its config has command scope,
  * above the repository's own, so no hook and no fsmonitor command runs with the owner's credentials: a relative `core.hooksPath`
  * (husky's `.husky/_`) resolves inside the agent-writable worktree, where an ignored hook is seen by neither git status, the path
  * guard nor the secret scan. Never prompts.
@@ -216,5 +217,26 @@ export class GitCli implements GitPort {
       if (ref?.trim() === `refs/heads/${branch}` && OBJECT_NAME.test(s)) return s;
     }
     return null;
+  }
+  /**
+   * C30: the commit `sha`, by its object name, from the configured URL into this repository's object store — only when it is missing.
+   * Nothing else changes: no ref (no refspec destination), no FETCH_HEAD, no tags, no submodules, no auto-maintenance.
+   */
+  async fetchCommit(t: GitTarget, url: string, sha: string): Promise<boolean> {
+    if (!OBJECT_NAME.test(sha))
+      throw new WingmateError("sha_invalid", "git fetch: the commit to fetch is not a full object name");
+    assertRemote(url);
+    if (await this.hasCommit(t, sha)) return false;
+    const fetch = [
+      "fetch",
+      "--no-tags",
+      "--no-write-fetch-head",
+      "--no-auto-maintenance",
+      "--no-recurse-submodules",
+    ];
+    await this.g(t, [...fetch, url, sha], 180_000);
+    if (!(await this.hasCommit(t, sha)))
+      throw new WingmateError("git_failed", "git fetch: the commit is still missing after the fetch");
+    return true;
   }
 }

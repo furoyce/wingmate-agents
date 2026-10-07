@@ -1,6 +1,6 @@
 // tests/sim/gittrust.test.ts — Ruling R28 (Task 12 phase 0) through whole ticks: the worktree's git links at claim and in the
 // per-tick integrity check (C22), the repo setup only in a worktree the claim created (C27), and the allow-deps grant in the kit's
-// launch.json (C28); every runTick also asserts I1–I10.
+// launch.json (C28); Ruling R29's claim base read from GitHub (C30); every runTick also asserts I1–I10.
 import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -99,21 +99,24 @@ describe("C22: the worktree's git links (§13.3 d)", () => {
   });
 });
 
+/** The api repo's setup leaves a trace on disk when it runs (it runs outside the sandbox). */
+function tracedSetup(w: World): string {
+  const runs = join(w.root, "setup-runs.txt");
+  const api = w.cfg.projects.bouncr?.repos.api;
+  if (!api) throw new Error("api repo missing");
+  api.setup = ["sh", "-c", `echo ran >> ${runs}`];
+  return runs;
+}
+const blockedComment = (w: World) =>
+  w.linear.comments.find((c) => c.body.startsWith("<!-- wingmate:blocked -->"))?.body ?? "";
+
 describe("F7: the claim's base is the fully qualified ref, and a worktree this claim created must start at it", () => {
-  /** The api repo's setup leaves a trace on disk when it runs (it runs outside the sandbox). */
-  function tracedSetup(w: World): string {
-    const runs = join(w.root, "setup-runs.txt");
-    const api = w.cfg.projects.bouncr?.repos.api;
-    if (!api) throw new Error("api repo missing");
-    api.setup = ["sh", "-c", `echo ran >> ${runs}`];
-    return runs;
-  }
-  async function blockedAtClaim(w: World): Promise<WRecord> {
+  async function blockedAtClaim(w: World, cause = "kit_tampered"): Promise<WRecord> {
     labeledByOwner(w, todo("i1", "JRF-501"));
     expect((await runTick(w)).claims).toEqual(["JRF-501"]);
     const r = await rec(w);
     expect(r.stage).toBe("blocked");
-    expect(r.history.at(-1)?.cause).toBe("kit_tampered");
+    expect(r.history.at(-1)?.cause).toBe(cause);
     return r;
   }
 
@@ -147,7 +150,7 @@ describe("F7: the claim's base is the fully qualified ref, and a worktree this c
     expect(comment).not.toContain("0123456789abcdef0123456789abcdef01234567"); // short commit names only
   });
 
-  test("a base that does not resolve on a new worktree blocks the same way: its start cannot be verified", async () => {
+  test("a base that does not resolve on a new worktree blocks the same way: its start cannot be verified (C30: base_mismatch, the local ref names no commit GitHub has)", async () => {
     const w = await world();
     const runs = tracedSetup(w);
     const revParse = w.git.revParse.bind(w.git);
@@ -155,7 +158,7 @@ describe("F7: the claim's base is the fully qualified ref, and a worktree this c
       if (ref !== "HEAD") throw new Error("git rev-parse failed (128): fatal: Needed a single revision");
       return revParse(at, ref);
     };
-    await blockedAtClaim(w);
+    await blockedAtClaim(w, "base_mismatch");
     expect(await ledgerOf(w, "kit_installed")).toEqual([]);
     expect(() => readFileSync(runs, "utf8")).toThrow();
     expect(terminalCreates(w)).toBe(0);
@@ -169,6 +172,87 @@ describe("F7: the claim's base is the fully qualified ref, and a worktree this c
     advance(w, 5);
     expect((await runTick(w)).claims).toEqual(["JRF-501"]);
     expect(await rec(w)).toMatchObject({ cycle: 2, stage: "working" });
+  });
+});
+
+describe("C30: the claim's base is GitHub's — the local origin/main must name the commit ls-remote reads (Ruling R29)", () => {
+  /** The configured URL of the bouncr api repo (`https://github.com/<repos.api.github>.git`). */
+  const URL = "https://github.com/furoyce/bouncr.lol.git";
+  /** GitHub's main in the mismatch tests; the local origin/main resolves to `basesha` (an agent may rewrite packed-refs). */
+  const GITHUB_MAIN = "0123456789abcdef0123456789abcdef01234567";
+
+  test("the base is read from GitHub — ls-remote of the configured URL for main — and becomes the worktree's baseSha", async () => {
+    const w = await world();
+    const r = await claimed(w);
+    expect(w.git.remoteReads[0]).toEqual({ url: URL, branch: "main" });
+    expect(wtOf(r).baseSha).toBe("basesha");
+    expect(r.attention).not.toContain("base_mismatch");
+    expect(w.git.fetched).toEqual([]); // the commit is here: nothing to fetch
+  });
+
+  test("a local origin/main naming another commit than GitHub's main blocks base_mismatch before the kit, the setup or a terminal: attention, ledger, journal abandoned, short commit names only", async () => {
+    const w = await world();
+    const runs = tracedSetup(w);
+    w.git.remoteSha.set("main", GITHUB_MAIN);
+    labeledByOwner(w, todo("i1", "JRF-501"));
+    expect((await runTick(w)).claims).toEqual(["JRF-501"]);
+    const r = await rec(w);
+    expect(r.stage).toBe("blocked");
+    expect(r.history.at(-1)?.cause).toBe("base_mismatch");
+    expect(r.attention).toContain("base_mismatch");
+    expect(r.worktree?.id).toBeTruthy(); // recorded, so the blocked comment names it and stop/release cover it
+    expect((await ledgerOf(w, "base_mismatch")).map((e) => e.data)).toEqual([
+      {
+        base: "refs/remotes/origin/main",
+        branch: "main",
+        remote: GITHUB_MAIN,
+        local: "basesha",
+        created: true,
+      },
+    ]);
+    expect(await ledgerOf(w, "kit_installed")).toEqual([]);
+    expect(() => readFileSync(runs, "utf8")).toThrow();
+    expect(terminalCreates(w)).toBe(0);
+    expect(labels(w)).toContain("Blocked");
+    expect(blockedComment(w)).toContain("refs/remotes/origin/main");
+    expect(blockedComment(w)).toContain(GITHUB_MAIN.slice(0, 12));
+    expect(blockedComment(w)).not.toContain(GITHUB_MAIN);
+    expect((await w.ctx.journal.all()).find((e) => e.kind === "claim")?.state).toBe("abandoned");
+  });
+
+  test("a commit this repository lacks is fetched from the configured URL before the comparison; the claim then goes on", async () => {
+    const w = await world();
+    w.git.missing.add("basesha"); // the ref names GitHub's commit, whose object is not here yet
+    const r = await claimed(w);
+    expect(w.git.fetched).toEqual([{ url: URL, sha: "basesha" }]);
+    expect(r.stage).toBe("working");
+    expect(wtOf(r).baseSha).toBe("basesha");
+  });
+
+  test("a re-claim that reuses the worktree checks the base too: an origin/main that no longer names GitHub's main blocks base_mismatch", async () => {
+    const w = await world();
+    const r = await claimed(w);
+    await released(w, r);
+    w.git.remoteSha.set("main", GITHUB_MAIN);
+    advance(w, 5);
+    expect((await runTick(w)).claims).toEqual(["JRF-501"]);
+    const again = await rec(w);
+    expect(again).toMatchObject({ cycle: 2, stage: "blocked" });
+    expect(again.history.at(-1)?.cause).toBe("base_mismatch");
+    expect(again.worktree?.id).toBe(wtOf(r).id);
+    expect(terminalCreates(w)).toBe(1); // cycle 1's only
+    expect((await ledgerOf(w, "base_mismatch")).at(-1)?.data.created).toBe(false);
+  });
+
+  test("a base branch GitHub does not have blocks base_mismatch: the base cannot be verified", async () => {
+    const w = await world();
+    w.git.remoteSha.delete("main");
+    labeledByOwner(w, todo("i1", "JRF-501"));
+    expect((await runTick(w)).claims).toEqual(["JRF-501"]);
+    const r = await rec(w);
+    expect(r.history.at(-1)?.cause).toBe("base_mismatch");
+    expect(blockedComment(w)).toContain("furoyce/bouncr.lol");
+    expect(terminalCreates(w)).toBe(0);
   });
 });
 

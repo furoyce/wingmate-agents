@@ -390,7 +390,8 @@ describe("GitCli", () => {
     await g.historyChanges("/w", sha, sha);
     await g.push(t, URL, "furoyce/wm-jrf-1", sha);
     await g.lsRemoteSha(t, URL, "furoyce/wm-jrf-1");
-    expect(seen.length).toBeGreaterThanOrEqual(10);
+    await g.fetchCommit(t, URL, sha);
+    expect(seen.length).toBeGreaterThanOrEqual(11);
     expect(seen.some((s) => s.argv.includes("push"))).toBe(true);
     for (const { argv, env } of seen) {
       const config = Object.fromEntries(
@@ -497,9 +498,80 @@ describe("GitCli", () => {
     const odd: Runner = async () => ok("--output=/tmp/x\trefs/heads/wm-jrf-1\n");
     expect(await new GitCli(odd).lsRemoteSha(t, URL, "wm-jrf-1")).toBeNull();
   });
+  test("C30: fetchCommit fetches exactly the missing commit from the configured URL — no ref, no FETCH_HEAD, no tags, no submodules, no maintenance — and nothing when the commit is here", async () => {
+    const { t } = await linkedTarget();
+    const sha = "c".repeat(40);
+    const calls: { argv: string[]; env: Record<string, string> }[] = [];
+    let present = false;
+    const runner: Runner = async (argv, opts) => {
+      calls.push({ argv, env: opts?.env ?? {} });
+      if (argv.includes("fetch")) present = true;
+      if (argv.includes("rev-parse")) return present ? ok(`${sha}\n`) : { ...ok(""), code: 1 };
+      return ok("");
+    };
+    const g = new GitCli(runner);
+    expect(await g.fetchCommit(t, URL, sha)).toBe(true);
+    expect(calls.map((c) => c.argv)).toEqual([
+      [...pinned(t), "rev-parse", "--verify", "--quiet", `${sha}^{commit}`],
+      [
+        ...pinned(t),
+        "fetch",
+        "--no-tags",
+        "--no-write-fetch-head",
+        "--no-auto-maintenance",
+        "--no-recurse-submodules",
+        URL,
+        sha,
+      ],
+      [...pinned(t), "rev-parse", "--verify", "--quiet", `${sha}^{commit}`],
+    ]);
+    expect(calls.map((c) => c.env.GIT_COMMON_DIR)).toEqual([t.commonDir, t.commonDir, t.commonDir]);
+    calls.length = 0;
+    expect(await g.fetchCommit(t, URL, sha)).toBe(false); // here now: nothing is fetched
+    expect(calls.map((c) => c.argv[5])).toEqual(["rev-parse"]);
+  });
+  test("C30: fetchCommit refuses a non-object name or a non-GitHub URL before any git process, and a commit still missing after the fetch", async () => {
+    const { t } = await linkedTarget();
+    let calls = 0;
+    const missing: Runner = async (argv) => {
+      calls += 1;
+      return argv.includes("rev-parse") ? { ...ok(""), code: 1 } : ok("");
+    };
+    const g = new GitCli(missing);
+    for (const bad of ["main", "--upload-pack=x", `+${"c".repeat(40)}`, "c".repeat(39)])
+      await expect(g.fetchCommit(t, URL, bad)).rejects.toMatchObject({ code: "sha_invalid" });
+    await expect(g.fetchCommit(t, "--upload-pack=x", "c".repeat(40))).rejects.toMatchObject({
+      code: "remote_mismatch",
+    });
+    expect(calls).toBe(0);
+    await expect(g.fetchCommit(t, URL, "c".repeat(40))).rejects.toMatchObject({ code: "git_failed" });
+  });
+  test("C30: fetchCommit against real git — the commit lands in the shared object store, no ref moves and no FETCH_HEAD is written", async () => {
+    const { dir, t } = await linkedTarget();
+    // the "GitHub" side: a bare repository one commit ahead, reached through the repository's own url.<…>.insteadOf (no network)
+    const remote = join(realpathSync(mkdtempSync(join(tmpdir(), "wm-gitcli-gh-"))), "gh.git");
+    await git(["clone", "-q", "--bare", dir, remote]);
+    const scratch = join(realpathSync(mkdtempSync(join(tmpdir(), "wm-gitcli-clone-"))), "c");
+    await git(["clone", "-q", remote, scratch]);
+    await git(["-C", scratch, ...ID, "commit", "-q", "--allow-empty", "-m", "on GitHub only"]);
+    await git(["-C", scratch, "push", "-q", "origin", "main"]);
+    const tip = (await git(["--git-dir", remote, "rev-parse", "main"])).trim();
+    await git(["-C", dir, "config", `url.${remote}.insteadOf`, URL]);
+    const refsBefore = await git(["-C", dir, "for-each-ref"]);
+    const hermetic: Runner = (argv, opts) => run(argv, { ...opts, env: { ...opts?.env, ...HERMETIC } });
+    const g = new GitCli(hermetic);
+    expect(await g.fetchCommit(t, URL, tip)).toBe(true);
+    expect((await git(["-C", dir, "cat-file", "-t", tip])).trim()).toBe("commit");
+    expect(await git(["-C", dir, "for-each-ref"])).toBe(refsBefore);
+    for (const d of [t.gitDir, t.commonDir])
+      expect(await Bun.file(join(d, "FETCH_HEAD")).exists()).toBe(false);
+    expect(await g.fetchCommit(t, URL, tip)).toBe(false);
+  });
 });
 
 describe("GhCli", () => {
+  /** `repos.<name>.github` of the bouncr api repo (C29: every gh call names it). */
+  const REPO = "furoyce/bouncr.lol";
   const args = { head: "wm-jrf-1", base: "main", title: "JRF-1: t", body: "b", draft: false };
   test("an open PR for the head is reused; no gh pr create follows", async () => {
     const calls: string[][] = [];
@@ -507,7 +579,7 @@ describe("GhCli", () => {
       calls.push(argv);
       return ok(JSON.stringify([{ number: 7, url: "https://github.com/furoyce/bouncr.lol/pull/7" }]));
     };
-    expect(await new GhCli(runner).prCreate("/w", args)).toEqual({
+    expect(await new GhCli(runner).prCreate(REPO, args)).toEqual({
       number: 7,
       url: "https://github.com/furoyce/bouncr.lol/pull/7",
     });
@@ -521,7 +593,7 @@ describe("GhCli", () => {
         ? ok("[]")
         : ok("Creating pull request\nhttps://github.com/furoyce/bouncr.lol/pull/12\n");
     };
-    expect(await new GhCli(runner).prCreate("/w", { ...args, draft: true })).toEqual({
+    expect(await new GhCli(runner).prCreate(REPO, { ...args, draft: true })).toEqual({
       number: 12,
       url: "https://github.com/furoyce/bouncr.lol/pull/12",
     });
@@ -533,9 +605,9 @@ describe("GhCli", () => {
   });
   test("a create without a PR URL in its output is an error", async () => {
     const runner: Runner = async (argv) => ok(argv[2] === "list" ? "[]" : "done\n");
-    await expect(new GhCli(runner).prCreate("/w", args)).rejects.toThrow(/no PR url/);
+    await expect(new GhCli(runner).prCreate(REPO, args)).rejects.toThrow(/no PR url/);
   });
-  test("F2 (D14): gh runs in the worktree with hooks and fsmonitor off for the git processes it starts there", async () => {
+  test("F2 (D14): the git processes gh starts run no hook and no fsmonitor", async () => {
     const envs: Record<string, string>[] = [];
     const runner: Runner = async (argv, opts) => {
       envs.push(opts?.env ?? {});
@@ -547,8 +619,8 @@ describe("GhCli", () => {
       return ok("https://github.com/furoyce/bouncr.lol/pull/12\n");
     };
     const gh = new GhCli(runner);
-    await gh.prCreate("/w", args);
-    await gh.prView("/w", 3);
+    await gh.prCreate(REPO, args);
+    await gh.prView(REPO, 3);
     expect(envs).toHaveLength(3);
     for (const env of envs)
       expect(env).toMatchObject({
@@ -559,11 +631,76 @@ describe("GhCli", () => {
         GIT_CONFIG_VALUE_1: "false",
       });
   });
+  test("C29: every gh call names the configured repository (--repo <owner/name>) and runs outside any worktree, so gh never resolves the repository (or runs git) through a worktree's links", async () => {
+    const calls: { argv: string[]; cwd: string | undefined }[] = [];
+    const runner: Runner = async (argv, opts) => {
+      calls.push({ argv, cwd: opts?.cwd });
+      if (argv[2] === "list") return ok("[]");
+      if (argv[2] === "view")
+        return ok(
+          JSON.stringify({ state: "OPEN", headRefName: "wm-jrf-1", url: "https://github.com/a/b/pull/3" }),
+        );
+      return ok("https://github.com/furoyce/bouncr.lol/pull/12\n");
+    };
+    const gh = new GhCli(runner);
+    await gh.prCreate(REPO, { ...args, draft: true });
+    await gh.prView(REPO, 3);
+    const bodyFile = calls[1]?.argv[calls[1].argv.indexOf("--body-file") + 1] ?? "";
+    expect(calls.map((c) => c.argv)).toEqual([
+      [
+        "gh",
+        "pr",
+        "list",
+        "--repo",
+        REPO,
+        "--head",
+        "wm-jrf-1",
+        "--state",
+        "open",
+        "--json",
+        "number,url",
+        "--limit",
+        "1",
+      ],
+      [
+        "gh",
+        "pr",
+        "create",
+        "--repo",
+        REPO,
+        "--head",
+        "wm-jrf-1",
+        "--base",
+        "main",
+        "--title",
+        "JRF-1: t",
+        "--body-file",
+        bodyFile,
+        "--draft",
+      ],
+      ["gh", "pr", "view", "3", "--repo", REPO, "--json", "state,headRefName,url"],
+    ]);
+    // `/`: no repository there for gh's own git calls (remotes, status) to find, and no agent can write one there
+    expect(calls.map((c) => c.cwd)).toEqual(["/", "/", "/"]);
+  });
+  test("C29: a repository that is not owner/name (an option, a path, a URL, empty) is refused before gh starts", async () => {
+    let calls = 0;
+    const runner: Runner = async () => {
+      calls += 1;
+      return ok("[]");
+    };
+    const gh = new GhCli(runner);
+    for (const bad of ["--repo=x/y", "-R", "a/b/c", "https://github.com/a/b", "", "a", "/w", "-x/y"]) {
+      await expect(gh.prCreate(bad, args)).rejects.toMatchObject({ code: "gh_repo_invalid" });
+      await expect(gh.prView(bad, 3)).rejects.toMatchObject({ code: "gh_repo_invalid" });
+    }
+    expect(calls).toBe(0);
+  });
   test("prView is Zod-parsed", async () => {
     const runner: Runner = async () =>
       ok(JSON.stringify({ state: "MERGED", headRefName: "wm-jrf-1", url: "https://github.com/a/b/pull/3" }));
-    expect((await new GhCli(runner).prView("/w", 3)).state).toBe("MERGED");
+    expect((await new GhCli(runner).prView(REPO, 3)).state).toBe("MERGED");
     const bad: Runner = async () => ok(JSON.stringify({ state: 1 }));
-    await expect(new GhCli(bad).prView("/w", 3)).rejects.toThrow();
+    await expect(new GhCli(bad).prView(REPO, 3)).rejects.toThrow();
   });
 });

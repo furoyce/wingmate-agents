@@ -4,6 +4,7 @@
 import { z } from "zod";
 import { type ProjectConfig, type RepoConfig, repoFor } from "../config/schema";
 import { isBranchName } from "../git/refname";
+import { githubUrl, remoteBranch } from "../git/remote";
 import { gitTarget } from "../git/trust";
 import type { Intent } from "../kit/intents";
 import { readNoFollow, worktreeFile } from "../kit/local";
@@ -72,8 +73,6 @@ const TITLE_MAX = 120;
 const FINDINGS_SHOWN = 50;
 const PrReceipt = z.object({ number: z.number().int().positive(), url: z.string().url() });
 type Pr = z.infer<typeof PrReceipt>;
-/** C23 (§13.3 d): the configured GitHub URL every push and remote read goes to — never the name `origin`. */
-const githubUrl = (repo: RepoConfig) => `https://github.com/${repo.github}.git`;
 /** C22, C26: refusals raised inside a git step that close it instead of counting a failed step (publish blocks or refuses). */
 const NOT_A_STEP_FAILURE = new Set(["git_dir_tampered", "push_rejected"]);
 
@@ -392,11 +391,14 @@ async function pushExact(ctx: Ctx, c: Cleared): Promise<void> {
     throw new WingmateError("push_unconfirmed", `${c.wt.branch}: origin does not show the pushed commit`);
 }
 
-/** `gh pr create --head <branch>`, reusing the branch's open PR (Appendix D `prCreate`; never `--web`, never a merge). */
+/**
+ * `gh pr create --head <branch>`, reusing the branch's open PR (Appendix D `prCreate`; never `--web`, never a merge), in the configured
+ * repository (C29: never one gh would resolve from the worktree's remotes).
+ */
 const openPr = (ctx: Ctx, c: Cleared): Promise<Pr> =>
-  ctx.gh.prCreate(c.wt.path, {
+  ctx.gh.prCreate(c.repo.github, {
     head: c.wt.branch,
-    base: c.repo.base.replace(/^origin\//, ""),
+    base: remoteBranch(c.repo.base),
     title: c.title,
     body: c.body,
     draft: c.draft,
