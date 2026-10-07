@@ -1,5 +1,6 @@
 // src/machine/outbox.ts — executes the intents the `issue` verbs wrote into the worktree (§6.3 step 2, §8.1), each re-validated
 // against the dispatcher's own record and Orca (§13.3 a), in order, with quarantine for files that can never execute.
+import { existsSync } from "node:fs";
 import { mkdir, open, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { type Intent, consumeIntent, outboxDirs, quarantineIntent, readIntentFiles } from "../kit/intents";
@@ -417,6 +418,8 @@ export async function executeOutbox(
     handoff: null,
   };
   if (!r.worktree) return res;
+  // F10: a worktree removed from disk has no outbox; skipping it lets liveness take the exited path (relaunch → worktree_gone)
+  if (!existsSync(r.worktree.path)) return res;
   const x: Run = { ctx, r, issue, rec, wt: r.worktree.path, res, w: new LinearWrites(ctx) };
   try {
     await drain(x, opts);

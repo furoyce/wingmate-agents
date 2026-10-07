@@ -292,6 +292,37 @@ describe("integrity (§6.3 step 6) and integrity_unverifiable (Task 9 carry-over
     expect(blocked.at(-1)?.body).toContain(r.worktree?.branch ?? "?");
   });
 
+  test("F10: a working issue whose worktree was removed takes the exited path (relaunch, handoff, block) with no tick error and nothing re-created", async () => {
+    const w = await world();
+    const r = await claimed(w);
+    const wt = r.worktree;
+    if (!wt) throw new Error("no worktree");
+    rmSync(wt.path, { recursive: true, force: true });
+    w.orca.killTerminal(wt.id, r.coordinator.terminalHandle ?? "");
+    const stages: string[] = [];
+    for (let i = 0; i < 6 && (await rec(w)).stage !== "blocked"; i++) {
+      advance(w, 5);
+      const s = await runTick(w); // no tick_error (the outbox step is skipped, never thrown), every invariant
+      if (i === 0) expect(s.relaunches).toEqual(["JRF-501"]);
+      const cur = await rec(w);
+      expect(cur.attention).toContain("worktree_gone");
+      stages.push(`${cur.stage}/${cur.provider}`);
+    }
+    // relaunch (exited, worktree_gone) → handoff to codex → its relaunch (worktree_gone) → handoff refused: blocked
+    expect(stages).toEqual(["working/claude", "claimed/codex", "claimed/codex", "blocked/codex"]);
+    const after = await rec(w);
+    expect(after.history.map((h) => h.cause).slice(-2)).toEqual(["handoff", "cascade_exhausted"]);
+    expect(existsSync(wt.path)).toBe(false); // Wingmate never re-creates a removed worktree
+    expect(w.orca.calls.filter((c) => c.verb === "terminalCreate")).toHaveLength(1); // the claim's only
+    expect(w.orca.calls.filter((c) => c.verb === "worktreeCreate")).toHaveLength(1);
+    expect(
+      (await w.ctx.ledger.readIssue("JRF-501")).filter(
+        (e) => e.type === "tick_error" || e.type === "outbox_unsafe",
+      ),
+    ).toEqual([]);
+    expect(w.linear.comments.filter((c) => c.body.startsWith("<!-- wingmate:blocked -->"))).toHaveLength(1);
+  });
+
   test("a working worktree whose git status fails gets attention integrity_unverifiable and is not blocked", async () => {
     const w = await world();
     const r = await claimed(w);

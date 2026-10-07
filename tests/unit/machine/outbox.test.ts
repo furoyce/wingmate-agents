@@ -1,6 +1,14 @@
 // tests/unit/machine/outbox.test.ts — intent execution: quarantine, re-validation, agent-named files, the local mirror, R1
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { writeIntent } from "../../../src/kit/intents";
 import { claimIssue } from "../../../src/machine/claim";
@@ -189,6 +197,24 @@ describe("executeOutbox: F7 — an agent-planted symlink never redirects an outb
     expect(readdirSync(kit).sort()).toEqual(listing);
     expect(r.attention).toContain("outbox_unsafe");
     expect(outbox(wt)).toHaveLength(1);
+  });
+
+  test("F10: a worktree removed from disk is skipped — nothing thrown, executed or re-created, the record left as it was", async () => {
+    const { w, wt } = await claimed();
+    rmSync(wt, { recursive: true, force: true });
+    const { r, res } = await drain(w);
+    expect(res).toEqual({
+      executed: 0,
+      failed: 0,
+      quarantined: 0,
+      parked: false,
+      finished: false,
+      handoff: null,
+    });
+    expect(existsSync(wt)).toBe(false);
+    expect(r.attention).not.toContain("outbox_unsafe");
+    expect(await readRecord(w.dirs, ID)).toEqual(r); // no write: liveness owns what happens next
+    expect(w.linear.writes.filter((x) => x.kind === "commentUpdate")).toEqual([]);
   });
 });
 
