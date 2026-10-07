@@ -605,8 +605,14 @@ These are the D14 residuals: places where the agent trust boundary is weaker tha
   read-only verifier or reviewer. `coordinatorCascade` and `workers` stay `[claude]` until you accept the D14 extension.
 - **Agent settings are pinned at launch.** A running Claude session keeps the sandbox settings it started with. Deny
   entries for sibling worktrees created later reach it only at its next launch or relaunch.
-- **Orca may be reachable from the sandbox.** If `doctor` reports `orca_from_sandbox` reachable, an agent can start
-  processes outside its sandbox through Orca.
+- **Orca is not reachable from the sandbox, so role agents cannot start yet.** The `orca` CLI reads its runtime file
+  (the socket endpoint and an auth token) under `~/Library/Application Support/orca`, and the kit sandbox denies that
+  read; the live `doctor` of 2026-10-07 reports `orca_from_sandbox` unreachable. Inside an agent session,
+  `wingmate issue spawn`, `orca orchestration check` and `worker-list` therefore fail, and the plan verifier, the code
+  and security reviewers and graph workers never start. An issue stops at planVerify, retries, then asks you. Slice 2
+  moves spawn to the dispatcher (R36). Do not grant agents that file or socket: the token lets an agent start
+  processes outside its sandbox through Orca. If a later Orca or Claude Code makes `doctor` report it reachable, that
+  residual applies (D14).
 - **A `ui-smoke` page can reach the internet.** `ui-smoke` opens the agent's local dev server in Orca's embedded
   browser, which runs outside the agent sandbox with ordinary network access. Script in a page the agent wrote can send
   whatever the agent can read (source, ticket text) to any host, and the sandbox's network allowlist never sees it.
