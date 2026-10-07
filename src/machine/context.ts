@@ -3,7 +3,6 @@ import { join } from "node:path";
 import type { Config } from "../config/schema";
 import type { Intent } from "../kit/intents";
 import type { GhPort, GitPort, LinearIssue, LinearPort, LinearTeamMeta, OrcaPort } from "../ports";
-import { WingmateError } from "../shared/errors";
 import { run } from "../shared/exec";
 import { logger } from "../shared/logger";
 import type { Dirs } from "../shared/paths";
@@ -24,7 +23,10 @@ export interface Meta {
   lifecycleIds: Set<string>;
 }
 
-/** §13.3(d) publishing (Task 11 wires the real module; until then `publishImpl` refuses with `publish_not_wired`). */
+/**
+ * §13.3(d) publishing (`./publish`, loaded on first use): true once the PR is open and the issue is in review; false when the guards
+ * refused — nothing is pushed, and the record is either still working with the refusal's pointer delivered or blocked.
+ */
 export type PublishFn = (
   ctx: Ctx,
   r: WRecord,
@@ -155,14 +157,6 @@ export async function buildCtx(o: BuildCtxInput): Promise<Ctx> {
     kitDirFor: (identifier) => join(o.dirs.kit, identifier),
     toolchainPaths: o.toolchainPaths ?? (await defaultToolchainPaths(home)),
     sweep: o.sweep ?? ((paths, opts) => import("./sweep").then((m) => m.sweep(paths, opts))),
-    publishImpl:
-      o.publishImpl ??
-      (async () => {
-        throw new WingmateError(
-          "publish_not_wired",
-          "publishing arrives in Task 11",
-          "do not run finish yet",
-        );
-      }),
+    publishImpl: o.publishImpl ?? (() => import("./publish")),
   };
 }

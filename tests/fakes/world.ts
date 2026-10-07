@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { loadConfig } from "../../src/config/load";
 import { type Ctx, type PublishFn, buildCtx } from "../../src/machine/context";
 import { LinearWrites } from "../../src/machine/linearWrites";
+import { publish } from "../../src/machine/publish";
 import { transition } from "../../src/machine/states";
 import { homeDirs } from "../../src/shared/paths";
 import { FixedClock } from "../../src/shared/time";
@@ -12,7 +13,10 @@ import { FakeGh, FakeGit } from "./fakeGit";
 import { FakeLinear } from "./fakeLinear";
 import { FakeOrca } from "./fakeOrca";
 
-/** Publishing until Task 11: an open PR, `Review-Ready` + In Review through the journaled writes, then `review`. */
+/**
+ * A publish without guards, git or GitHub: an open PR, `Review-Ready` + In Review through the journaled writes, then `review`. The
+ * world publishes for real (Task 11); a test that is about something else may opt into this stub with `ctx.publishImpl`.
+ */
 export const stubPublish: PublishFn = async (ctx, r, issue) => {
   r.prs.push({
     repo: r.repo,
@@ -70,7 +74,7 @@ export async function makeWorld(startIso = "2026-10-06T10:00:00Z") {
       sweeps.push({ paths, spare: opts?.spare ?? null });
       return { killed: [] };
     },
-    publishImpl: async () => ({ publish: stubPublish }),
+    publishImpl: async () => ({ publish }),
   });
   return { root, clock, dirs, linear, orca, git, gh, cfg, ctx, swept, sweeps };
 }

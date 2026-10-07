@@ -1,4 +1,4 @@
-// tests/fakes/fakeGit.ts — in-memory GitPort/GhPort; push records the current HEAD and PR creation reuses an open PR per head (Ruling R2)
+// tests/fakes/fakeGit.ts — in-memory GitPort/GhPort; push records the commit it was given and PR creation reuses an open PR per head (Ruling R2)
 import { basename } from "node:path";
 import type { GhPort, GitPort } from "../../src/ports";
 
@@ -12,7 +12,7 @@ export class FakeGit implements GitPort {
   commonDirs = new Map<string, string>();
   gitDirs = new Map<string, string>();
 
-  async revParse(_cwd: string, ref: string) {
+  async revParse(_cwd: string, ref: string): Promise<string> {
     return ref === "HEAD" ? "headsha" : "basesha";
   }
   async commonDir(cwd: string) {
@@ -21,18 +21,19 @@ export class FakeGit implements GitPort {
   async gitDir(cwd: string) {
     return this.gitDirs.get(cwd) ?? `${cwd}/.git-common/worktrees/${basename(cwd)}`;
   }
-  async changedPaths(cwd: string) {
+  async changedPaths(cwd: string, _baseSha: string, _head?: string) {
     return this.changed.get(cwd) ?? [];
   }
-  async addedLines(cwd: string) {
+  async addedLines(cwd: string, _baseSha: string, _head?: string) {
     return this.added.get(cwd) ?? [];
   }
-  async commitsAhead(cwd: string) {
+  async commitsAhead(cwd: string, _baseSha: string, _head?: string) {
     return this.commits.get(cwd) ?? 0;
   }
-  async push(cwd: string, branch: string) {
+  /** As `git push <sha>:refs/heads/<branch>`: origin's branch then points at exactly the commit pushed. */
+  async push(cwd: string, branch: string, sha: string) {
     this.pushed.push(`${cwd}:${branch}`);
-    this.remoteSha.set(branch, await this.revParse(cwd, "HEAD"));
+    this.remoteSha.set(branch, sha);
   }
   async lsRemoteSha(_cwd: string, branch: string) {
     return this.remoteSha.get(branch) ?? null;

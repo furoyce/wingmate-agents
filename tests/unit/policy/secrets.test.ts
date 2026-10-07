@@ -27,6 +27,8 @@ describe("secrets", () => {
     ["openai key", "OPENAI_API_KEY=sk-proj-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789AbCdEfGh"],
     ["high entropy", "token: 9f8e7d6c5b4a39281706f5e4d3c2b1a0ffeeddccbbaa99887766554433221100"],
     ["high entropy base64", "SECRET_KEY = 'ZmJ4OXdhU1l0bU9QeW5kRWFMRTNHVm92U3dxbzFRS3dIU2hqSUZaNA=='"],
+    ["dotenv key without spaces (R18)", "SECRET_KEY=ABCDEF0123456789ABCDEF0123456789ABCD"],
+    ["dotenv secret without spaces (R18)", "API_SECRET=q7Zp3Lm9Xc2Vb8Nn4Qw6Er1Ty5Ui0Op7As"],
   ];
   for (const [name, text] of hits)
     test(`detects ${name}`, () => {
@@ -53,6 +55,9 @@ describe("secrets", () => {
     ["secret manager path", 'const secretPath = "/projects/my-project/secrets/db-password/versions/latest"'],
     ["keyof over a long constant", "type K = keyof typeof DEFAULT_CONFIGURATION_VALUES_MAP;"],
     ["screaming constant after a key word", "const key = DEFAULT_SIGNING_KEY_ROTATION_POLICY_V2;"],
+    ["dotenv screaming constant value", "SIGNING_KEY=DEFAULT_SIGNING_KEY_ROTATION_POLICY_V2"],
+    ["dotenv path value", "SECRET_PATH=projects/123456789012/secrets/database-password/versions/3"],
+    ["dotenv uuid value", "API_KEY_ID=550e8400-e29b-41d4-a716-446655440000"],
   ];
   for (const [name, text] of clean)
     test(`ignores ${name}`, () => {
@@ -73,6 +78,20 @@ describe("secrets", () => {
         "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U",
       ),
     ).toEqual([{ pattern: "jwt", excerpt: "eyJhbG…" }]);
+  });
+  test("R18: a dotenv NAME=value (or NAME:value) line is judged with its key context; the excerpt is the value's prefix", () => {
+    expect(scanText("SECRET_KEY=ABCDEF0123456789ABCDEF0123456789ABCD")).toEqual([
+      { pattern: "high_entropy", excerpt: "ABCDEF…" },
+    ]);
+    expect(scanText("API_SECRET=q7Zp3Lm9Xc2Vb8Nn4Qw6Er1Ty5Ui0Op7As")).toEqual([
+      { pattern: "high_entropy", excerpt: "q7Zp3L…" },
+    ]);
+    expect(scanText("API_SECRET:q7Zp3Lm9Xc2Vb8Nn4Qw6Er1Ty5Ui0Op7As")).toHaveLength(1);
+    expect(
+      scanAddedLines([
+        { path: "ci/deploy.yml", line: "      - SECRET_KEY=ABCDEF0123456789ABCDEF0123456789ABCD" },
+      ]),
+    ).toMatchObject([{ path: "ci/deploy.yml", pattern: "high_entropy" }]);
   });
   test("two different secrets on separate lines are both reported", () => {
     const f = scanText("A=AKIAIOSFODNN7EXAMPLE\nB=xoxb-123456789012-123456789012-AbCdEfGhIjKlMnOpQrStUvWx");

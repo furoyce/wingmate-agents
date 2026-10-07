@@ -197,10 +197,12 @@ export interface GitPort {
   commonDir(cwd: string): Promise<string>;
   /** `git rev-parse --absolute-git-dir`: a linked worktree's admin dir (its basename is the gitdir name; git de-duplicates them). */
   gitDir(cwd: string): Promise<string>;
-  changedPaths(cwd: string, baseSha: string): Promise<string[]>;
-  addedLines(cwd: string, baseSha: string): Promise<{ path: string; line: string }[]>;
-  commitsAhead(cwd: string, baseSha: string): Promise<number>;
-  push(cwd: string, branch: string): Promise<void>;
+  /** Paths changed from `baseSha` to `head` (default `HEAD`), both sides of a rename, deletions included (§13.3 d). */
+  changedPaths(cwd: string, baseSha: string, head?: string): Promise<string[]>;
+  addedLines(cwd: string, baseSha: string, head?: string): Promise<{ path: string; line: string }[]>;
+  commitsAhead(cwd: string, baseSha: string, head?: string): Promise<number>;
+  /** `git push -u origin <sha>:refs/heads/<branch>`: exactly the commit the publish guards cleared, never forced. */
+  push(cwd: string, branch: string, sha: string): Promise<void>;
   lsRemoteSha(cwd: string, branch: string): Promise<string | null>;
 }
 export interface GhPort {

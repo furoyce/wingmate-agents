@@ -207,13 +207,27 @@ async function replayClaim(a: Advance): Promise<StepOut> {
   return "stop";
 }
 
-/** §6.3 step 2; a `handoff` intent is performed here (one per tick, none in reconcile-only ticks — it stays pending otherwise). */
+/**
+ * §6.3 step 2; a `handoff` intent is performed here (one per tick, none in reconcile-only ticks — it stays pending otherwise). A
+ * `finish` waits likewise for a tick with a resume to spend: a refused publish points the coordinator at its finding in the same tick,
+ * and that counts as one of the tick's resumes (§8.1); a second refusal blocks the record instead.
+ */
 async function outbox(a: Advance): Promise<StepOut> {
   const { ctx, r } = a;
   if (!WORKING.has(r.stage) || !r.worktree) return "next";
-  const o = await executeOutbox(ctx, r, a.issue, a.rec, { canHandoff: !a.ro && a.budget.handoffs > 0 });
+  const o = await executeOutbox(ctx, r, a.issue, a.rec, {
+    canHandoff: !a.ro && a.budget.handoffs > 0,
+    canResume: !a.ro && a.budget.resumes > 0,
+  });
   if (o.parked) a.s.parked.push(r.identifier);
   if (o.finished) a.s.finished.push(r.identifier);
+  // the outbox refreshed the status comment already (an intent ran): neither case marks the record dirty
+  if (o.resumed) {
+    a.budget.resumes -= 1;
+    a.s.resumes.push(r.identifier);
+    a.launched = true; // liveness and timers are not judged on the snapshot from before the pointer went out
+  }
+  if (stageOf(r) === "blocked") a.s.blocked.push(r.identifier);
   if (o.handoff) {
     a.budget.handoffs -= 1;
     const reason = o.handoff.payload.reason.slice(0, 120);

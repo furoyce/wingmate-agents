@@ -78,6 +78,10 @@ export const renderBlocked = (b: {
 }): string =>
   `${MARK.blocked}\n**Wingmate blocked ${b.identifier}** — \`${b.reason}\`: ${b.detail}\n\nRetained: ${b.retained.length ? b.retained.join(", ") : "nothing"}.\n\nNext action for you: ${b.nextAction}`;
 
+/** §7.3: the completion comment and the PR body both carry this line. */
+export const REQUEST_CHANGES =
+  "To request changes: move this issue back to In Progress or reply in this Linear thread. Reviews left on GitHub or in Linear Reviews are not read in the pilot. To accept: approve and merge as usual; the GitHub integration moves the issue to Done.";
+
 export const renderCompletion = (c: {
   prs: { url: string; repo: string }[];
   summary: string;
@@ -85,7 +89,7 @@ export const renderCompletion = (c: {
   limitations: string[];
   followups: string[];
 }): string =>
-  `${MARK.completion}\n**Ready for review.** ${c.prs.map((p) => `[${p.repo} PR](${p.url})`).join(" · ")}\n\n${c.summary}\n\nGates: ${c.gates.map(([n, v]) => `${n} ${v}`).join(" · ")}\n${c.limitations.length ? `\nLimitations: ${c.limitations.join("; ")}\n` : ""}${c.followups.length ? `\nFollow-ups created: ${c.followups.join(", ")}\n` : ""}\n_To request changes: move this issue back to In Progress or reply in this Linear thread. Reviews left on GitHub or in Linear Reviews are not read in the pilot. To accept: approve and merge as usual; the GitHub integration moves the issue to Done._`;
+  `${MARK.completion}\n**Ready for review.** ${c.prs.map((p) => `[${p.repo} PR](${p.url})`).join(" · ")}\n\n${c.summary}\n\nGates: ${c.gates.map(([n, v]) => `${n} ${v}`).join(" · ")}\n${c.limitations.length ? `\nLimitations: ${c.limitations.join("; ")}\n` : ""}${c.followups.length ? `\nFollow-ups created: ${c.followups.join(", ")}\n` : ""}\n_${REQUEST_CHANGES}_`;
 
 export const renderHandoff = (h: {
   from: string;

@@ -241,6 +241,20 @@ export const O_READ_NOFOLLOW =
     ? constants.O_RDONLY | O_NOFOLLOW_ANY
     : constants.O_RDONLY | constants.O_NOFOLLOW;
 /**
+ * Reads up to `max` bytes of an agent-named file that `worktreeFile` accepted, refusing a symlink swapped in since — as the file
+ * (`O_NOFOLLOW`) or, on macOS, as any directory of its path (`O_NOFOLLOW_ANY`, F7).
+ */
+export async function readNoFollow(abs: string, max: number): Promise<Buffer> {
+  const fh = await open(abs, O_READ_NOFOLLOW);
+  try {
+    const buf = Buffer.alloc(max);
+    const { bytesRead } = await fh.read(buf, 0, max, 0);
+    return buf.subarray(0, bytesRead);
+  } finally {
+    await fh.close();
+  }
+}
+/**
  * C11: open(2) flags for creating a new file the same way — `O_CREAT | O_EXCL` never opens an existing path (a symlink planted at
  * the name is EEXIST) and, on macOS, `O_NOFOLLOW_ANY` refuses a directory of the path swapped for a symlink after its check.
  */

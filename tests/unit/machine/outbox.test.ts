@@ -17,7 +17,7 @@ import { reconcile } from "../../../src/machine/reconcile";
 import type { LinearIssue } from "../../../src/ports";
 import { type WRecord, readRecord } from "../../../src/state/records";
 import { addLabeledByOwner, todo } from "../../fakes/issues";
-import { type World, makeWorld } from "../../fakes/world";
+import { type World, makeWorld, stubPublish } from "../../fakes/world";
 
 const ID = "JRF-501";
 async function issueOf(w: World): Promise<LinearIssue> {
@@ -40,7 +40,7 @@ async function claimed(): Promise<{ w: World; r: WRecord; wt: string }> {
   return { w, r, wt: r.worktree?.path ?? "" };
 }
 /** One outbox pass on a freshly read record, as the tick does it. */
-async function drain(w: World, opts = { canHandoff: true }) {
+async function drain(w: World, opts = { canHandoff: true, canResume: true }) {
   const r = await readRecord(w.dirs, ID);
   if (!r) throw new Error("record missing");
   const res = await executeOutbox(w.ctx, r, await issueOf(w), await reconcile(w.ctx), opts);
@@ -209,6 +209,7 @@ describe("executeOutbox: F7 — an agent-planted symlink never redirects an outb
       quarantined: 0,
       parked: false,
       finished: false,
+      resumed: false,
       handoff: null,
     });
     expect(existsSync(wt)).toBe(false);
@@ -269,6 +270,7 @@ describe("executeOutbox: agent-named files go through worktreeFile()", () => {
 
   test("finish validates the summary file before publishing", async () => {
     const { w, wt } = await claimed();
+    w.ctx.publishImpl = async () => ({ publish: stubPublish }); // the summary-file check, not publishing itself
     await writeIntent(wt, {
       issue: ID,
       kind: "finish",
@@ -314,7 +316,7 @@ describe("executeOutbox: the local mirror", () => {
       ]),
     );
     const edits = statusEdits(w);
-    const { res } = await drain(w, { canHandoff: false });
+    const { res } = await drain(w, { canHandoff: false, canResume: true });
     expect(res).toMatchObject({ executed: 0, failed: 0, handoff: null });
     expect(statusEdits(w)).toBe(edits); // Ruling R1: nothing ran, no status edit
     expect(readFileSync(join(wt, ".wingmate", "gates.json"), "utf8")).toBe(gates);
@@ -323,7 +325,7 @@ describe("executeOutbox: the local mirror", () => {
     expect(qs.map((q) => q.id)).toEqual([pending.id]);
     const rec = JSON.parse(readFileSync(join(wt, ".wingmate", "record.json"), "utf8"));
     expect(rec).toMatchObject({ identifier: ID, stage: "working", pipelineStage: "intake" });
-    const handed = await drain(w, { canHandoff: true });
+    const handed = await drain(w, { canHandoff: true, canResume: true });
     expect(handed.res.handoff?.payload.reason).toBe("wrong_repo_guess");
     expect(statusEdits(w)).toBe(edits + 1); // R1: an executed intent refreshes the status once
   });
@@ -409,5 +411,12 @@ describe("executeOutbox: gate and ask re-validated against the record", () => {
     expect((created[0]?.args as { description: string }).description).toStartWith(
       `<!-- wingmate:followup of=${ID} -->`,
     );
+    // ledgered as followup_created, so the completion comment lists it (§8.1 followup)
+    const receipt = (await w.ctx.journal.all()).find((e) => e.kind === "issueCreate")?.receipt as
+      | { identifier?: string }
+      | undefined;
+    const ledgered = (await w.ctx.ledger.readIssue(ID)).filter((e) => e.type === "followup_created");
+    expect(ledgered.map((e) => e.data.identifier)).toEqual([receipt?.identifier]);
+    expect(receipt?.identifier).toMatch(/^JRF-\d+$/);
   });
 });

@@ -1,10 +1,10 @@
 // src/machine/outbox.ts — executes the intents the `issue` verbs wrote into the worktree (§6.3 step 2, §8.1), each re-validated
 // against the dispatcher's own record and Orca (§13.3 a), in order, with quarantine for files that can never execute.
 import { existsSync } from "node:fs";
-import { mkdir, open, rename, writeFile } from "node:fs/promises";
+import { mkdir, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { type Intent, consumeIntent, outboxDirs, quarantineIntent, readIntentFiles } from "../kit/intents";
-import { O_READ_NOFOLLOW, worktreeFile } from "../kit/local";
+import { readNoFollow, worktreeFile } from "../kit/local";
 import { MARK } from "../linear/markers";
 import { renderQuestion } from "../linear/templates";
 import { OrcaError } from "../orca/cli";
@@ -19,8 +19,9 @@ import { syncMirror } from "./mirror";
 import type { Reconciled } from "./reconcile";
 import { coordinatorMarker } from "./resume";
 import { saveRecord } from "./save";
-import { addAttention, dropAttention, enterPipelineStage, transition } from "./states";
+import { addAttention, dropAttention, enterPipelineStage, stageOf, transition } from "./states";
 import { addNote, syncStatus } from "./status";
+import { WORKING } from "./step";
 
 type Of<K extends Intent["kind"]> = Extract<Intent, { kind: K }>;
 export type HandoffIntent = Of<"handoff">;
@@ -30,12 +31,19 @@ export interface OutboxResult {
   quarantined: number;
   parked: boolean;
   finished: boolean;
+  /** §8.1 `finish`: a refused publish pointed the coordinator at its finding in this tick — one of the tick's resumes. */
+  resumed: boolean;
   /** A `handoff` intent for the tick to perform (§9.4, or a reroute with `repo`). */
   handoff: Of<"handoff"> | null;
 }
 export interface OutboxOptions {
   /** False in reconcile-only ticks and after the tick's one handoff: a `handoff` intent then stays pending. */
   canHandoff: boolean;
+  /**
+   * False in reconcile-only ticks and once the tick's resumes are spent: a `finish` intent then stays pending, because a refused
+   * publish delivers its pointer in the same tick as a resume (§8.1, §6.7).
+   */
+  canResume: boolean;
 }
 interface Run {
   ctx: Ctx;
@@ -57,21 +65,6 @@ const PASSED = new Set(["PASS", "NA"]);
 /** Linear, Orca, git and GitHub trouble is not the intent's fault: it never counts towards the quarantine. */
 const isInfra = (e: unknown) =>
   e instanceof OrcaError || (e instanceof WingmateError && /^(linear|git|gh)_/.test(e.code));
-
-/**
- * Reads an agent-named file that `worktreeFile` accepted, refusing a symlink swapped in since — as the file (O_NOFOLLOW) or, on
- * macOS, as any directory of its path (O_NOFOLLOW_ANY, F7) — up to `max` bytes.
- */
-async function readNoFollow(abs: string, max: number): Promise<Buffer> {
-  const fh = await open(abs, O_READ_NOFOLLOW);
-  try {
-    const buf = Buffer.alloc(max);
-    const { bytesRead } = await fh.read(buf, 0, max, 0);
-    return buf.subarray(0, bytesRead);
-  } finally {
-    await fh.close();
-  }
-}
 
 async function agentText(x: Run, rel: string): Promise<string> {
   const f = await worktreeFile(x.wt, rel);
@@ -215,6 +208,9 @@ async function finish(x: Run, i: Of<"finish">): Promise<void> {
   enterPipelineStage(ctx, r, "pr");
   const { publish } = await ctx.publishImpl();
   x.res.finished = await publish(ctx, r, x.issue, i, x.rec);
+  // publish is false only when the guards refused: a first refusal leaves the record working with its pointer delivered (a resume),
+  // the second of the cycle blocks it
+  x.res.resumed = !x.res.finished && WORKING.has(stageOf(r));
 }
 
 /**
@@ -253,6 +249,13 @@ async function followup(x: Run, i: Of<"followup">): Promise<void> {
     description,
     `followup:${i.id}`,
   );
+  // §8.1: the completion comment lists the follow-ups created (a replay may ledger one twice; the listing takes each once)
+  await x.ctx.ledger.append({
+    at: x.ctx.now(),
+    issue: x.r.identifier,
+    type: "followup_created",
+    data: { identifier: created.identifier },
+  });
   addNote(x.r, `follow-up ${created.identifier}`);
 }
 
@@ -376,8 +379,10 @@ async function drain(x: Run, opts: OutboxOptions): Promise<void> {
       continue;
     }
     if (i.kind === "handoff" && !opts.canHandoff) break; // stays pending for a later tick
+    if (i.kind === "finish" && !opts.canResume) break; // so does a finish: its refusal would be a resume (§8.1)
     if (!(await runIntent(x, i))) break;
-    if (x.res.parked || x.res.handoff || x.res.finished) break;
+    // parked, handed off, published — or no longer working at all (a second refused publish blocks): the rest waits
+    if (x.res.parked || x.res.handoff || x.res.finished || !WORKING.has(stageOf(x.r))) break;
   }
 }
 
@@ -407,7 +412,7 @@ export async function executeOutbox(
   r: WRecord,
   issue: LinearIssue,
   rec: Reconciled,
-  opts: OutboxOptions = { canHandoff: true },
+  opts: OutboxOptions = { canHandoff: true, canResume: true },
 ): Promise<OutboxResult> {
   const res: OutboxResult = {
     executed: 0,
@@ -415,6 +420,7 @@ export async function executeOutbox(
     quarantined: 0,
     parked: false,
     finished: false,
+    resumed: false,
     handoff: null,
   };
   if (!r.worktree) return res;

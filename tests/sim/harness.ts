@@ -14,11 +14,17 @@ export { OWNER, todo };
 export type { World };
 export const world = (): Promise<World> => makeWorld();
 
-/** Make a working record publishable exactly as the CLI would have: gates PASS/NA at HEAD, validate evidence present, one commit ahead, a summary file. */
+/** The report `gate validate` writes (§8.2 stage 4): per pinned command `$ <argv>`, `exit <code>` and an output digest. */
+export const pinnedReport = (gates: string[][], codes: number[] = []): string =>
+  `${gates.flatMap((g, i) => [`$ ${g.join(" ")}`, `exit ${codes[i] ?? 0}`, `sha256 ${"0".repeat(64)}`]).join("\n")}\n`;
+
+/** Make a working record publishable exactly as the CLI would have: gates PASS/NA at HEAD, validate evidence for every pinned command, one commit ahead, a summary file. */
 export async function readyToFinish(w: World, identifier: string) {
   const r = await readRecord(w.dirs, identifier);
   if (!r?.worktree) throw new Error(`${identifier} has no worktree`);
   const wt = r.worktree;
+  const gates = w.cfg.projects[r.project]?.repos[r.repo]?.gates;
+  if (!gates) throw new Error(`${identifier}: no pinned gates for ${r.project}/${r.repo}`);
   const head = await w.git.revParse(wt.path, "HEAD");
   for (const g of ["intake", "plan", "planVerify", "implement", "validate", "ui", "security"] as const)
     r.gates[g] = {
@@ -31,7 +37,7 @@ export async function readyToFinish(w: World, identifier: string) {
       note: null,
     };
   mkdirSync(join(wt.path, ".wingmate", "evidence", "validate"), { recursive: true });
-  writeFileSync(join(wt.path, ".wingmate", "evidence", "validate", "report.txt"), "$ bun test\nexit 0\n");
+  writeFileSync(join(wt.path, ".wingmate", "evidence", "validate", "report.txt"), pinnedReport(gates));
   writeFileSync(join(wt.path, ".wingmate", "s.md"), "Implemented the leaderboard.");
   w.git.commits.set(wt.path, 1);
   await writeRecord(w.dirs, r);

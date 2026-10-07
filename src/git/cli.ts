@@ -3,8 +3,22 @@ import type { GitPort } from "../ports";
 import { WingmateError } from "../shared/errors";
 import { type RunOptions, type RunResult, run } from "../shared/exec";
 import { parseAddedLines } from "./diff";
+import { isBranchName } from "./refname";
 
 export type Runner = (argv: string[], opts?: RunOptions) => Promise<RunResult>;
+
+/** A full SHA-1 or SHA-256 object name: nothing else may stand on the source side of a pushed refspec. */
+const OBJECT_NAME = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+
+/** Not `git_…`: an invalid branch is no infrastructure trouble, so a finish that keeps hitting it is counted (and quarantined). */
+function assertBranch(branch: string): void {
+  if (!isBranchName(branch))
+    throw new WingmateError(
+      "branch_invalid",
+      "the branch name breaks git's ref-name rules",
+      "the record's branch comes from Orca at claim; re-queue the issue",
+    );
+}
 
 export class GitCli implements GitPort {
   constructor(private readonly exec: Runner = run) {}
@@ -27,29 +41,57 @@ export class GitCli implements GitPort {
   async gitDir(cwd: string): Promise<string> {
     return (await this.g(cwd, ["rev-parse", "--absolute-git-dir"])).trim();
   }
-  async changedPaths(cwd: string, baseSha: string): Promise<string[]> {
-    const out = await this.g(cwd, ["diff", "--name-only", "-z", "--diff-filter=ACMRD", `${baseSha}...HEAD`]);
+  /**
+   * `--no-renames`: a rename is reported as the deletion of its old path and the addition of its new one, so a file moved out of a
+   * guarded path is still a changed path (and a moved file's lines are all added lines), whatever the owner's `diff.renames` is.
+   */
+  async changedPaths(cwd: string, baseSha: string, head = "HEAD"): Promise<string[]> {
+    const out = await this.g(cwd, [
+      "diff",
+      "--name-only",
+      "-z",
+      "--no-renames",
+      "--diff-filter=ACMRD",
+      `${baseSha}...${head}`,
+    ]);
     return out.split("\0").filter(Boolean);
   }
-  async addedLines(cwd: string, baseSha: string): Promise<{ path: string; line: string }[]> {
+  async addedLines(cwd: string, baseSha: string, head = "HEAD"): Promise<{ path: string; line: string }[]> {
     const diff = await this.g(
       cwd,
-      ["diff", "--no-ext-diff", "--no-color", "--unified=0", "--diff-filter=ACMR", `${baseSha}...HEAD`],
+      [
+        "diff",
+        "--no-ext-diff",
+        "--no-color",
+        "--no-renames",
+        "--unified=0",
+        "--diff-filter=ACMR",
+        `${baseSha}...${head}`,
+      ],
       120_000,
     );
     return parseAddedLines(diff);
   }
-  async commitsAhead(cwd: string, baseSha: string): Promise<number> {
-    const n = Number((await this.g(cwd, ["rev-list", "--count", `${baseSha}..HEAD`])).trim());
+  async commitsAhead(cwd: string, baseSha: string, head = "HEAD"): Promise<number> {
+    const n = Number((await this.g(cwd, ["rev-list", "--count", `${baseSha}..${head}`])).trim());
     if (!Number.isInteger(n))
       throw new WingmateError("git_failed", "git rev-list --count returned no number");
     return n;
   }
-  async push(cwd: string, branch: string): Promise<void> {
-    await this.g(cwd, ["push", "-u", "origin", `HEAD:refs/heads/${branch}`], 180_000);
+  /**
+   * §13.3(d, h): the commit the guards cleared, by its object name, to the record's own branch — never `HEAD` (it could move
+   * between the guards and the push), never a `+` (force) refspec, never a name git would read as an option. `-u` records an
+   * upstream only for a branch source, so git leaves the config alone for a commit id.
+   */
+  async push(cwd: string, branch: string, sha: string): Promise<void> {
+    assertBranch(branch);
+    if (!OBJECT_NAME.test(sha))
+      throw new WingmateError("sha_invalid", "git push: the commit to publish is not a full object name");
+    await this.g(cwd, ["push", "-u", "origin", `${sha}:refs/heads/${branch}`], 180_000);
   }
   /** The SHA of exactly `refs/heads/<branch>` on origin (`ls-remote` patterns also match `…/<branch>` of other branches). */
   async lsRemoteSha(cwd: string, branch: string): Promise<string | null> {
+    assertBranch(branch);
     const out = await this.g(cwd, ["ls-remote", "--heads", "origin", branch]);
     for (const line of out.split("\n")) {
       const [sha, ref] = line.split("\t");

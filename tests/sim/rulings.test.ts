@@ -7,7 +7,7 @@ import { scan } from "../../src/machine/scan";
 import { readHeartbeat, requestStop } from "../../src/state/heartbeat";
 import { withRecordLock } from "../../src/state/lock";
 import { type WRecord, listRecords, readRecord, writeRecord } from "../../src/state/records";
-import { OWNER, type World, advance, labeledByOwner, runTick, todo, world } from "./harness";
+import { OWNER, type World, advance, labeledByOwner, readyToFinish, runTick, todo, world } from "./harness";
 
 async function rec(w: World, identifier = "JRF-501"): Promise<WRecord> {
   const r = await readRecord(w.dirs, identifier);
@@ -361,11 +361,7 @@ describe("owner overrides (§7.4)", () => {
   test("In Review → In Progress resumes at implement with every approver comment made during the review", async () => {
     const w = await world();
     const r = await claimed(w);
-    const cur = await rec(w);
-    for (const g of ["intake", "plan", "planVerify", "implement", "validate", "ui", "security"] as const)
-      cur.gates[g].verdict = g === "ui" ? "NA" : "PASS";
-    await writeRecord(w.dirs, cur);
-    writeFileSync(join(r.worktree?.path ?? "", ".wingmate", "s.md"), "done");
+    await readyToFinish(w, "JRF-501"); // gates at HEAD, validate evidence, a commit and a summary: the real publish accepts it
     await writeIntent(r.worktree?.path ?? "", {
       issue: "JRF-501",
       kind: "finish",

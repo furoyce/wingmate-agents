@@ -397,9 +397,10 @@ describe("simulation", () => {
     advance(w, 5);
     s = await runTick(w);
     expect(s.finished).toEqual([r.identifier]);
-    expect(
-      w.linear.comments.filter((c) => c.body.startsWith("<!-- wingmate:completion -->")).length,
-    ).toBeLessThanOrEqual(1);
+    // the real publish posts it: the first tick's Linear failure came after the comment, the replay edits nothing twice
+    expect(w.linear.comments.filter((c) => c.body.startsWith("<!-- wingmate:completion -->")).length).toBe(1);
+    expect(w.git.pushed).toHaveLength(1);
+    expect(w.gh.prs).toHaveLength(1);
     await assertInvariants(w);
   });
 

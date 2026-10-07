@@ -1,6 +1,6 @@
 // tests/unit/git/cli.test.ts — GitCli against a real temp repository; GhCli against an injected runner (no network)
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { GhCli } from "../../../src/gh/cli";
@@ -73,6 +73,54 @@ describe("GitCli", () => {
     await expect(new GitCli(runner).revParse("/nowhere", "HEAD")).rejects.toThrow(/rev-parse failed \(128\)/);
     expect(seen[0]?.argv.slice(0, 3)).toEqual(["git", "-C", "/nowhere"]);
     expect(seen[0]?.env?.GIT_TERMINAL_PROMPT).toBe("0");
+  });
+  test("push sends exactly the verified commit to refs/heads/<branch> with -u, never forced; branch and sha are checked first", async () => {
+    const calls: string[][] = [];
+    const runner: Runner = async (argv) => {
+      calls.push(argv);
+      return { code: 0, stdout: "", stderr: "", timedOut: false };
+    };
+    const g = new GitCli(runner);
+    const sha = "a".repeat(40);
+    await g.push("/w", "furoyce/wm-jrf-1", sha);
+    expect(calls).toEqual([
+      ["git", "-C", "/w", "push", "-u", "origin", `${sha}:refs/heads/furoyce/wm-jrf-1`],
+    ]);
+    for (const branch of ["--upload-pack=x", "+main", "main:other", "a..b", ""])
+      await expect(g.push("/w", branch, sha)).rejects.toMatchObject({ code: "branch_invalid" });
+    for (const bad of ["HEAD", `+${sha}`, `${sha}:refs/heads/main`, "abc"])
+      await expect(g.push("/w", "furoyce/wm-jrf-1", bad)).rejects.toMatchObject({ code: "sha_invalid" });
+    await expect(g.lsRemoteSha("/w", "--upload-pack=x")).rejects.toMatchObject({ code: "branch_invalid" });
+    expect(calls).toHaveLength(1);
+  });
+  test("a rename is seen from both sides (--no-renames): a file moved out of a guarded path is still a changed path", async () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "wm-gitcli-mv-")));
+    await git(["init", "-q", "-b", "main", dir]);
+    mkdirSync(join(dir, ".github"), { recursive: true });
+    writeFileSync(join(dir, ".github", "ci.yml"), "on: push\njobs: {}\n");
+    await git(["-C", dir, "add", "."]);
+    await git(["-C", dir, ...ID, "commit", "-q", "-m", "ci"]);
+    const base = (await git(["-C", dir, "rev-parse", "HEAD"])).trim();
+    await git(["-C", dir, "switch", "-q", "-c", "feature"]);
+    mkdirSync(join(dir, "docs"), { recursive: true });
+    await git(["-C", dir, "mv", ".github/ci.yml", "docs/ci.yml"]);
+    await git(["-C", dir, ...ID, "commit", "-q", "-m", "move"]);
+    const g = new GitCli();
+    expect((await g.changedPaths(dir, base)).sort()).toEqual([".github/ci.yml", "docs/ci.yml"]);
+    expect(await g.addedLines(dir, base)).toEqual([
+      { path: "docs/ci.yml", line: "on: push" },
+      { path: "docs/ci.yml", line: "jobs: {}" },
+    ]);
+  });
+  test("the diff, added lines and commit count read an explicit head when one is given", async () => {
+    const { dir, base } = await repo();
+    const g = new GitCli();
+    const head = await g.revParse(dir, "HEAD");
+    await git(["-C", dir, "switch", "-q", "main"]); // HEAD moves; the explicit head does not
+    expect(await g.changedPaths(dir, base, head)).toEqual(["src.ts"]);
+    expect(await g.addedLines(dir, base, head)).toHaveLength(2);
+    expect(await g.commitsAhead(dir, base, head)).toBe(1);
+    expect(await g.changedPaths(dir, base)).toEqual([]);
   });
   test("lsRemoteSha reads the exact refs/heads/<branch> line (a prefix match of another branch is ignored)", async () => {
     const out =

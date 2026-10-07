@@ -19,7 +19,6 @@ const PATTERNS: [string, RegExp][] = [
   ["openai", /\bsk-(?:proj-)?[A-Za-z0-9_-]{32,}\b/],
 ];
 
-const HEX_ONLY = /^[0-9a-f]+$/i;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ENTROPY_CANDIDATE = /\b[A-Za-z0-9+/=_-]{32,}\b/g;
 // A key-like word must end right before the value (word boundary): `GH_TOKEN=`, `SECRET_KEY =`, `token:`,
@@ -41,6 +40,30 @@ function entropy(s: string): number {
     h -= p * Math.log2(p);
   }
   return h;
+}
+
+/**
+ * The spans one entropy candidate is judged as: the whole token, then (Ruling R18) each piece of it split on `=` and `:`. A dotenv
+ * line `NAME=value` without spaces is one candidate (`=` and `_` are in the class), so its value is judged on its own with the line
+ * up to it — `NAME=` — as key context; judging the whole token first keeps every earlier detection.
+ */
+function candidateSpans(tok: string, at: number): { tok: string; at: number }[] {
+  const out = [{ tok, at }];
+  let offset = at;
+  if (/[=:]/.test(tok))
+    for (const piece of tok.split(/[=:]/)) {
+      if (piece.length >= 32) out.push({ tok: piece, at: offset });
+      offset += piece.length + 1;
+    }
+  return out;
+}
+
+/** A keyed high-entropy token that is not a UUID, a path, a SCREAMING_SNAKE constant or digit-free (`before` is the line up to it). */
+function keyedSecret(tok: string, before: string): boolean {
+  if (UUID.test(tok) || PATH_LIKE.test(tok) || SCREAMING_SNAKE.test(tok) || !HAS_DIGIT.test(tok))
+    return false;
+  // a bare 40+ hex digest (git SHA, checksum) is noise unless a key-like name introduces it: only keyed tokens count
+  return KEY_CONTEXT.test(before) && entropy(tok) >= 3.5;
 }
 
 /**
@@ -66,19 +89,10 @@ export function scanText(text: string, path?: string): Finding[] {
     const lineStart = offset;
     offset += line.length + 1;
     if (PLACEHOLDER_LINE.test(line)) continue;
-    for (const m of line.matchAll(ENTROPY_CANDIDATE)) {
-      const tok = m[0];
-      if (UUID.test(tok) || PATH_LIKE.test(tok) || SCREAMING_SNAKE.test(tok) || !HAS_DIGIT.test(tok))
-        continue;
-      const before = line.slice(0, m.index ?? 0);
-      const keyed = KEY_CONTEXT.test(before);
-      // A bare 40+ hex digest (git SHA, checksum) is noise unless a key-like name introduces it.
-      if (HEX_ONLY.test(tok) && tok.length >= 40 && !keyed) continue;
-      if (keyed && entropy(tok) >= 3.5) {
-        add("high_entropy", tok, lineStart + (m.index ?? 0));
-        break;
-      }
-    }
+    const hit = [...line.matchAll(ENTROPY_CANDIDATE)]
+      .flatMap((m) => candidateSpans(m[0], m.index ?? 0))
+      .find((s) => keyedSecret(s.tok, line.slice(0, s.at)));
+    if (hit) add("high_entropy", hit.tok, lineStart + hit.at);
   }
   return out;
 }
