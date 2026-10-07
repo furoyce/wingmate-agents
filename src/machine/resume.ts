@@ -269,10 +269,25 @@ async function ambiguous(ctx: Ctx, r: WRecord, reason: string): Promise<boolean>
   return false;
 }
 
+/** An Orca failure of a relaunch, absorbed: attention `relaunch_failed`, ledgered with its code, the record written. */
+async function relaunchFailed(ctx: Ctx, r: WRecord, reason: string, e: unknown): Promise<false> {
+  addAttention(r, "relaunch_failed");
+  await ctx.ledger.append({
+    at: ctx.now(),
+    issue: r.identifier,
+    type: "relaunch_failed",
+    data: { reason, code: errorCode(e) },
+  });
+  ctx.log.warn({ issue: r.identifier, err: errorText(e) }, "relaunch failed");
+  await saveRecord(ctx, r);
+  return false;
+}
+
 /**
  * Starts a successor session in the same worktree (§6.3 step 4, §7.1 step 4) and points it at `.wingmate/`. `counted` (default)
  * spends the attempt's one relaunch, also when the launch cannot even start; a handoff's first launch of a new attempt passes
- * false. Orca failures are absorbed into `relaunch_failed` (the record is written) so the counter always advances.
+ * false. Orca failures — M-RELAUNCH (R32): the adoption lookup's reads included — are absorbed into `relaunch_failed` (the record is
+ * written) so the counter always advances.
  */
 export async function relaunch(
   ctx: Ctx,
@@ -284,7 +299,14 @@ export async function relaunch(
   if (!wt) return false;
   assertWaitBudget(ctx); // REL-1: a relaunch that could not wait for its TUI is not started (nor counted) in this tick
   // INT-2 + N3: a coordinator still running under a handle the record lost is adopted, never joined by a second one (I1); not a relaunch
-  const adopted = existsSync(wt.path) ? await liveCoordinator(ctx, r, wt.id) : null;
+  let adopted: Awaited<ReturnType<typeof liveCoordinator>> = null;
+  try {
+    if (existsSync(wt.path)) adopted = await liveCoordinator(ctx, r, wt.id);
+  } catch (e) {
+    if (isTickAbort(e)) throw e;
+    if (opts.counted !== false) r.coordinator.relaunches += 1; // a lookup that failed creates nothing, but the relaunch is spent
+    return relaunchFailed(ctx, r, reason, e);
+  }
   if (adopted === "ambiguous") return ambiguous(ctx, r, reason);
   if (adopted) return adopt(ctx, r, adopted.term, adopted.working, reason);
   if (opts.counted !== false) r.coordinator.relaunches += 1;
@@ -316,16 +338,7 @@ export async function relaunch(
     return await resumeIn(ctx, r, term.handle, reason);
   } catch (e) {
     if (isTickAbort(e)) throw e;
-    addAttention(r, "relaunch_failed");
-    await ctx.ledger.append({
-      at: ctx.now(),
-      issue: r.identifier,
-      type: "relaunch_failed",
-      data: { reason, code: errorCode(e) },
-    });
-    ctx.log.warn({ issue: r.identifier, err: errorText(e) }, "relaunch failed");
-    await saveRecord(ctx, r);
-    return false;
+    return relaunchFailed(ctx, r, reason, e);
   }
 }
 

@@ -428,6 +428,29 @@ describe("relaunch", () => {
     expect(commands(w)).toHaveLength(1);
   });
 
+  test("M-RELAUNCH (R32): an Orca read failing in the adoption lookup (terminal list, fleet, the Run's workers) is absorbed into relaunch_failed like any Orca failure — nothing thrown or created, the record written, the counter advanced (not for a handoff's first launch)", async () => {
+    for (const verb of ["terminalList", "worktreePs", "workerList"]) {
+      const w = await makeWorld();
+      const r = await claim(w);
+      await w.orca.terminalCreate(r.worktree?.id ?? "", "owner", "claude"); // a terminal the lookup has to look at
+      r.coordinator.childRunId = "run_child";
+      w.orca.failNext = verb;
+      expect(await relaunch(w.ctx, r, "exited")).toBe(false);
+      expect({ verb, relaunches: r.coordinator.relaunches }).toEqual({ verb, relaunches: 1 });
+      expect(r.attention).toContain("relaunch_failed");
+      expect((await readRecord(w.dirs, "JRF-501"))?.coordinator.relaunches).toBe(1);
+      const failed = (await w.ctx.ledger.readIssue("JRF-501")).filter((e) => e.type === "relaunch_failed");
+      expect(failed.map((e) => e.data)).toEqual([{ reason: "exited", code: "orca_unreachable" }]);
+      expect(commands(w)).toHaveLength(2); // the claim's coordinator and the test's own terminal: no successor
+    }
+    const w = await makeWorld();
+    const r = await claim(w);
+    w.orca.failNext = "terminalList";
+    expect(await relaunch(w.ctx, r, "handoff:test", { counted: false })).toBe(false);
+    expect(r.coordinator.relaunches).toBe(0);
+    expect(r.attention).toContain("relaunch_failed");
+  });
+
   test("an Orca failure is absorbed into relaunch_failed and the counter still advances (the next exited hands off)", async () => {
     const w = await makeWorld();
     const r = await claim(w);
