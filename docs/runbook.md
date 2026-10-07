@@ -272,6 +272,7 @@ Codes without † clear themselves once the condition passes. Codes marked † s
 | `launch_argv_missing` † | The record has no launch argv to relaunch from. | Re-queue the issue. |
 | `model_unresolved` † | The tier-best model could not be resolved (the provider CLI's default model). The replay or reroute waits. | Set `model` in `~/.claude/settings.json`; `doctor` checks this under `providers`. |
 | `liveness_unverifiable` | Orca could not tell whether the coordinator is alive. Nothing is done about it while this lasts. | Check Orca (`doctor --quick`, `orca_reachable`). |
+| `coordinator_ambiguous` | Orca no longer lists the coordinator's terminal or pane (after a restart), and more than one terminal of the issue worktree runs a live Claude or Codex agent that is not a reviewer or worker of the issue. Wingmate does not guess: liveness is unverifiable, and nothing is relaunched or created. | Close the terminals in that worktree that are not the coordinator (section 13). |
 | `cap_passed` | A stage ran past its cap (`timers` in config) and got a nudge, or the coordinator idled through two nudges. The grace clock (`graceMin`, default 30) runs, and activity clears the code. If the grace expires with no activity, the issue is handed off or blocked. | Nothing, if the issue is progressing. |
 | `worktree_gone` | The worktree is gone from disk. A parked issue is blocked; a working one counts as exited. | Section 13. |
 | `integrity_unverifiable` | This tick could not run the kit integrity check (git unreadable in the worktree). That is never a block; it is retried every tick. | Run `git -C <worktree> status` if it persists. |
@@ -498,10 +499,15 @@ run inside the issue worktree, shows that worktree's `.wingmate/` mirror and its
 - After Done or Canceled, a worktree removed by hand is simply recorded as removed.
 
 **Orca restarted while coordinators were running.** If Orca re-attaches the running terminals under new handles, the
-next tick finds each coordinator by its pane, or by its title `wingmate <ID>` with an agent in it, and follows it (ledger
-`handle_rebound`); a relaunch adopts such a terminal (`terminal_adopted`) instead of starting a second coordinator.
-Whether Orca keeps terminals and pane keys across a restart has not been checked live (section 16). If a coordinator
-did end with the restart, it is relaunched once as for any exit.
+next tick finds each coordinator by its pane, or else as the one terminal of the issue worktree that runs a live
+Claude or Codex agent other than the issue's role agents (reviewers and workers), and follows it (ledger
+`handle_rebound`). A terminal's title is never used: Orca shows the title the agent sets, not `wingmate <ID>`. A
+relaunch adopts such a terminal (`terminal_adopted`) instead of starting a second coordinator. When more than one
+terminal could be the coordinator, Wingmate does not guess: the issue shows `liveness_unverifiable` and
+`coordinator_ambiguous`, and nothing is relaunched. Close the terminals that are not the coordinator (a session of
+your own, a stray agent), and the next tick follows the one that is left. Whether Orca keeps terminals, pane keys and
+their agent state across a restart has not been checked live (section 16). If a coordinator did end with the restart,
+it is relaunched once as for any exit.
 
 **The folder-trust dialog appears.**
 
@@ -605,9 +611,15 @@ These are the D14 residuals: places where the agent trust boundary is weaker tha
   every page and script the PR adds under the UI paths before you merge. Whether a dev server can even listen inside the
   sandbox (`sandbox.network.allowLocalBinding`, which the kit does not set) is also unverified: check it before the
   first web UI issue.
-- **Orca restarts are unverified.** Coordinators are followed across re-issued terminal handles by pane key or title
-  (section 13). Check this on the first Orca restart of the pilot: `ledger/<ID>.jsonl` shows `handle_rebound`, and
-  `wingmate status` shows the issue still working, with one coordinator terminal in its worktree.
+- **Orca restarts are unverified.** Coordinators are followed across re-issued terminal handles by pane key, or as
+  the worktree's one live agent that is not a role agent (section 13). Check this on the first Orca restart of the
+  pilot: `ledger/<ID>.jsonl` shows `handle_rebound`, and `wingmate status` shows the issue still working, with one
+  coordinator terminal in its worktree. If Orca re-attached the terminal but lists no agent in its pane, Wingmate takes
+  the coordinator for exited and starts a successor beside it: close the older one by hand.
+- **Do not run your own Claude or Codex session in an issue worktree.** When Orca re-issues a coordinator's terminal,
+  Wingmate finds the coordinator as the worktree's one live agent; your session beside it makes that ambiguous
+  (`coordinator_ambiguous`, no relaunch until you close it), and once the coordinator has ended, your session would be
+  taken for it.
 - **Your user-level Claude `env` reaches every agent session unless blanked.** Claude Code applies the `env` block of
   `~/.claude/settings.json` to every session and its commands, the agents' too. The kit's settings set to empty every
   key there whose name says credential (`TOKEN`, `SECRET`, `PASSWORD`, `API_KEY`, `_KEY`, `CREDENTIAL`) and the GitHub

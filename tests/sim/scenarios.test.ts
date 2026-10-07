@@ -289,9 +289,8 @@ describe("simulation", () => {
     const r = await rec(w);
     expect(r.stage).toBe("working");
     expect(r.coordinator.terminalHandle).toBe("term_1");
-    expect(
-      (w.orca.terminals.get(wtOf(r).id) ?? []).filter((t) => t.title === "wingmate JRF-501"),
-    ).toHaveLength(1);
+    // one terminal in the worktree (once its agent took a turn, Orca lists the title the agent set, N3)
+    expect(w.orca.terminals.get(wtOf(r).id) ?? []).toHaveLength(1);
   });
 
   test("F4: a re-queued issue's new cycle replays its own claim entry, never the stuck one of the previous cycle", async () => {

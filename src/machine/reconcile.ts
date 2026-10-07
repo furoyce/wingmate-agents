@@ -16,7 +16,7 @@ import { readText } from "../state/fs";
 import { type WRecord, listRecords } from "../state/records";
 import { type CommentClass, classifyComment } from "./classify";
 import type { Ctx } from "./context";
-import { type Liveness, agentActiveAt, coordinatorLiveness, coordinatorRow } from "./liveness";
+import { type Liveness, agentActiveAt, coordinatorLiveness, coordinatorRow, roleHandles } from "./liveness";
 
 export type Event =
   | {
@@ -55,6 +55,8 @@ export interface Reconciled {
   rateLimits: RateLimits;
   partial: boolean;
   liveness: Map<string, Liveness>;
+  /** N3 (R32): records whose coordinator several live agent terminals could be (liveness `unverifiable`, never guessed). */
+  ambiguous: Set<string>;
   events: Event[];
   pausedScopes: string[];
 }
@@ -84,6 +86,7 @@ export async function reconcile(ctx: Ctx): Promise<Reconciled> {
   const terminals = new Map<string, TerminalRow[]>();
   const workers = new Map<string, WorkerRow[]>();
   const liveness = new Map<string, Liveness>();
+  const ambiguous = new Set<string>();
   for (const r of records) {
     if (!ACTIVE.has(r.stage) || !r.worktree) continue;
     const wt = r.worktree;
@@ -102,12 +105,19 @@ export async function reconcile(ctx: Ctx): Promise<Reconciled> {
     }
     const row = fleet.worktrees.find((w) => w.worktreeId === wt.id);
     let preview: string | undefined;
-    // INT-2: the coordinator's row as re-resolved this tick (a restart may have re-issued its handle and pane)
-    const own = coordinatorRow(r, t, row);
-    if (row && own && !row.agents.some((a) => a.paneKey === `${own.tabId}:${own.leafId}`)) {
+    // INT-2 + N3: the coordinator's row as re-resolved this tick (a restart may have re-issued its handle and pane), roles excluded
+    const roles = roleHandles(r, workers);
+    const own = coordinatorRow(r, t, row, roles);
+    if (own === "ambiguous" && !partial) ambiguous.add(r.identifier);
+    if (
+      row &&
+      own &&
+      own !== "ambiguous" &&
+      !row.agents.some((a) => a.paneKey === `${own.tabId}:${own.leafId}`)
+    ) {
       preview = await ctx.orca.terminalShowPreview(own.handle);
     }
-    liveness.set(r.identifier, partial ? "unverifiable" : coordinatorLiveness(r, t, row, preview));
+    liveness.set(r.identifier, partial ? "unverifiable" : coordinatorLiveness(r, t, row, preview, roles));
   }
 
   // Candidates (cheap pre-check first; history only for the eligible ones).
@@ -277,6 +287,7 @@ export async function reconcile(ctx: Ctx): Promise<Reconciled> {
     rateLimits,
     partial,
     liveness,
+    ambiguous,
     events,
     pausedScopes,
   };

@@ -24,6 +24,11 @@ async function git(args: string[]): Promise<string> {
   return r.stdout.trim();
 }
 const ID = ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false"];
+/**
+ * N3: what `terminal list` shows as an agent terminal's title once its agent has taken a turn — the title the agent sets itself (spike
+ * §3.3: created with `--title "wingmate spike"`, listed as "◑ Sleep command test" / "✳ Sleep command test"), never the create title.
+ */
+export const AGENT_SET_TITLE = "✳ Implement the scoring API";
 
 export class FakeOrca implements OrcaPort {
   rows = new Map<string, FleetRow>();
@@ -91,6 +96,8 @@ export class FakeOrca implements OrcaPort {
    * repository with the first worktree of the repo. A main row a test puts in `rows` for the repo is listed instead.
    */
   mains = new Set<string>();
+  /** Handles of agent terminals that are not Wingmate's (the owner's own session in an issue worktree): the I1 invariant skips them. */
+  foreignAgents = new Set<string>();
   /** Panes whose agent has taken a turn (a send with a `turn_started` receipt): before its first turn an agent pane is idle (`done`). */
   private turned = new Set<string>();
   private seq = 0;
@@ -262,11 +269,13 @@ export class FakeOrca implements OrcaPort {
   async terminalSend(h: string, text: string, w: number, retry?: string): Promise<SendReceipt> {
     await this.rec("terminalSend", { h, text, w, retry });
     if (this.nextSendStage === "turn_started" && !this.turned.has(h)) {
-      // the pane's first turn: its agent is working from now on (later turns are each test's to set)
+      // the pane's first turn: its agent is working from now on (later turns are each test's to set), under the title it set (N3)
       this.turned.add(h);
       for (const [wt, rows] of this.terminals) {
         const t = rows.find((x) => x.handle === h);
-        if (t) this.setAgentState(wt, `${t.tabId}:${t.leafId}`, "working", this.now());
+        if (!t) continue;
+        t.title = AGENT_SET_TITLE;
+        this.setAgentState(wt, `${t.tabId}:${t.leafId}`, "working", this.now());
       }
     }
     return { stage: this.nextSendStage, requestId: `req_${++this.seq}` };

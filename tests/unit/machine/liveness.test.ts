@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { agentActiveAt, coordinatorLiveness, coordinatorRow } from "../../../src/machine/liveness";
+import { parseFleet, parseTerminals } from "../../../src/orca/fleet";
 import type { FleetRow, TerminalRow } from "../../../src/ports";
 import { newRecord } from "../../../src/state/records";
 
@@ -52,33 +53,77 @@ const row = (state: string | null): FleetRow => ({
     : [],
 });
 
-describe("INT-2: coordinatorRow — the coordinator's terminal re-resolved each tick (§4.4: handles are runtime-scoped)", () => {
+describe("INT-2 + N3 (R32): coordinatorRow — the coordinator's terminal re-resolved each tick (§4.4: handles are runtime-scoped)", () => {
+  const fixture = (name: string): unknown =>
+    JSON.parse(readFileSync(join(import.meta.dir, "..", "..", "fixtures", "orca", name), "utf8"));
+  /** The spike's own capture (§3.3): Orca's default shell and the agent terminal, listed under the title Claude set (OSC). */
+  const captured = (moment: "working" | "idle") => {
+    const terminals = parseTerminals(fixture(`terminal-list-${moment}.json`));
+    const fleetRow = parseFleet(fixture(`worktree-ps-${moment}.json`)).worktrees[0];
+    const agent = terminals.find((t) => /^[◑✳]/.test(t.title));
+    if (!fleetRow || !agent) throw new Error("the fixture lost its agent row");
+    return { terminals, fleetRow, agent };
+  };
+  /** The record as it stood before an Orca restart that re-issued both its handle and its pane key. */
+  const beforeRestart = () => {
+    const r = rec();
+    r.coordinator.terminalHandle = "term_before_restart";
+    r.coordinator.paneKey = "tab-before:leaf-before";
+    return r;
+  };
   const agentAt = (paneKey: string, state = "working") =>
     ({ ...row(null), agents: [{ ...row(state).agents[0], paneKey }] }) as FleetRow;
-  test("by its handle; after Orca re-issued the handle, by its recorded pane key; after both changed, by its title with an agent in its pane", () => {
-    expect(coordinatorRow(rec(), [term], row("working"))?.handle).toBe("term_1");
+
+  test("by its handle; after Orca re-issued the handle, by its recorded pane key", () => {
+    expect(coordinatorRow(rec(), [term], row("working"))).toMatchObject({ handle: "term_1" });
     const reissued = { ...term, handle: "term_99" };
-    expect(coordinatorRow(rec(), [reissued], row("working"))?.handle).toBe("term_99");
+    expect(coordinatorRow(rec(), [reissued], row("working"))).toMatchObject({ handle: "term_99" });
     expect(coordinatorLiveness(rec(), [reissued], row("working"))).toBe("working");
-    const moved = { ...term, handle: "term_77", tabId: "tab7", leafId: "leaf7", title: "wingmate JRF-1" };
-    expect(coordinatorRow(rec(), [moved], agentAt("tab7:leaf7"))?.handle).toBe("term_77");
-    expect(coordinatorLiveness(rec(), [moved], agentAt("tab7:leaf7", "done"))).toBe("idle");
   });
-  test("never a guess: a titled row without an agent, two titled rows, another issue's or a role's title, or a record never launched → none (exited)", () => {
-    const moved = { ...term, handle: "term_77", tabId: "tab7", leafId: "leaf7", title: "wingmate JRF-1" };
-    expect(coordinatorRow(rec(), [moved], row(null))).toBeUndefined(); // a bare shell is no coordinator
-    const twin = { ...moved, handle: "term_78", leafId: "leaf8" };
+
+  test("after both changed: the one terminal running a live Claude or Codex agent — Orca lists the title the agent set, never `wingmate <id>`", () => {
+    const working = captured("working");
+    expect(working.agent.title).toBe("◑ Sleep command test"); // created with --title "wingmate spike"
+    expect(working.terminals.some((t) => t.title.startsWith("wingmate"))).toBe(false);
+    expect(coordinatorRow(beforeRestart(), working.terminals, working.fleetRow)).toEqual(working.agent);
+    expect(coordinatorLiveness(beforeRestart(), working.terminals, working.fleetRow)).toBe("working");
+    const idle = captured("idle");
+    expect(coordinatorLiveness(beforeRestart(), idle.terminals, idle.fleetRow)).toBe("idle");
+    const codex = agentAt("tab7:leaf7", "done");
+    for (const a of codex.agents) a.agentType = "codex";
+    const moved = { ...term, handle: "term_77", tabId: "tab7", leafId: "leaf7", title: "✳ Codex" };
+    expect(coordinatorRow(beforeRestart(), [moved], codex)).toMatchObject({ handle: "term_77" });
+  });
+
+  test("never a guess: a role agent of the child Run, a bare shell or another agent kind is no coordinator; two live agent terminals are ambiguous (unverifiable); none is exited", () => {
+    const { terminals, fleetRow, agent } = captured("working");
+    const roles = new Set([agent.handle]);
+    expect(coordinatorRow(beforeRestart(), terminals, fleetRow, roles)).toBeUndefined();
+    expect(coordinatorLiveness(beforeRestart(), terminals, fleetRow, undefined, roles)).toBe("exited");
+    const shellsOnly = { ...fleetRow, agents: [] };
+    expect(coordinatorRow(beforeRestart(), terminals, shellsOnly)).toBeUndefined(); // Orca's default shell: no agent
+    const antigravity = {
+      ...fleetRow,
+      agents: fleetRow.agents.map((a) => ({ ...a, agentType: "antigravity" })),
+    };
+    expect(coordinatorRow(beforeRestart(), terminals, antigravity)).toBeUndefined();
+    const twin = { ...agent, handle: "term_twin", leafId: "leaf-twin", title: "✳ Another session" };
     const both = {
-      ...row(null),
-      agents: [agentAt("tab7:leaf7").agents[0], agentAt("tab7:leaf8").agents[0]],
-    } as FleetRow;
-    expect(coordinatorRow(rec(), [moved, twin], both)).toBeUndefined();
-    for (const title of ["wingmate JRF-11", "wingmate JRF-1 code-reviewer"])
-      expect(coordinatorRow(rec(), [{ ...moved, title }], agentAt("tab7:leaf7"))).toBeUndefined();
+      ...fleetRow,
+      agents: [
+        ...fleetRow.agents,
+        ...fleetRow.agents.map((a) => ({ ...a, paneKey: `${twin.tabId}:${twin.leafId}` })),
+      ],
+    };
+    expect(coordinatorRow(beforeRestart(), [...terminals, twin], both)).toBe("ambiguous");
+    expect(coordinatorLiveness(beforeRestart(), [...terminals, twin], both)).toBe("unverifiable");
+    expect(coordinatorRow(beforeRestart(), [...terminals, twin], both, new Set([twin.handle]))).toEqual(
+      agent,
+    );
+    expect(coordinatorLiveness(beforeRestart(), [], { ...fleetRow, agents: [] })).toBe("exited");
     const fresh = rec();
     fresh.coordinator.terminalHandle = null;
-    expect(coordinatorRow(fresh, [moved], agentAt("tab7:leaf7"))).toBeUndefined();
-    expect(coordinatorLiveness(rec(), [moved], row(null))).toBe("exited");
+    expect(coordinatorRow(fresh, terminals, fleetRow)).toBeUndefined(); // never launched: nothing is adopted here
   });
 });
 

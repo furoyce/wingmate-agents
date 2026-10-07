@@ -10,6 +10,7 @@ import { scan } from "../../src/machine/scan";
 import { readHeartbeat, requestStop } from "../../src/state/heartbeat";
 import { withRecordLock } from "../../src/state/lock";
 import { type WRecord, listRecords, readRecord, writeRecord } from "../../src/state/records";
+import { AGENT_SET_TITLE } from "../fakes/fakeOrca";
 import { OWNER, type World, advance, labeledByOwner, readyToFinish, runTick, todo, world } from "./harness";
 
 async function rec(w: World, identifier = "JRF-501"): Promise<WRecord> {
@@ -246,36 +247,88 @@ describe("F1: the record lock is held only for a read or a write; another writer
   });
 });
 
-describe("INT-2 (§4.4): the coordinator's handle is runtime-scoped and re-resolved each tick", () => {
-  test("an Orca restart that re-issued the coordinator's handle and pane key is followed, never relaunched (handle_rebound, one coordinator)", async () => {
+describe("INT-2 + N3 (§4.4): the coordinator's handle is runtime-scoped and re-resolved each tick", () => {
+  const creates = (w: World) => w.orca.calls.filter((c) => c.verb === "terminalCreate").length;
+  /** Orca restarted: every terminal of the worktree re-attached under a new handle and pane (`moves`: old handle → new id), agent-titled. */
+  function restart(w: World, wt: string, moves: Record<string, string>): void {
+    const panes = new Map<string, string>();
+    w.orca.terminals.set(
+      wt,
+      (w.orca.terminals.get(wt) ?? []).map((t) => {
+        const to = moves[t.handle];
+        if (!to) return { ...t, title: AGENT_SET_TITLE };
+        panes.set(`${t.tabId}:${t.leafId}`, `tab${to}:leaf${to}`);
+        return { ...t, handle: `term_${to}`, tabId: `tab${to}`, leafId: `leaf${to}`, title: AGENT_SET_TITLE };
+      }),
+    );
+    for (const a of w.orca.rows.get(wt)?.agents ?? []) a.paneKey = panes.get(a.paneKey) ?? a.paneKey;
+  }
+
+  test("an Orca restart that re-issued the coordinator's handle and pane key is followed whatever its title, never relaunched (handle_rebound, one coordinator)", async () => {
     const w = await world();
     const r = await claimed(w);
     const wt = r.worktree?.id ?? "";
-    // Orca restarted: the same coordinator, re-attached under a new handle and pane
-    const rows = w.orca.terminals.get(wt) ?? [];
-    w.orca.terminals.set(
-      wt,
-      rows.map((t) =>
-        t.handle === r.coordinator.terminalHandle
-          ? { ...t, handle: "term_r", tabId: "tabR", leafId: "leafR" }
-          : t,
-      ),
-    );
-    for (const a of w.orca.rows.get(wt)?.agents ?? [])
-      if (a.paneKey === r.coordinator.paneKey) a.paneKey = "tabR:leafR";
-    const creates = w.orca.calls.filter((c) => c.verb === "terminalCreate").length;
+    restart(w, wt, { [r.coordinator.terminalHandle ?? ""]: "R" });
+    const n = creates(w);
     advance(w, 5);
     const s = await runTick(w);
     expect([...s.relaunches, ...s.handoffs, ...s.blocked]).toEqual([]);
-    expect(w.orca.calls.filter((c) => c.verb === "terminalCreate")).toHaveLength(creates);
+    expect(creates(w)).toBe(n);
     const after = await rec(w);
     expect(after.coordinator).toMatchObject({
-      terminalHandle: "term_r",
+      terminalHandle: "term_R",
       paneKey: "tabR:leafR",
       relaunches: 0,
     });
     const rebound = (await w.ctx.ledger.readIssue("JRF-501")).filter((e) => e.type === "handle_rebound");
-    expect(rebound.map((e) => e.data)).toEqual([{ from: r.coordinator.terminalHandle, to: "term_r" }]);
+    expect(rebound.map((e) => e.data)).toEqual([{ from: r.coordinator.terminalHandle, to: "term_R" }]);
+  });
+
+  test("N3: …with a role agent of the child Run live beside it (re-issued too): the coordinator is still the one followed; the role is never taken for it", async () => {
+    const w = await world();
+    const r = await claimed(w);
+    const wt = r.worktree?.id ?? "";
+    const role = await w.orca.terminalCreate(wt, "wingmate JRF-501 code-reviewer", "claude");
+    const cur = await rec(w);
+    cur.coordinator.childRunId = "run_child";
+    await writeRecord(w.dirs, cur);
+    restart(w, wt, { [r.coordinator.terminalHandle ?? ""]: "R", [role.handle]: "W" });
+    w.orca.workers.set("run_child", [
+      {
+        dispatchId: "ctx_1",
+        taskId: "task_1",
+        runId: "run_child",
+        workerState: "running",
+        dispatchStatus: "active",
+        agentTerminalHandle: "term_W", // worker-list reports the role's handle as Orca now knows it
+        verdict: "live",
+      },
+    ]);
+    const n = creates(w);
+    advance(w, 5);
+    const s = await runTick(w);
+    expect([...s.relaunches, ...s.handoffs, ...s.blocked]).toEqual([]);
+    expect(creates(w)).toBe(n);
+    expect((await rec(w)).coordinator).toMatchObject({ terminalHandle: "term_R", relaunches: 0 });
+  });
+
+  test("N3: two live agent terminals neither of which the record holds (the owner's own Claude session beside the re-issued coordinator) are never guessed between: liveness unverifiable, attention coordinator_ambiguous, no relaunch, no new terminal", async () => {
+    const w = await world();
+    const r = await claimed(w);
+    const wt = r.worktree?.id ?? "";
+    w.orca.foreignAgents.add((await w.orca.terminalCreate(wt, "owner", "claude")).handle);
+    restart(w, wt, { [r.coordinator.terminalHandle ?? ""]: "R" });
+    const n = creates(w);
+    advance(w, 5);
+    const s = await runTick(w);
+    expect([...s.relaunches, ...s.handoffs, ...s.blocked]).toEqual([]);
+    expect(creates(w)).toBe(n);
+    expect(s.attention).toContainEqual({ identifier: "JRF-501", code: "coordinator_ambiguous" });
+    const after = await rec(w);
+    expect(after.attention).toEqual(
+      expect.arrayContaining(["liveness_unverifiable", "coordinator_ambiguous"]),
+    );
+    expect(after.coordinator).toMatchObject({ terminalHandle: r.coordinator.terminalHandle, relaunches: 0 });
   });
 });
 

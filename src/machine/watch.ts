@@ -107,15 +107,20 @@ async function idle(a: Advance): Promise<StepOut> {
   return "next";
 }
 
-/** §6.3 step 4. `unverifiable` is recorded and never acted on (I8); reconcile-only ticks only keep the books. */
+/**
+ * §6.3 step 4. `unverifiable` is recorded and never acted on (I8); N3: when several live agents could be the coordinator, its cause
+ * is named too (`coordinator_ambiguous`). Reconcile-only ticks only keep the books.
+ */
 export async function liveness(a: Advance): Promise<StepOut> {
   const { r } = a;
   if (!WORKING.has(r.stage) || !a.live || a.launched) return "next";
   if (a.live === "unverifiable") {
     addAttention(r, "liveness_unverifiable");
+    if (a.rec.ambiguous.has(r.identifier)) addAttention(r, "coordinator_ambiguous");
+    else dropAttention(r, "coordinator_ambiguous");
     return "next";
   }
-  dropAttention(r, "liveness_unverifiable");
+  dropAttention(r, "liveness_unverifiable", "coordinator_ambiguous");
   if (a.ro) return "next";
   if (a.live === "exited") return exited(a);
   if (a.live === "working") {

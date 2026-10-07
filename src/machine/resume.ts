@@ -11,7 +11,7 @@ import type { WRecord } from "../state/records";
 import { type Ctx, remainingMs } from "./context";
 import { TickAbort, isTickAbort } from "./guard";
 import { kitNonce, prepareLaunch } from "./launch";
-import { type Liveness, worktreeGone } from "./liveness";
+import { type Liveness, coordinatorCandidates, roleHandles, worktreeGone } from "./liveness";
 import { saveRecord } from "./save";
 import { addAttention, dropAttention, ensureAttempt, transition } from "./states";
 
@@ -233,26 +233,40 @@ export function coordinatorMarker(r: WRecord): string | null {
 }
 
 /**
- * INT-2: a live coordinator terminal of this issue that the record does not hold — titled `wingmate <identifier>` with an agent in its
- * pane (Orca re-issued its handle, or a create that reported a failure took effect) — and whether that agent is mid-turn; null unless
- * exactly one fits (never a guess between two).
+ * INT-2 + N3 (R32): a live coordinator of this issue that the record does not hold — the one terminal of the worktree that runs a
+ * live Claude or Codex agent other than the child Run's role agents (`coordinatorCandidates`, the rule liveness re-resolves by;
+ * Orca re-issued its handle and pane, or a create that reported a failure took effect) — and whether that agent is mid-turn.
+ * `ambiguous` when several fit (never a guess between them, I1); null when none does.
  */
-async function liveTitled(
+async function liveCoordinator(
   ctx: Ctx,
   r: WRecord,
   wtId: string,
-): Promise<{ term: TerminalRow; working: boolean } | null> {
-  const title = `wingmate ${r.identifier}`;
-  const rows = (await ctx.orca.terminalList(wtId)).filter(
-    (t) => t.title === title && t.handle !== r.coordinator.terminalHandle,
-  );
-  if (!rows.length) return null;
-  const agents = (await ctx.orca.worktreePs()).worktrees.find((w) => w.worktreeId === wtId)?.agents ?? [];
-  const live = rows.flatMap((t) => {
-    const a = agents.find((x) => x.paneKey === `${t.tabId}:${t.leafId}`);
-    return a ? [{ term: t, working: a.state === "working" }] : [];
+): Promise<{ term: TerminalRow; working: boolean } | "ambiguous" | null> {
+  const terminals = await ctx.orca.terminalList(wtId);
+  if (!terminals.some((t) => t.handle !== r.coordinator.terminalHandle)) return null;
+  const row = (await ctx.orca.worktreePs()).worktrees.find((w) => w.worktreeId === wtId);
+  const run = r.coordinator.childRunId;
+  const roles = run ? roleHandles(r, new Map([[run, await ctx.orca.workerList(run)]])) : new Set<string>();
+  const live = coordinatorCandidates(terminals, row, roles, r.coordinator.terminalHandle);
+  if (live.length > 1) return "ambiguous";
+  const term = live[0];
+  if (!term) return null;
+  const agent = row?.agents.find((a) => a.paneKey === `${term.tabId}:${term.leafId}`);
+  return { term, working: agent?.state === "working" };
+}
+
+/** N3 (I1, I8): several live agents could be the coordinator — no successor is created and none adopted; the relaunch is not spent. */
+async function ambiguous(ctx: Ctx, r: WRecord, reason: string): Promise<boolean> {
+  addAttention(r, "coordinator_ambiguous");
+  await ctx.ledger.append({
+    at: ctx.now(),
+    issue: r.identifier,
+    type: "coordinator_ambiguous",
+    data: { reason },
   });
-  return live.length === 1 ? (live[0] ?? null) : null;
+  await saveRecord(ctx, r);
+  return false;
 }
 
 /**
@@ -269,8 +283,9 @@ export async function relaunch(
   const wt = r.worktree;
   if (!wt) return false;
   assertWaitBudget(ctx); // REL-1: a relaunch that could not wait for its TUI is not started (nor counted) in this tick
-  // INT-2: a coordinator still running under a handle the record lost is adopted, never joined by a second one (I1); not a relaunch
-  const adopted = existsSync(wt.path) ? await liveTitled(ctx, r, wt.id) : null;
+  // INT-2 + N3: a coordinator still running under a handle the record lost is adopted, never joined by a second one (I1); not a relaunch
+  const adopted = existsSync(wt.path) ? await liveCoordinator(ctx, r, wt.id) : null;
+  if (adopted === "ambiguous") return ambiguous(ctx, r, reason);
   if (adopted) return adopt(ctx, r, adopted.term, adopted.working, reason);
   if (opts.counted !== false) r.coordinator.relaunches += 1;
   if (!existsSync(wt.path)) {

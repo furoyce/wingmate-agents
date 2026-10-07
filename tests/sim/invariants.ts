@@ -1,6 +1,6 @@
 // tests/sim/invariants.ts — §14.3 invariants I1–I10, asserted after every simulated tick (runTick) and at the end of scenarios.
 import { expect } from "bun:test";
-import { type Liveness, coordinatorLiveness } from "../../src/machine/liveness";
+import { type Liveness, coordinatorLiveness, roleHandles } from "../../src/machine/liveness";
 import { isEdge } from "../../src/machine/states";
 import type { TickSummary } from "../../src/machine/tick";
 import type { JournalEntry } from "../../src/state/journal";
@@ -35,7 +35,11 @@ export async function snapshot(w: World): Promise<Snapshot> {
       row && handle && !row.agents.some((a) => a.paneKey === r.coordinator.paneKey)
         ? (w.orca.previews.get(handle) ?? "")
         : undefined;
-    liveness.set(r.identifier, w.orca.partial ? "unverifiable" : coordinatorLiveness(r, terms, row, preview));
+    const roles = roleHandles(r, w.orca.workers);
+    liveness.set(
+      r.identifier,
+      w.orca.partial ? "unverifiable" : coordinatorLiveness(r, terms, row, preview, roles),
+    );
   }
   return { records: structuredClone(records), calls: w.orca.calls.length, liveness, ledger };
 }
@@ -124,9 +128,21 @@ function assertRecord(w: World, r: WRecord): void {
       legal: isEdge(h.from as Stage, h.to as Stage, h.cause),
     }).toMatchObject({ legal: true });
   if (r.worktree) {
-    // I1: at most one coordinator terminal per issue worktree
+    // I1: at most one live coordinator per issue worktree — a terminal running a live Claude or Codex agent that is no role agent of
+    // the child Run and no session of the owner's own (N3: Orca lists the title the agent set, so titles prove nothing)
+    const roles = new Set([
+      ...(r.coordinator.childRunId ? (w.orca.workers.get(r.coordinator.childRunId) ?? []) : []).map(
+        (x) => x.agentTerminalHandle,
+      ),
+      ...w.orca.foreignAgents,
+    ]);
+    const agents = new Set(
+      (w.orca.rows.get(r.worktree.id)?.agents ?? [])
+        .filter((a) => a.agentType === "claude" || a.agentType === "codex")
+        .map((a) => a.paneKey),
+    );
     const coordinators = (w.orca.terminals.get(r.worktree.id) ?? []).filter(
-      (t) => t.title === `wingmate ${r.identifier}`,
+      (t) => agents.has(`${t.tabId}:${t.leafId}`) && !roles.has(t.handle),
     );
     expect(coordinators.length).toBeLessThanOrEqual(1);
   }

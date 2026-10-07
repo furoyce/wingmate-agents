@@ -17,7 +17,7 @@ import { isRecordAbort, isTickAbort, recordCtx } from "./guard";
 import { doHandoff, doReroute } from "./handoff";
 import { comments, reviewFeedback } from "./humans";
 import { LinearWrites } from "./linearWrites";
-import { coordinatorRow } from "./liveness";
+import { coordinatorRow, roleHandles } from "./liveness";
 import { syncMirror } from "./mirror";
 import { executeOutbox } from "./outbox";
 import type { Event, Reconciled } from "./reconcile";
@@ -280,8 +280,9 @@ async function outbox(a: Advance): Promise<StepOut> {
 }
 
 /**
- * INT-2 (§4.4): Orca re-issued the coordinator's terminal handle (a restart re-attached its terminals): the record follows the live
- * terminal `coordinatorRow` found by its pane key or title (ledger `handle_rebound`), so nothing relaunches a running coordinator.
+ * INT-2 + N3 (§4.4): Orca re-issued the coordinator's terminal handle (a restart re-attached its terminals): the record follows the
+ * live terminal `coordinatorRow` found by its pane key, else as the worktree's one live agent that is no role agent (ledger
+ * `handle_rebound`), so nothing relaunches a running coordinator. An ambiguous one is never followed (liveness says unverifiable).
  */
 async function rebind(a: Advance): Promise<StepOut> {
   const { ctx, r } = a;
@@ -289,8 +290,8 @@ async function rebind(a: Advance): Promise<StepOut> {
   const from = r.coordinator.terminalHandle;
   if (!wt || !from) return "next";
   const row = a.rec.fleet.worktrees.find((x) => x.worktreeId === wt.id);
-  const t = coordinatorRow(r, a.rec.terminals.get(wt.id) ?? [], row);
-  if (!t || t.handle === from) return "next";
+  const t = coordinatorRow(r, a.rec.terminals.get(wt.id) ?? [], row, roleHandles(r, a.rec.workers));
+  if (!t || t === "ambiguous" || t.handle === from) return "next";
   r.coordinator.terminalHandle = t.handle;
   r.coordinator.paneKey = `${t.tabId}:${t.leafId}`;
   await ctx.ledger.append({

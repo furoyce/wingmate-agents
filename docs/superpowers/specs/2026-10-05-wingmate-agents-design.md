@@ -400,14 +400,19 @@ Sources: `orca terminal list --worktree id:<wt> --json` (rows: `handle`, `tabId`
   list` rows expose no agent-identity field of their own) has `state == 'done'` (turn ended; parked or between
   turns).
 - `exited` := the recorded handle is absent from `terminal list` (the `exec` prefix makes the PTY end with the
-  agent) and so is the coordinator's row re-resolved per §4.4 — the row with the recorded pane key, else the one row
-  titled `wingmate <identifier>` with an `agents[]` entry; a row found that way is the coordinator under a re-issued
-  handle (an Orca restart), which the record then follows (`handle_rebound`) and a relaunch adopts instead of creating a
-  second terminal (amended 2026-10-07), or the row is present but its pane has no `agents[]` entry and `terminal wait --terminal <handle> --for
+  agent) and so is the coordinator's row re-resolved per §4.4 — the row with the recorded pane key, else the one
+  terminal of the worktree whose `agents[]` entry (joined by `tabId:leafId`) is a live Claude or Codex agent and whose
+  handle is no role agent of the child Run (`worker-list` `agentTerminalHandle`); a row found that way is the
+  coordinator under a re-issued handle (an Orca restart), which the record then follows (`handle_rebound`) and a
+  relaunch adopts, by the same rule, instead of creating a second terminal (amended 2026-10-07; the row's title is
+  never evidence, because Orca lists the title the agent sets, spike §3.3 — amended 2026-10-07, R32), or the row is
+  present but its pane has no `agents[]` entry and `terminal wait --terminal <handle> --for
   exit --timeout-ms 1 --json` or a `terminal show` preview shows a shell prompt (only a shell remains), or the
   worktree is gone.
-- `unverifiable` := Orca unreachable, a partial fleet read (`truncated`/`omittedHostIds`), or a present row whose
-  pane has no `agents[]` entry and whose shell state cannot be confirmed. `unverifiable` never triggers stop,
+- `unverifiable` := Orca unreachable, a partial fleet read (`truncated`/`omittedHostIds`), a present row whose
+  pane has no `agents[]` entry and whose shell state cannot be confirmed, or (amended 2026-10-07, R32) several
+  terminals of the worktree that could be the re-resolved coordinator (`attention: coordinator_ambiguous`; a relaunch
+  that finds several adopts none and creates none). `unverifiable` never triggers stop,
   relaunch, handoff or `blocked`; it is recorded as `attention: liveness_unverifiable`.
 - A worker is live when its Dispatch verdict is `live`; `unverifiable` workers are waited on, never stopped.
 
@@ -1318,7 +1323,7 @@ user or VM.
 | Provider transcript locations and usage fields for cost | `timed` provenance only |
 | Embedded browser identity stays `clean` on the dispatcher host | skip the UI gate with verdict `N/A: browser identity not clean` |
 | JR Travel Atlas pinned gates | as in §10.2 until the owner confirms |
-| Orca restart with an active coordinator: whether terminal handles and pane keys survive (spike row 2 never restarted Orca) | the coordinator's row re-resolved by pane key, else by title with an agent (§5.5, amended 2026-10-07) |
+| Orca restart with an active coordinator: whether terminal handles and pane keys survive (spike row 2 never restarted Orca), whether a re-attached pane keeps its `agents[]` entry, and whether `worker-list` reports role agents under their new handles | the coordinator's row re-resolved by pane key, else as the worktree's one live Claude/Codex agent that is no role agent; several → `unverifiable`, `coordinator_ambiguous` (§5.5, amended 2026-10-07, R32) |
 | Local binding inside the kit sandbox for a `ui.kind: web` dev server (`sandbox.network.allowLocalBinding`, not set by the kit) | web UI gates stay owner-reviewed until verified; then set it explicitly |
 | Egress of the `ui-smoke` tab (Orca's embedded browser runs outside the agent sandbox) | D14 residual (2026-10-07): web UI gates owner-reviewed; restrict the tab to loopback if Orca can |
 

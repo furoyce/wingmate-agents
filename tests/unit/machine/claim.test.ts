@@ -328,9 +328,19 @@ describe("relaunch", () => {
     expect(commands(w)[1]).toContain("OPENAI_API_KEY='' ");
   });
 
-  test("INT-2: a live coordinator terminal of the issue that the record does not hold (Orca re-issued its handle) is adopted — no second coordinator, the relaunch not counted", async () => {
+  /** N3: Orca lists the title the agent set (spike §3.3), never the `--title` it was created with. */
+  const oscTitles = (w: World, r: WRecord) => {
+    const wt = r.worktree?.id ?? "";
+    w.orca.terminals.set(
+      wt,
+      (w.orca.terminals.get(wt) ?? []).map((t) => ({ ...t, title: "✳ Implement the scoring API" })),
+    );
+  };
+
+  test("INT-2 + N3: a live coordinator of the issue that the record does not hold (Orca re-issued its handle and pane) is adopted whatever its title — no second coordinator, the relaunch not counted", async () => {
     const w = await makeWorld();
     const r = await claim(w);
+    oscTitles(w, r);
     const live = r.coordinator.terminalHandle;
     r.coordinator.terminalHandle = "term_before_restart";
     r.coordinator.paneKey = "tab0:leaf0";
@@ -346,6 +356,52 @@ describe("relaunch", () => {
     expect(await relaunch(w.ctx, r, "exited")).toBe(true);
     expect(verbs(w).filter((x) => x === "terminalSend")).toHaveLength(sends + 1);
     expect(verbs(w).filter((x) => x === "terminalCreate")).toHaveLength(1);
+  });
+
+  test("N3: two live agent terminals the record does not hold are never guessed between — nothing adopted, nothing created, the relaunch not counted, attention coordinator_ambiguous", async () => {
+    const w = await makeWorld();
+    const r = await claim(w);
+    const wt = r.worktree?.id ?? "";
+    // the owner's own Claude session in the issue worktree, next to the coordinator Orca re-issued
+    await w.orca.terminalCreate(wt, "owner", "claude");
+    oscTitles(w, r);
+    r.coordinator.terminalHandle = "term_before_restart";
+    r.coordinator.paneKey = "tab0:leaf0";
+    const creates = verbs(w).filter((x) => x === "terminalCreate").length;
+    expect(await relaunch(w.ctx, r, "exited")).toBe(false);
+    expect(verbs(w).filter((x) => x === "terminalCreate")).toHaveLength(creates);
+    expect(r.coordinator).toMatchObject({ terminalHandle: "term_before_restart", relaunches: 0 });
+    expect(r.attention).toContain("coordinator_ambiguous");
+    expect((await w.ctx.ledger.readIssue("JRF-501")).some((e) => e.type === "coordinator_ambiguous")).toBe(
+      true,
+    );
+  });
+
+  test("N3: a live role agent of the child Run (worker-list agentTerminalHandle) is never adopted as the coordinator: the successor is created", async () => {
+    const w = await makeWorld();
+    const r = await claim(w);
+    const wt = r.worktree?.id ?? "";
+    const coordinator = r.coordinator.terminalHandle ?? "";
+    w.orca.killTerminal(wt, coordinator); // the coordinator exited
+    const role = await w.orca.terminalCreate(wt, "wingmate JRF-501 code-reviewer", "claude");
+    oscTitles(w, r);
+    r.coordinator.childRunId = "run_child";
+    w.orca.workers.set("run_child", [
+      {
+        dispatchId: "ctx_1",
+        taskId: "task_1",
+        runId: "run_child",
+        workerState: "running",
+        dispatchStatus: "active",
+        agentTerminalHandle: role.handle,
+        verdict: "live",
+      },
+    ]);
+    const creates = commands(w).length;
+    expect(await relaunch(w.ctx, r, "exited")).toBe(true);
+    expect(r.coordinator.terminalHandle).not.toBe(role.handle);
+    expect(r.coordinator.relaunches).toBe(1);
+    expect(commands(w)).toHaveLength(creates + 1); // the successor
   });
 
   test("before any turn of the attempt (a handoff's new attempt) the successor starts a fresh session; uncounted keeps relaunches", async () => {
