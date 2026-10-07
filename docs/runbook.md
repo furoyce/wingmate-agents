@@ -562,16 +562,19 @@ These are the D14 residuals: places where the agent trust boundary is weaker tha
 - **PRs are not opened while paused.** A `finish` waits for a tick that may resume work.
 - **Setup runs only in worktrees the claim created.** The repository's `setup` command never runs in a reused worktree
   (a re-queue or a replay).
-- **Orca checks out the base a moment after the check.** A claim verifies GitHub's commit in the main checkout and gives
-  Orca that commit. A `refs/heads/<commit>` ref (which Orca looks up before the commit itself) or any replace ref
-  (`refs/replace/…`) that already exists blocks the claim. But an agent's sandbox can write `packed-refs`, and Orca's
-  `git worktree add` runs as you, outside the sandbox, with replace refs on. A ref planted between the check and the
-  create is followed: Orca checks out other files, and under a replace ref HEAD still names GitHub's commit. A hook under
-  a relative `core.hooksPath` (husky) could run then. Afterwards the start checks block the issue `kit_tampered` (a head
-  that moved, a replace ref still there) before the kit, the setup or a terminal. A replace ref removed again before
-  those checks goes unseen, and the setup then runs on its files. Closing this needs Orca's git to ignore replace refs
-  (`core.useReplaceRefs=false` in a git config it reads) or agents without write access to `packed-refs`. Wingmate's
-  own git (base checks, publish guards) ignores replace refs.
+- **Orca checks out the base a moment after the check.** A claim verifies GitHub's commit in the main checkout, refuses
+  a `refs/heads/<commit>` ref (Orca looks it up first) or any replace ref there, and gives Orca that commit. Agents can
+  write `packed-refs` and most loose refs (all but the base branch, `refs/remotes/` and other worktrees' branches), and
+  Orca's `git worktree add` runs as you, outside the sandbox, with replace refs on. A ref planted between the check and
+  the create is followed: Orca checks out other files (under a replace ref, HEAD still names GitHub's commit), and a hook
+  under a relative `core.hooksPath` (husky) could run. The start checks block `kit_tampered` on a moved head or a replace
+  ref still there; one removed before them goes unseen, and the setup runs on its files. `core.useReplaceRefs=false` in a
+  git config Orca's git reads would close the replace-ref half, packed or loose; denying agents `packed-refs` would close
+  it only with `refs/replace/**` denied too. Neither closes the `refs/heads/<commit>` race (a loose one is writable): the
+  start check catches it after the create, but a hook may have run. Wingmate's own git ignores replace refs.
+- **Agents can write the object store.** git does not re-check object contents when it checks files out, so objects an
+  agent alters under names in GitHub's commit change what Orca's checkout of that commit writes, as a replace ref would,
+  with no ref involved: no claim check sees it. `git fsck` reports altered objects. Neither option above helps.
 
 The rest are slice-1 gaps:
 
