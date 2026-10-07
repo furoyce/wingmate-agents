@@ -595,6 +595,13 @@ These are the D14 residuals: places where the agent trust boundary is weaker tha
   entries for sibling worktrees created later reach it only at its next launch or relaunch.
 - **Orca may be reachable from the sandbox.** If `doctor` reports `orca_from_sandbox` reachable, an agent can start
   processes outside its sandbox through Orca.
+- **A `ui-smoke` page can reach the internet.** `ui-smoke` opens the agent's local dev server in Orca's embedded
+  browser, which runs outside the agent sandbox with ordinary network access. Script in a page the agent wrote can send
+  whatever the agent can read (source, ticket text) to any host, and the sandbox's network allowlist never sees it.
+  Until the tab is limited to loopback, treat a `ui` PASS on a `ui.kind: web` repository as the agent's claim, and read
+  every page and script the PR adds under the UI paths before you merge. Whether a dev server can even listen inside the
+  sandbox (`sandbox.network.allowLocalBinding`, which the kit does not set) is also unverified: check it before the
+  first web UI issue.
 - **Orca restarts are unverified.** Coordinators are followed across re-issued terminal handles by pane key or title
   (section 13). Check this on the first Orca restart of the pilot: `ledger/<ID>.jsonl` shows `handle_rebound`, and
   `wingmate status` shows the issue still working, with one coordinator terminal in its worktree.
@@ -646,6 +653,7 @@ The rest are slice-1 gaps:
 - **Mention markup is unverified.** The @mention markup in questions has not been checked live; your subscription to the
   issue is what carries the notification.
 - **`planVerify` is not cross-checked against Orca** (`plan_verify_unverified`).
+- **`ui-smoke` records screenshots only.** The redacted console and network capture of §13.3(f) is not built yet.
 - **`allow-deps` admits any dependency change.** §13.3(e) wants each changed package checked when the grant is given:
   registry, exact version, a publish date at least 14 days old, at least 1,000 weekly downloads unless named in the
   grant, no install script outside `allowedBuildScripts`, and the `pnpm audit --prod` or `npm audit` result (§8.2 stage
