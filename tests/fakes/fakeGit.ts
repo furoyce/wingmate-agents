@@ -49,6 +49,8 @@ export class FakeGit implements GitPort {
   replaceRefsConfig = new Map<string, boolean>();
   /** The main checkout of every `disableReplaceRefs` write, in order (R30: `install` writes only when the value is not false). */
   configWrites: string[] = [];
+  /** SEC-2: the credential-bearing keys each repository's own config holds, by main checkout path; absent: none. */
+  credentialKeys = new Map<string, string[]>();
 
   async revParse(at: GitAt, ref: string): Promise<string> {
     const path = await pathOf(at);
@@ -125,6 +127,10 @@ export class FakeGit implements GitPort {
   /** As GitCli (R30): the repository's own `core.useReplaceRefs`, null when unset. */
   async useReplaceRefs(at: GitTarget) {
     return this.replaceRefsConfig.get(await pathOf(at)) ?? null;
+  }
+  /** As GitCli (SEC-2): the credential-bearing keys of the repository's own config. */
+  async credentialConfig(at: GitTarget) {
+    return [...(this.credentialKeys.get(await pathOf(at)) ?? [])];
   }
   async disableReplaceRefs(at: GitTarget) {
     const path = await pathOf(at);

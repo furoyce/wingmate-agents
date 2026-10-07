@@ -277,6 +277,11 @@ export interface GitPort {
   useReplaceRefs(t: GitTarget): Promise<boolean | null>;
   /** R30: `core.useReplaceRefs=false` in the repository's own config, every earlier value replaced — the one setting `install` makes there. */
   disableReplaceRefs(t: GitTarget): Promise<void>;
+  /**
+   * SEC-2: the credential-bearing keys of the repository's own config, which an agent can read (its sandbox reads the common dir): any
+   * `credential.*` key, and a remote URL or `insteadOf` rewrite whose URL carries a credential. Names only, never a value.
+   */
+  credentialConfig(t: GitTarget): Promise<string[]>;
 }
 /**
  * C29: `repo` is the configured `repos.<name>.github`. gh is told the repository (`--repo`) and runs outside every worktree, so it never

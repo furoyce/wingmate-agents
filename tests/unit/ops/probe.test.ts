@@ -63,6 +63,8 @@ const GOOD: Record<number, string> = {
   12: "exit=0 sig=local",
   13: "exit=0 sig=unset",
   14: "exit=0 sig=reachable",
+  15: "exit=1 sig=auth",
+  16: "exit=128 sig=auth",
 };
 const lines = (over: Record<number, string | null> = {}) =>
   Object.entries({ ...GOOD, ...over })
@@ -187,6 +189,23 @@ describe("PROBE lines (inverted or missing lines fail the probe)", () => {
     );
     expect(credentialNames(streamCalls(elsewhere), scriptOf(13))).toEqual([]);
   });
+  test("SEC-2: gh and git must find no stored GitHub credential — a network block no longer proves gh found none; a token or credential handed back fails", () => {
+    expect(
+      judged(
+        stream(lines({ 3: "1 sig=net" }), {
+          violations: { 2: "github.com", 3: "api.github.com", 7: "pypi.org" },
+        }),
+      ),
+    ).toEqual(["gh_api_user: gh found a credential or failed otherwise: control unproven (exit=1 sig=net)"]);
+    expect(judged(stream(lines({ 15: "0 sig=none", 16: "0 sig=none" })))).toEqual([
+      "gh_stored_token: ALLOWED (exit=0 sig=none)",
+      "git_credential_fill: ALLOWED (exit=0 sig=none)",
+    ]);
+    const token = PROBES.find((x) => x.name === "gh_stored_token");
+    const fill = PROBES.find((x) => x.name === "git_credential_fill");
+    expect(token?.body).toContain("gh auth token 2>&1 >/dev/null"); // a token is discarded, never printed
+    expect(fill?.body).toContain("git credential fill 2>&1 >/dev/null");
+  });
   test("a private-repo style auth failure is not accepted as network proof", () => {
     const f = judged(stream(lines({ 2: "128 sig=auth" })));
     expect(f.length).toBe(1);
@@ -221,9 +240,9 @@ describe("PROBE lines (inverted or missing lines fail the probe)", () => {
       "sibling_gitdir_write: no PROBE line",
       "index_lock_write: no PROBE line",
     ]);
-    // the reply alone settles nothing: every required probe fails (13 of 14; the orca line is only reported)
+    // the reply alone settles nothing: every required probe fails (15 of 16; the orca line is only reported)
     const replyOnly = judged(stream("", { final: lines() }));
-    expect(replyOnly.length).toBe(13);
+    expect(replyOnly.length).toBe(15);
     expect(replyOnly).toContain("credentials_read: no PROBE line");
     expect(judged(lines())).toEqual(replyOnly); // not stream-json at all
     // a line printed in another command's result (probe 3's call printing probe 1's line) is not probe 1's result
@@ -278,25 +297,18 @@ describe("PROBE lines (inverted or missing lines fail the probe)", () => {
       "credentials_read: no PROBE line",
     ]);
   });
-  test("F5: gh api user must fail on auth or a sandbox network block; gh missing or an unclassified failure proves nothing", () => {
+  test("F5 + SEC-2: gh api user must fail on auth alone; gh missing, an unclassified failure or a network refusal (gh found a token) proves nothing", () => {
     expect(judged(stream(lines({ 3: "127 sig=other" })))).toEqual([
-      "gh_api_user: gh not reachable: control unproven (exit=127 sig=other)",
+      "gh_api_user: gh found a credential or failed otherwise: control unproven (exit=127 sig=other)",
     ]);
     expect(judged(stream(lines({ 3: "126 sig=eperm" })))).toEqual([
-      "gh_api_user: gh not reachable: control unproven (exit=126 sig=eperm)",
+      "gh_api_user: gh found a credential or failed otherwise: control unproven (exit=126 sig=eperm)",
     ]);
     expect(judged(stream(lines({ 3: "1 sig=enoent" }))).map((x) => x.split(":")[0])).toEqual(["gh_api_user"]);
-    // a network failure counts only as the sandbox's own block of api.github.com
+    // SEC-2: even the sandbox's own block of api.github.com no longer passes — gh only goes there with a token in hand
     expect(judged(stream(lines({ 3: "1 sig=net" })))).toEqual([
-      "gh_api_user: blocked, but no sandbox violation for api.github.com in its tool result (a DNS or firewall failure proves nothing about the sandbox)",
+      "gh_api_user: gh found a credential or failed otherwise: control unproven (exit=1 sig=net)",
     ]);
-    expect(
-      judged(
-        stream(lines({ 3: "1 sig=net" }), {
-          violations: { 2: "github.com", 3: "api.github.com", 7: "pypi.org" },
-        }),
-      ),
-    ).toEqual([]);
     expect(judged(stream(lines({ 3: "0 sig=none" })))).toEqual(["gh_api_user: ALLOWED (exit=0 sig=none)"]);
   });
   test("two different lines for one probe conflict", () => {
@@ -379,6 +391,7 @@ describe("probe scripts (real sh, temp files only)", () => {
     ).toBe("auth");
     expect(await cls("git@github.com: Permission denied (publickey).")).toBe("auth");
     expect(await cls("To get started with GitHub CLI, please run:  gh auth login")).toBe("auth");
+    expect(await cls("no oauth token found for github.com")).toBe("auth"); // SEC-2: `gh auth token` with none stored
     expect(await cls("cat: /h/.config/wingmate/credentials.json: Operation not permitted")).toBe("eperm");
     expect(await cls("sh: /x/hooks/pre-commit: No such file or directory")).toBe("enoent");
     expect(await cls("")).toBe("none");

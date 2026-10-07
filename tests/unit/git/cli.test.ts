@@ -651,6 +651,33 @@ describe("GitCli", () => {
       await git(["-C", dir, "update-ref", `refs/replace/${(i + 1).toString(16).padStart(40, "0")}`, other]);
     expect(await g.replaceRefs(t)).toHaveLength(10);
   });
+  test("SEC-2: credentialConfig names the repository's own credential-bearing settings — a helper, a credential key, a URL or insteadOf rewrite with userinfo — never a value", async () => {
+    const { dir } = await repo();
+    const t = await mainCheckoutTarget(dir);
+    const g = new GitCli((argv, opts) => run(argv, { ...opts, env: { ...opts?.env, ...HERMETIC } }));
+    await git(["-C", dir, "config", "remote.origin.url", "https://github.com/o/r.git"]);
+    await git(["-C", dir, "config", "url.git@github.com:.insteadOf", "https://github.com/"]);
+    expect(await g.credentialConfig(t)).toEqual([]); // a plain remote and an ssh rewrite hold no credential
+    await git(["-C", dir, "config", "credential.helper", "store"]);
+    await git(["-C", dir, "config", "credential.https://github.com.username", "owner"]);
+    await git(["-C", dir, "config", "remote.fork.url", "https://owner:ghp_secretvalue@github.com/o/r.git"]);
+    await git([
+      "-C",
+      dir,
+      "config",
+      "url.https://x-access-token:ghs_v@github.com/.insteadOf",
+      "https://github.com/",
+    ]);
+    const keys = await g.credentialConfig(t);
+    expect(keys).toEqual([
+      "credential.helper",
+      "credential.*.username",
+      "remote.fork.url (userinfo)",
+      "url.*.insteadof (userinfo)",
+    ]);
+    expect(keys.join(" ")).not.toContain("secretvalue");
+    expect(keys.join(" ")).not.toContain("owner");
+  });
   test("F7 (R30): useReplaceRefs reads core.useReplaceRefs from the repository's own config as git's boolean (null when unset); disableReplaceRefs sets it false there over any number of values — and then Orca's plain `git worktree add` follows no replace ref, packed or loose", async () => {
     const { dir, base } = await repo();
     await git(["-C", dir, "switch", "-q", "main"]);

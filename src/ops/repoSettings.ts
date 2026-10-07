@@ -92,6 +92,28 @@ const shown = (value: boolean | null | string): string =>
       ? value
       : `NOT off (${value === null ? "unset" : "true"}): run \`wingmate install\``;
 
+/**
+ * SEC-2 for doctor: no pilot repository's own config holds a credential an agent could read — its sandbox reads the common dir, and a
+ * `credential.helper` there would run for the agent's git despite the kit's global reset. Keys named per repository, never values.
+ */
+export async function repoCredentialConfig(
+  ctx: Ctx,
+  fleet: FleetSnapshot | null,
+): Promise<{ ok: boolean; detail: string }> {
+  if (!fleet) return { ok: false, detail: "Orca's fleet was not read, so the main checkouts are unknown" };
+  const rows: string[] = [];
+  let all = true;
+  for (const m of await mainCheckouts(ctx.cfg, fleet)) {
+    const keys = m.target
+      ? await ctx.git.credentialConfig(m.target).catch((e: unknown) => `unreadable (${errorCode(e)})`)
+      : (m.problem ?? "unknown");
+    const clean = Array.isArray(keys) && keys.length === 0;
+    if (!clean) all = false;
+    rows.push(`${m.repo}: ${Array.isArray(keys) ? keys.join(", ") || "none" : keys}`);
+  }
+  return { ok: all, detail: rows.join("; ") };
+}
+
 /** R30 for doctor: the setting read back in every pilot repository's main checkout; ok only when it is false in each one. */
 export async function replaceRefsDisabled(
   ctx: Ctx,

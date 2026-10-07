@@ -614,6 +614,14 @@ These are the D14 residuals: places where the agent trust boundary is weaker tha
   during the checkout. The HEAD re-read blocks the issue before the kit, the setup or a terminal, but cannot undo that
   hook. The dispatcher's own git reads (base checks, publish guards) ignore replace refs; the agent's `gate` runs in its
   sandbox and is advisory: the dispatcher re-checks at publish.
+- **gh's and git's credential isolation is file-scoped.** Agents get an empty gh config dir and a gitconfig that resets
+  `credential.helper`, but no OS credential store is closed off by Wingmate. A GitHub credential the sandbox can reach
+  in the macOS keychain would answer gh's or git's own lookup. doctor's sandbox probe asks both from inside the sandbox
+  (`gh_stored_token`, `git_credential_fill`, network-free) and fails if either hands back a credential. Re-run
+  `wingmate doctor` after you re-authenticate gh or change git's credential helper. doctor's blocking
+  `repo_credential_config` also fails while a pilot repository's own `.git/config`, which every agent of the repository
+  can read, holds a `credential.*` setting, or a remote URL or `insteadOf` rewrite with a credential in it. Move such
+  settings to your global git config and keep tokens out of remote URLs.
 - **Agents can write the object store.** git does not re-check object contents when it checks files out, so objects an
   agent alters under names in GitHub's commit change what Orca's checkout of that commit writes, as a replace ref would,
   with no ref involved: no claim check sees it, and `core.useReplaceRefs=false` does not help. `git fsck` reports them.
@@ -657,7 +665,8 @@ Notes:
 - An error that escapes a command prints `<code>: <message>` and a `next:` line on stderr, and exits 2.
 - `doctor`'s checks are:
   - blocking: `config_valid`, `linear_auth`, `linear_meta`, `orca_reachable`, `providers`, `replace_refs_disabled`,
-    `binary_installed`, `automation_present`, `sandbox_settings`, `sandbox_probe` and `notify_test`. `codex_sandbox` is
+    `repo_credential_config`, `binary_installed`, `automation_present`, `sandbox_settings`, `sandbox_probe` and
+    `notify_test`. `codex_sandbox` is
     blocking whenever Codex can run at all (`verifyCross`, or `codex` in the cascade or the workers), which it can in
     the pilot;
   - warnings only: `claude_trust`, `heartbeat_fresh`, `journal_clean`, `orca_from_sandbox` and `d14_extension`, plus

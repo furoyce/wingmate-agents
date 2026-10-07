@@ -96,7 +96,7 @@ const q = (s: string) => shellQuote([s]);
 /** Shared by every script: classify a command's stderr. Auth before the generic permission text ("Permission denied (publickey)"). */
 export const CLASSIFY = `classify() {
   case "$1" in
-    *"could not read Username"*|*"Authentication failed"*|*"terminal prompts disabled"*|*"Permission denied (publickey)"*|*"gh auth login"*|*"HTTP 401"*) echo auth ;;
+    *"could not read Username"*|*"Authentication failed"*|*"terminal prompts disabled"*|*"Permission denied (publickey)"*|*"gh auth login"*|*"HTTP 401"*|*"no oauth token"*|*"not logged in"*) echo auth ;;
     *"CONNECT tunnel failed"*|*"response 403"*|*"Could not resolve host"*|*"Could not resolve hostname"*|*"nodename nor servname"*|*"Name or service not known"*|*"network-outbound"*|*"Failed to connect"*) echo net ;;
     *"Operation not permitted"*|*"Permission denied"*|*"Read-only file system"*) echo eperm ;;
     *"No such file or directory"*) echo enoent ;;
@@ -105,7 +105,7 @@ export const CLASSIFY = `classify() {
   esac
 }`;
 
-/** The §13.3(b) probe set (Ruling for Task 12): eight that must fail, five that must succeed, one reported (D14). */
+/** The §13.3(b) probe set (Ruling for Task 12; SEC-2 added 15 and 16): ten that must fail, five that must succeed, one reported (D14). */
 export function claudeProbes(p: ProbePaths): Probe[] {
   const write = (path: string) => `o=$( { : >> ${q(path)}; } 2>&1 ); c=$?`;
   return [
@@ -128,10 +128,10 @@ export function claudeProbes(p: ProbePaths): Probe[] {
       n: 3,
       name: "gh_api_user",
       expect: "fail",
-      // F5: no credentials (spike: exit 4 "gh auth login") or the sandbox refusing api.github.com; gh missing proves nothing
-      blockedBy: ["auth", "net"],
-      unproven: "gh not reachable: control unproven",
-      violation: "api.github.com",
+      // F5 + SEC-2: only "no credentials" holds (spike: exit 4 "gh auth login"); a network refusal means gh found a token it could not
+      // use, which a sandbox network block alone must not hide; gh missing proves nothing either
+      blockedBy: ["auth"],
+      unproven: "gh found a credential or failed otherwise: control unproven",
       body: "o=$(gh api user 2>&1 >/dev/null); c=$?",
     },
     {
@@ -211,6 +211,26 @@ export function claudeProbes(p: ProbePaths): Probe[] {
       name: "orca_from_sandbox",
       expect: "report",
       body: `b=$(command -v orca || echo /usr/local/bin/orca); r=$("$b" worktree current --json 2>/dev/null); c=$?; if printf '%s' "$r" | grep -Eq '"ok"[[:space:]]*:[[:space:]]*true'; then o=reachable; else o=unreachable; fi`,
+    },
+    {
+      // SEC-2: network-free — gh must hold no token it can hand out (its config dir is empty, its keyring must stay out of reach);
+      // a token printed goes to /dev/null, never into the result
+      n: 15,
+      name: "gh_stored_token",
+      expect: "fail",
+      blockedBy: ["auth"],
+      unproven: "gh failed otherwise: control unproven",
+      body: "o=$(gh auth token 2>&1 >/dev/null); c=$?",
+    },
+    {
+      // SEC-2: network-free — git's credential lookup for github.com, under the kit's gitconfig and the repository's own config, must
+      // come back empty (a helper there, or a reachable OS store, would answer); what it returns goes to /dev/null
+      n: 16,
+      name: "git_credential_fill",
+      expect: "fail",
+      blockedBy: ["auth"],
+      unproven: "git failed otherwise: control unproven",
+      body: `o=$(cd ${q(p.worktree)} && printf 'protocol=https\\nhost=github.com\\n\\n' | git credential fill 2>&1 >/dev/null); c=$?`,
     },
   ];
 }

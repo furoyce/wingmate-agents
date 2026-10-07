@@ -51,6 +51,13 @@ const githubRepo = (url: string): string | null => {
 };
 /** C26: the ref line `git push --porcelain` prints for a non-fast-forward rejection (its status words are not translated). */
 const NON_FAST_FORWARD = /^!\t[^\t]*\t\[rejected\] \((?:non-fast-forward|fetch first)\)$/m;
+/** SEC-2: a URL's userinfo (`scheme://<userinfo>@host`) — scp-like `user@host:path` carries no scheme and no secret. */
+const URL_USERINFO = /^([a-z][a-z0-9+.-]*):\/\/([^/@\s]*)@/i;
+/** SEC-2: a URL that carries a credential: any userinfo over http(s) (a token as user name), or a password in any scheme. */
+function credentialInUrl(url: string): boolean {
+  const m = URL_USERINFO.exec(url.trim());
+  return !!m && (/^https?$/i.test(m[1] ?? "") || (m[2] ?? "").includes(":"));
+}
 /** F7: how many replace refs `replaceRefs` names — one is enough to refuse, and the read stays bounded. */
 const REPLACE_REFS_MAX = 10;
 
@@ -287,6 +294,35 @@ export class GitCli implements GitPort {
       "git_failed",
       `git config failed (${r.code}): ${r.stderr.trim().slice(0, 300) || "no boolean"}`,
     );
+  }
+  /**
+   * SEC-2: `git config --local --null --list` on the pinned target, reduced to the keys that hand an agent a credential: `credential.*`
+   * (a helper there runs for any git in the repository, the agent's too, after the kit's global reset), and a remote URL or an
+   * `insteadOf` rewrite with a credential in it. A subsection that is a URL is shown as `*`; no value is ever returned.
+   */
+  async credentialConfig(t: GitTarget): Promise<string[]> {
+    const keys: string[] = [];
+    for (const entry of (await this.g(t, ["config", "--local", "--null", "--list"], 30_000)).split("\0")) {
+      if (!entry) continue;
+      const nl = entry.indexOf("\n");
+      const key = nl < 0 ? entry : entry.slice(0, nl);
+      const value = nl < 0 ? "" : entry.slice(nl + 1);
+      const first = key.indexOf(".");
+      const last = key.lastIndexOf(".");
+      const section = key.slice(0, first).toLowerCase();
+      const name = key.slice(last + 1).toLowerCase();
+      const sub = first === last ? null : key.slice(first + 1, last);
+      if (section === "credential") keys.push(sub === null ? `credential.${name}` : `credential.*.${name}`);
+      else if (section === "remote" && (name === "url" || name === "pushurl") && credentialInUrl(value))
+        keys.push(`remote.${sub ?? ""}.${name} (userinfo)`);
+      else if (
+        section === "url" &&
+        (name === "insteadof" || name === "pushinsteadof") &&
+        credentialInUrl(sub ?? "")
+      )
+        keys.push(`url.*.${name} (userinfo)`);
+    }
+    return [...new Set(keys)];
   }
   /** R30: `git config --local --replace-all core.useReplaceRefs false` — one value left, however many there were (a plain set refuses several). */
   async disableReplaceRefs(t: GitTarget): Promise<void> {

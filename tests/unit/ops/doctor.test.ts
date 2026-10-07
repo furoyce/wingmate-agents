@@ -285,6 +285,27 @@ describe("doctor — every check", () => {
     await failing("main checkout not in the fleet");
   });
 
+  test("SEC-2: repo_credential_config (blocking) fails while a pilot repo's own config holds a credential an agent could read — keys named, never values", async () => {
+    const w = await healthy();
+    expect(check(await doctor(w.ctx, opts()), "repo_credential_config")).toMatchObject({
+      ok: true,
+      blocking: true,
+    });
+    const [key, p] = Object.entries(w.cfg.projects)[0] ?? [];
+    const [name] = Object.keys(p?.repos ?? {});
+    if (!key || !name) throw new Error("no pilot repo");
+    w.git.credentialKeys.set(join(w.root, "projects", `${key}-${name}`), [
+      "credential.helper",
+      "remote.fork.url (userinfo)",
+    ]);
+    const rep = await doctor(w.ctx, opts());
+    expect(check(rep, "repo_credential_config")).toMatchObject({ ok: false, blocking: true });
+    expect(check(rep, "repo_credential_config")?.detail).toContain(
+      `${key}/${name}: credential.helper, remote.fork.url (userinfo)`,
+    );
+    expect(rep.ok).toBe(false);
+  });
+
   test("binary_installed: a changed binary or a link pointing elsewhere fails; automation_present: a changed prompt, precheck or mode fails", async () => {
     const w = await healthy();
     const state = await readInstallState(w.dirs);

@@ -29,7 +29,7 @@ import {
   settingsPosture,
   withCanary,
 } from "./probe";
-import { replaceRefsDisabled } from "./repoSettings";
+import { replaceRefsDisabled, repoCredentialConfig } from "./repoSettings";
 
 export interface Check {
   name: string;
@@ -293,6 +293,8 @@ export async function doctor(ctx: Ctx, o: DoctorOptions): Promise<DoctorReport> 
   await attempt("claude_trust", () => claudeTrust(ctx, fleet), false);
   // R30 (D14): Orca's checkout of a pilot repository must follow no replace ref an agent could plant in the shared git dir
   await attempt("replace_refs_disabled", () => replaceRefsDisabled(ctx, fleet));
+  // SEC-2 (§13.3 a): no credential in a pilot repository's own config, which every agent of the repository can read
+  await attempt("repo_credential_config", () => repoCredentialConfig(ctx, fleet));
   await attempt("binary_installed", () => binaryInstalled(ctx, o.version));
   await attempt("automation_present", () => automationPresent(ctx));
   await attempt(

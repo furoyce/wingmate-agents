@@ -117,6 +117,15 @@ If another check fails:
 - `replace_refs_disabled`: a pilot repository does not have `core.useReplaceRefs=false` (step 2). The detail names the
   repository and why: `NOT off` means re-run `wingmate install`; a missing or unusable main checkout must be fixed in
   Orca first.
+- `repo_credential_config`: a pilot repository's own `.git/config`, which every agent of the repository can read,
+  holds a credential setting. The detail names the repository and the keys, never the values: a `credential.*`
+  setting, or a remote URL or `insteadOf` rewrite with a credential in it. Move it to your global git config, or drop the
+  token from the URL, then run doctor again.
+- `sandbox_probe` naming `credential_env_empty: visible to agents: …`: those variables of your user-level Claude `env`
+  (`~/.claude/settings.json`) still reach agent sessions. Move them out of that file (runbook section 16).
+- `sandbox_probe` naming `gh_stored_token` or `git_credential_fill`: gh or git handed a GitHub credential to the
+  sandboxed session. Find where it came from (`gh auth status`, `git config --show-origin --get-all credential.helper`)
+  and make it unreachable before you enable the automation (runbook section 16).
 - Anything else: see [runbook.md](runbook.md), Incidents.
 
 ## 6. Finish the two saved views
