@@ -233,8 +233,8 @@ first line is just `continue`. The issue then resumes in place.
 | `owner_stop` | `wingmate stop` blocked it. | Re-queue it when you want the work to continue. |
 | `launch_failed` | The coordinator never started: a claim step failed twice, or the brief and one start nudge got no turn. | Look at the coordinator terminal in Orca (a dialog, an error), then re-queue. |
 | `setup_failed` | The repository's `setup` command failed. The comment shows only the exit code. | Fix `setup` in `config/projects.yaml` or in the repository, then re-queue. |
-| `base_mismatch` | The base did not verify as GitHub's base commit. A new claim checks it in the repository's main checkout before Orca creates the worktree, so nothing was created or run. A re-queue that reuses a worktree checks it there, before anything runs. The comment names both commits and says which case it is: **behind GitHub** (a stale clone, attention `base_mismatch`); **not in the history of GitHub's** base, does not resolve, or a `refs/heads/<commit>` ref exists (possibly rewritten, attention `base_diverged`); or it **cannot be verified** (no such branch on GitHub, no usable main checkout in Orca). | Behind GitHub: run `git fetch origin` in the main checkout, then re-queue. Possibly rewritten: do not fetch first. Section 12 keeps the evidence. Cannot be verified: fix `repos.<name>.base` or the repository's main checkout in Orca, then re-queue. |
-| `kit_tampered` | A kit file changed, the worktree's `.git` file or `commondir` was redirected (`git_dir_tampered`), or a new worktree did not start at the verified commit. | Section 12. Treat it as a possible escape. |
+| `base_mismatch` | The base did not verify as GitHub's base commit. A new claim checks it in the repository's main checkout before Orca creates the worktree, so nothing was created or run. A re-queue that reuses a worktree checks it there, before anything runs. The comment names both commits and says which case it is: **behind GitHub** (a stale clone, attention `base_mismatch`); **not in the history of GitHub's** base, does not resolve, or a `refs/heads/<commit>` ref or a replace ref (`refs/replace/…`) exists (possibly rewritten, attention `base_diverged`); or it **cannot be verified** (no such branch on GitHub, no usable main checkout in Orca). | Behind GitHub: run `git fetch origin` in the main checkout, then re-queue. Possibly rewritten: do not fetch first. Section 12 keeps the evidence. Cannot be verified: fix `repos.<name>.base` or the repository's main checkout in Orca, then re-queue. |
+| `kit_tampered` | A kit file changed, the worktree's `.git` file or `commondir` was redirected (`git_dir_tampered`), or a new worktree did not start at the verified commit or a replace ref appeared while Orca created it. | Section 12. Treat it as a possible escape. |
 | `cascade_exhausted` | A handoff was due (the coordinator exited twice, or asked for a handoff) and no untried provider was available. With the Claude-only cascade, every handoff ends here. | Look at the worktree, then re-queue when ready. |
 | `grace_expired_no_cascade` | A stage passed its cap and grace with no activity, and no provider was left to hand off to. | Look at the work, then re-queue. |
 | `provider_unavailable` | During a handoff, the next provider's model could not be resolved. | Set the provider CLI's default model, then re-queue. |
@@ -269,7 +269,7 @@ Codes without † clear themselves once the condition passes. Codes marked † s
 | `worktree_gone` | The worktree is gone from disk. A parked issue is blocked; a working one counts as exited. | Section 13. |
 | `integrity_unverifiable` | This tick could not run the kit integrity check (git unreadable in the worktree). That is never a block; it is retried every tick. | Run `git -C <worktree> status` if it persists. |
 | `base_mismatch` † | The claim's base check failed and the issue is blocked: a clone behind GitHub, or a base that could not be verified. | Section 6. |
-| `base_diverged` † | The claim's base check found a local base ref outside GitHub's history, one that names no commit, a `refs/heads/<commit>` ref that Orca would take for the base, or a `commondir` file in the main checkout's `.git`. The issue is blocked `base_mismatch`. | Possible tampering: section 12, before any fetch. |
+| `base_diverged` † | The claim's base check found a local base ref outside GitHub's history, one that names no commit, a `refs/heads/<commit>` ref that Orca would take for the base, a replace ref (`refs/replace/…`) that Orca's checkout would follow, or a `commondir` file in the main checkout's `.git`. The issue is blocked `base_mismatch`. | Possible tampering: section 12, before any fetch. |
 | `blocked_unposted` | The issue is blocked on disk, but the `Blocked` label and comment are not posted yet (Linear was unreachable). The next tick posts them. | Nothing, unless Linear stays down (section 11). |
 | `release_unverifiable(…)` † | A release, block, handoff or stop could not prove everything stopped. `terminals`: the bulk terminal close failed; a failed release is retried, and its code clears once a retry closes them. `run`: the Run's workers could not be listed. Dispatch ids: workers fenced with `worker-abandon` without proof they exited. | Check those terminals or workers in Orca and stop them by hand. |
 | `tick_error` (summary only) | Processing this issue threw an unexpected error. It is retried next tick, and the ledger records the code. | If it repeats, read `logs/wingmate.log` and `ledger/<ID>.jsonl`. |
@@ -414,7 +414,8 @@ decided while Linear was down shows `blocked_unposted` until its label and comme
 names up to five changed paths, or the git link that moved. `git_dir_tampered` is the internal refusal raised when the
 worktree's `.git` file, or its gitdir's `commondir`, no longer names the recorded git directories.
 
-1. If you suspect more than one issue, run `wingmate stop --all` and follow the rotation steps in
+1. If you suspect more than one issue, or the detail says a new worktree did not start at the verified commit or a
+   replace ref appeared (a hook may have run as you), run `wingmate stop --all` and follow the rotation steps in
    [linear-app-setup.md](linear-app-setup.md).
 2. Inspect the worktree:
    - `cat <worktree>/.git` should read `gitdir: <common dir>/worktrees/<name>`;
@@ -423,18 +424,20 @@ worktree's `.git` file, or its gitdir's `commondir`, no longer names the recorde
 3. Remove the worktree in Orca: Wingmate removes worktrees only after Done. Then re-queue the issue (section 6).
 
 **`base_diverged`: a base ref outside GitHub's history.** The issue is blocked `base_mismatch`. Its local
-`origin/<base>` names a commit outside GitHub's history, or no commit, or a ref `refs/heads/<commit>` stands in for
-GitHub's commit. No worktree was created, and nothing ran in a reused one. An agent's sandbox may have rewritten
-`packed-refs`, so keep the evidence before anything fetches over it:
+`origin/<base>` names a commit outside GitHub's history or no commit, or a ref stands in for GitHub's commit: a
+`refs/heads/<commit>`, or a replace ref (`refs/replace/…`; git reads other objects under that commit's name). Nothing
+was created or run. An agent's sandbox may have rewritten `packed-refs`: keep the evidence before anything fetches.
 
-1. Copy `<common dir>/packed-refs` aside. The blocked comment's next step names the file.
-2. Check ancestry before any fetch. `grep '"base_mismatch"' <state>/ledger/<ID>.jsonl` gives both commits in full
-   (`local`, `remote`, `verdict`). Then run `git -C <main checkout> merge-base --is-ancestor <local> <remote>`: exit 0
-   means the clone is only behind GitHub; 1 or an error means the ref left GitHub's history. If the ref does not exist
-   at all (no `show-ref` line, no `packed-refs` line for it), it is only missing: fetch and re-queue.
+1. Copy `<common dir>/packed-refs` aside (the next step names it), and `<common dir>/refs/replace/` if it exists.
+2. Unless the detail names replace refs (the base itself verified), check ancestry before any fetch:
+   `grep '"base_mismatch"' <state>/ledger/<ID>.jsonl` gives `local`, `remote` and `verdict` in full;
+   `git -C <main checkout> merge-base --is-ancestor <local> <remote>` exits 0 when the clone is only behind GitHub,
+   1 or an error when the ref left GitHub's history. A ref that does not exist at all (no `show-ref` or `packed-refs`
+   line) is only missing: fetch and re-queue.
 3. Run `wingmate stop --all` and follow the rotation steps in [linear-app-setup.md](linear-app-setup.md).
-4. Only then run `git -C <main checkout> fetch origin`. Delete a ref the detail names that git never makes:
-   `git -C <main checkout> update-ref -d refs/heads/<commit>`. Then re-queue (section 6).
+4. Only then run `git -C <main checkout> fetch origin`. Delete each ref the detail points at that you did not make
+   with `git -C <main checkout> update-ref -d <ref>`: the `refs/heads/<commit>` it names, and every ref
+   `git -C <main checkout> for-each-ref refs/replace/` lists. Then re-queue (section 6).
 
 **A journal entry is poisoned.** `doctor` reports `journal_clean: poisoned: <ID>/<kind>`, and a publish also shows
 `journal_poisoned`. A poisoned entry is never replayed.
@@ -450,9 +453,8 @@ GitHub's commit. No worktree was created, and nothing ran in a reused one. An ag
    the warning once the issue has moved on, rewrite the entry's state atomically:
    `jq '.state = "abandoned"' <file> > <file>.tmp && mv <file>.tmp <file>`. Never edit journal files in place.
 
-To read an issue's record, use `wingmate status --json` or `<state>/records/<ID>.json`. Run
-`wingmate issue <ID> show` inside the issue worktree to see that worktree's `.wingmate/` mirror and its pending
-intents.
+To read an issue's record, use `wingmate status --json` or `<state>/records/<ID>.json`. `wingmate issue <ID> show`,
+run inside the issue worktree, shows that worktree's `.wingmate/` mirror and its pending intents.
 
 ## 13. Incidents: worktrees, trust dialog, notifications
 
@@ -560,11 +562,16 @@ These are the D14 residuals: places where the agent trust boundary is weaker tha
 - **PRs are not opened while paused.** A `finish` waits for a tick that may resume work.
 - **Setup runs only in worktrees the claim created.** The repository's `setup` command never runs in a reused worktree
   (a re-queue or a replay).
-- **Orca resolves the base a moment after the check.** A claim verifies GitHub's commit in the main checkout and gives
-  Orca that commit. A `refs/heads/<commit>` ref that already exists blocks the claim. But Orca looks that ref up before
-  the commit itself, and an agent's sandbox can write `packed-refs`. A ref planted between the check and the create would
-  be checked out as you, outside the sandbox. A hook under a relative `core.hooksPath` (husky) could run then, before the
-  start check blocks the issue `kit_tampered`.
+- **Orca checks out the base a moment after the check.** A claim verifies GitHub's commit in the main checkout and gives
+  Orca that commit. A `refs/heads/<commit>` ref (which Orca looks up before the commit itself) or any replace ref
+  (`refs/replace/…`) that already exists blocks the claim. But an agent's sandbox can write `packed-refs`, and Orca's
+  `git worktree add` runs as you, outside the sandbox, with replace refs on. A ref planted between the check and the
+  create is followed: Orca checks out other files, and under a replace ref HEAD still names GitHub's commit. A hook under
+  a relative `core.hooksPath` (husky) could run then. Afterwards the start checks block the issue `kit_tampered` (a head
+  that moved, a replace ref still there) before the kit, the setup or a terminal. A replace ref removed again before
+  those checks goes unseen, and the setup then runs on its files. Closing this needs Orca's git to ignore replace refs
+  (`core.useReplaceRefs=false` in a git config it reads) or agents without write access to `packed-refs`. Wingmate's
+  own git (base checks, publish guards) ignores replace refs.
 
 The rest are slice-1 gaps:
 
