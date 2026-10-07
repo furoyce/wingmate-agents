@@ -4,6 +4,7 @@
 import { join } from "node:path";
 import { consumeIntent, listIntents, writeIntent } from "../../kit/intents";
 import { type Local, readLaunch, readLocal, worktreeFile, writeLocal, writeStage } from "../../kit/local";
+import { dispatcherMode, readRoleJobs } from "../../kit/roles";
 import { OrcaError, orca } from "../../orca/cli";
 import { OrcaClient } from "../../orca/client";
 import { scanText } from "../../policy/secrets";
@@ -12,6 +13,7 @@ import { WingmateError } from "../../shared/errors";
 import { run } from "../../shared/exec";
 import { IDENTIFIER_RE } from "../../shared/ids";
 import { readText } from "../../state/fs";
+import { rolePending } from "../../state/roles";
 import type { Argv } from "../index";
 import { gateVerb, gitHead, markStale } from "./issue/gate";
 import { spawnVerb } from "./issue/spawn";
@@ -74,6 +76,11 @@ const noRunner = (verb: string) =>
   );
 
 async function workersLive(c: Ctx): Promise<string[]> {
+  if (await dispatcherMode(c.cwd))
+    return [
+      ...(await readRoleJobs(c.cwd)).filter(rolePending).map((j) => j.id),
+      ...(await listIntents(c.cwd)).filter((i) => i.kind === "spawn").map((i) => i.id),
+    ];
   const runId = c.local.run?.childRunId ?? c.local.record.childRunId;
   if (!runId) return [];
   return (await c.orca.workerList(runId)).filter((w) => w.verdict === "live").map((w) => w.dispatchId);
@@ -162,6 +169,7 @@ async function noteVerb(c: Ctx): Promise<number> {
 }
 
 async function runVerb(c: Ctx): Promise<number> {
+  if (await dispatcherMode(c.cwd)) return refuse("role_mode", "dispatcher role jobs do not use Orca Runs");
   const runId = flag(c.argv, "id");
   if (!runId) return refuse("usage", "run --id <runId>");
   c.local.run = { childRunId: runId };
@@ -259,6 +267,7 @@ async function showVerb(c: Ctx): Promise<number> {
     record: c.local.record,
     gates: c.local.gates,
     questions: c.local.questions,
+    roles: await readRoleJobs(c.cwd),
     // the child Run `spawn` or `run` recorded, before the dispatcher mirrors it into `record` (PROTOCOL: a timed-out spawn is
     // checked here before it is retried)
     run: c.local.run,
@@ -288,14 +297,18 @@ const VERBS = new Map<string, (c: Ctx) => Promise<number>>([
   [
     "spawn",
     async (c) => {
-      if (!c.orca.exec) return noRunner("spawn");
+      if (!c.orca.exec && !(await dispatcherMode(c.cwd))) return noRunner("spawn");
       return spawnVerb(c.argv, {
         cwd: c.cwd,
         local: c.local,
         id: c.id,
         refuse,
         out,
-        exec: c.orca.exec,
+        exec:
+          c.orca.exec ??
+          (async () => {
+            throw new WingmateError("orca_unavailable", "no Orca runner is configured for spawn");
+          }),
         env: c.env,
       });
     },

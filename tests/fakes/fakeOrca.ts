@@ -76,6 +76,8 @@ export class FakeOrca implements OrcaPort {
   /** The clock agent states are stamped with (makeWorld: the world clock). */
   now = () => new Date().toISOString();
   closed: string[] = [];
+  /** Ground truth for I1, including a role create whose receipt was lost. */
+  roleTerminals = new Set<string>();
   removed: string[] = [];
   previews = new Map<string, string>();
   /** `automations list`; `automationsCreate` appends to it and `automationsEdit` changes a row, as Orca does. */
@@ -242,6 +244,7 @@ export class FakeOrca implements OrcaPort {
       lastOutputAt: null,
     };
     this.terminals.set(wt, [...(this.terminals.get(wt) ?? []), t]);
+    if (command.includes("/roles/") && command.includes("/runner.sh")) this.roleTerminals.add(t.handle);
     const row = this.rows.get(wt);
     if (row) {
       row.liveTerminalCount++;

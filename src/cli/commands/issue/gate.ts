@@ -13,6 +13,7 @@ import {
   writeLocal,
   writeStage,
 } from "../../../kit/local";
+import { dispatcherMode, readRoleJobs } from "../../../kit/roles";
 import { depsPolicy } from "../../../policy/deps";
 import { violations } from "../../../policy/pathguard";
 import { type Finding, scanAddedLines, scanText } from "../../../policy/secrets";
@@ -255,6 +256,28 @@ export async function gateVerb(argv: Argv, d: Deps): Promise<number> {
       `wingmate issue ${d.id} gate ${missing[0]} …`,
     );
   const g = d.local.gates[stage] ?? EMPTY;
+  const dispatcher = await dispatcherMode(d.cwd);
+  if (dispatcher && method === "graph")
+    return d.refuse("graph_unavailable", "terminal-job fallback uses method loop");
+  const dispatchId = f("request") ?? f("dispatch");
+  const role =
+    stage === "planVerify"
+      ? "plan-verifier"
+      : stage === "validate"
+        ? "code-reviewer"
+        : stage === "security"
+          ? "security-reviewer"
+          : null;
+  const job =
+    dispatcher && role
+      ? (await readRoleJobs(d.cwd)).find((j) => j.id === dispatchId && j.role === role)
+      : null;
+  if (dispatcher && role && (!job || job.status !== "succeeded" || !job.reportPath || job.headSha !== head))
+    return d.refuse(
+      "review_required",
+      `${stage} requires a settled review at HEAD`,
+      `spawn --role ${role} --spec <file>, END YOUR TURN, then gate ${stage} --request <id>`,
+    );
   let verdict: "PASS" | "FAIL" | "NA";
   let evidencePath: string | null;
   let note = f("note");
@@ -264,7 +287,7 @@ export async function gateVerb(argv: Argv, d: Deps): Promise<number> {
       stage === "validate" ? await validateReport(d.cwd, launch) : await securityReport(d.cwd, launch);
     evidencePath = join(".wingmate", "evidence", stage, "report.txt");
     await writeAtomic(join(d.cwd, evidencePath), `${res.lines.join("\n")}\n`);
-    verdict = res.ok ? "PASS" : "FAIL";
+    verdict = res.ok && (!job || job.verdict === "PASS") ? "PASS" : "FAIL";
     note = res.ok ? null : `${stage} computed FAIL`;
     if (verdict === "FAIL" && g.failCount >= 2)
       return d.refuse(
@@ -272,13 +295,19 @@ export async function gateVerb(argv: Argv, d: Deps): Promise<number> {
         `${stage} computed FAIL a third time (report: ${evidencePath})`,
         `wingmate issue ${d.id} ask --question-file <path> --options a,b --recommend a`,
       );
+  } else if (job && stage === "planVerify") {
+    if (argv.flags.verdict !== undefined)
+      return d.refuse("verdict_not_allowed", "planVerify uses the settled verifier result");
+    verdict = job.verdict ?? "FAIL";
+    evidencePath = job.reportPath;
+    if (verdict === "FAIL" && g.failCount >= 2)
+      return d.refuse("gate_retry_exhausted", "planVerify failed twice already; ask the owner");
   } else {
     const j = await judge(argv, d, stage, g.failCount);
     if ("refused" in j) return j.refused;
     verdict = j.verdict;
     evidencePath = j.evidencePath;
   }
-  const dispatchId = f("dispatch");
   d.local.gates[stage] = {
     verdict,
     failCount: g.failCount + (verdict === "FAIL" ? 1 : 0),

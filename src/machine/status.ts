@@ -5,6 +5,7 @@ import { modelLabel } from "../policy/providers";
 import type { LinearIssue } from "../ports";
 import { errorText } from "../shared/errors";
 import { PIPELINE, type WRecord } from "../state/records";
+import { usageSummary } from "../state/usage";
 import type { Ctx } from "./context";
 import { LinearWrites } from "./linearWrites";
 
@@ -103,7 +104,10 @@ export async function syncStatus(
     effort: r.coordinator.launch.effort,
     worktree: r.worktree?.path ?? null,
     branch: r.worktree?.branch ?? null,
-    agents: { coordinator: r.stage === "working" || r.stage === "claimed" ? 1 : 0, workers: 0 },
+    agents: {
+      coordinator: r.stage === "working" || r.stage === "claimed" ? 1 : 0,
+      workers: r.roleJobs.filter((j) => ["starting", "running", "unverifiable"].includes(j.status)).length,
+    },
     gates: PIPELINE.map(
       (s) =>
         [s, r.gates[s].verdict, r.gates[s].failCount + (r.gates[s].verdict ? 1 : 0)] as [
@@ -117,6 +121,7 @@ export async function syncStatus(
       tokens: r.usage.tokens,
       costUsd: r.usage.costUsd,
       provenance: r.usage.bySession[0]?.provenance ?? "unknown",
+      ...(r.usage.bySession.length ? { detail: usageSummary(r.usage) } : {}),
     },
     updatedAt: ctx.now(),
     notes: await recentNotes(ctx, r),

@@ -16,7 +16,7 @@ import { claimIssue } from "../../../src/machine/claim";
 import { type OutboxOptions, executeOutbox } from "../../../src/machine/outbox";
 import { reconcile } from "../../../src/machine/reconcile";
 import type { LinearIssue } from "../../../src/ports";
-import { type WRecord, readRecord } from "../../../src/state/records";
+import { type WRecord, readRecord, writeRecord } from "../../../src/state/records";
 import { addLabeledByOwner, todo } from "../../fakes/issues";
 import { type World, makeWorld, stubPublish } from "../../fakes/world";
 
@@ -38,6 +38,9 @@ async function claimed(): Promise<{ w: World; r: WRecord; wt: string }> {
     repoName: "api",
     routing: { basis: "default", candidates: [], rerouteFrom: null },
   });
+  // These cases exercise pre-slice-2 installed records. The dispatcher relay has dedicated simulations.
+  r.roleMode = "legacy";
+  await writeRecord(w.dirs, r);
   return { w, r, wt: r.worktree?.path ?? "" };
 }
 /** One outbox pass on a freshly read record, as the tick does it. */

@@ -138,6 +138,8 @@ export async function transition(
     throw new WingmateError("illegal_transition", `${r.identifier}: ${r.stage} → ${to} (${cause})`);
   const from = r.stage;
   const at = ctx.now();
+  r.coordinator.usageSampleAt = at;
+  r.coordinator.usageSampleWorking = to === "working";
   r.stage = to;
   r.updatedAt = at;
   r.history.push({ at, from, to, cause, evidence });

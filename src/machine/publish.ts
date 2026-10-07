@@ -18,6 +18,7 @@ import { WingmateError, errorCode, errorText } from "../shared/errors";
 import { isIdentifier } from "../shared/ids";
 import type { JournalEntry } from "../state/journal";
 import { PIPELINE, type WRecord } from "../state/records";
+import { usageSummary } from "../state/usage";
 import type { Ctx } from "./context";
 import { allowDepsGranted } from "./grants";
 import { isTickAbort } from "./guard";
@@ -26,6 +27,7 @@ import type { Liveness } from "./liveness";
 import type { Reconciled } from "./reconcile";
 import { block } from "./release";
 import { type Persisted, persistInbox, relaunch, sendPointer } from "./resume";
+import { verifyRoleGate } from "./roles";
 import { saveRecord } from "./save";
 import { addAttention, dropAttention, enterPipelineStage, transition } from "./states";
 import { addNote } from "./status";
@@ -229,6 +231,14 @@ async function guards(
         (p) => `${p} changed without an approver-granted ${ctx.cfg.labels.allowDeps} label`,
       ),
     };
+  for (const stage of ["validate", "security"] as const) {
+    try {
+      await verifyRoleGate(ctx, r, stage, r.gates[stage].dispatchId, at, at);
+    } catch (e) {
+      if (!(e instanceof WingmateError)) throw e;
+      return stale(`${stage}: ${e.code}: ${e.message}`);
+    }
+  }
   return validateFailure(r, wt, repo, at);
 }
 
@@ -437,6 +447,7 @@ async function completionComment(ctx: Ctx, w: LinearWrites, r: WRecord, issue: L
     gates: gateTable(r),
     limitations: c.limitations,
     followups: await followups(ctx, r),
+    cost: usageSummary(r.usage),
   });
   const existing = (await ctx.linear.listComments([issue.id], EPOCH))
     .filter((x) => x.body.startsWith(MARK.completion) && x.botActorId !== null)

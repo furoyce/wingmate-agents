@@ -1329,6 +1329,37 @@ user or VM.
 | Egress of the `ui-smoke` tab (Orca's embedded browser runs outside the agent sandbox) | D14 residual (2026-10-07): web UI gates owner-reviewed; restrict the tab to loopback if Orca can |
 | `orca` reachable from inside the kit sandbox (`spawn`, `orchestration check`, `worker-list`) | verified 2026-10-07 (R36): unreachable — the kit denies Orca's runtime file (socket endpoint and auth token); the role-agent stages wait for dispatcher-executed spawn, and granting agents that file would hand them Orca's token (D14) |
 
+### 16.3 Slice-2 amendment: dispatcher role requests (2026-10-07, R33/R36)
+
+The live sandbox denies Orca's runtime file, so the direct spawn and worker lifecycle described in §8.1 cannot run
+inside a kit. New kits use the §16.1 fallback and force method `loop`. `spawn --role <review role> --spec <file>` writes
+an outbox request and immediately returns `{ok, mode:"terminal-job", requestId, status:"pending"}`. The coordinator
+queues a wave and ends its turn. `--deps` names earlier Wingmate request IDs from the same cycle and attempt.
+Only the trusted dispatcher checks current quota, resolves tier best, verifies kit integrity, refreshes sibling denies,
+and calls `terminal create` with a noninteractive provider CLI and a protected outer capture runner. Claude reviewer
+settings deny worktree/common-dir writes; Codex reviewers retain `read-only`. Graph workers are refused in this fallback.
+
+Role requests are explicitly unsupervised terminal jobs, not Orca Tasks or Dispatches. No component impersonates
+`worker_done`. The record stores cycle/attempt, request ID, role, provider, input HEAD, plan digest, terminal/pane,
+launch uncertainty, settlement, report digest and notification state. Persisting `starting` before terminal creation
+prevents duplicate launches after a lost response; uncertainty is surfaced for inspection. Known role handles and panes
+are excluded from coordinator adoption. An unreadable legacy worker list also prevents advance from rebinding (R33).
+
+The runner captures stdout, stderr, completion time and exit status outside the model sandbox. Only a successful final
+provider response beginning PASS/FAIL settles a review; tool output, errors, missing final messages and output over 8 MiB
+fail closed. Captures remain dispatcher-owned. The dispatcher mirrors advisory receipts and report text into `.wingmate/`
+and resumes an idle coordinator when the wave settles, within the resume budget. Partial/reconcile-only/paused ticks do
+not start roles. At most four requests are pending per issue; quota and dependency waits are uncounted backpressure.
+Stop/release/handoff retain the existing bulk close and process sweep for all issue processes.
+
+`gate planVerify --request <id>` derives its verdict from the verifier. Code/security reviewers run before
+`gate validate|security --request <id>`, which also runs the pinned deterministic commands. The dispatcher checks PASS
+against its protected result at HEAD (and the plan digest for planVerify), rather than an agent-written mirror. Publish
+checks code/security reviews again at the exact pushed HEAD. Modified report evidence requires a fresh review.
+Measured role tokens/dollars and sampled coordinator minutes are recorded per session with provenance; incomplete totals
+remain null. Status and completion comments show this provenance. Web/iOS UI execution and live pilot acceptance remain
+subject to the existing §16 checks; this relay does not grant agent access to the Orca browser or runtime.
+
 ## 17. Glossary
 **Coordinator** — the per-issue terminal agent (tier best) owning the pipeline. **Worker** — a supervised sub-agent
 started through `spawn`. **Dispatcher** — the Orca automation's precheck running `wingmate tick`. **Tier** — a

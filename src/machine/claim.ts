@@ -580,6 +580,7 @@ async function installAndSetup(
     type: "kit_installed",
     data: { hashes: res.hashes, nonce, courtesySettings: res.courtesySettings },
   });
+  r.roleMode = "terminal-job";
   const skip = repo.setup === "none" ? null : await setupSkip(ctx, entryId);
   if (skip)
     await ctx.ledger.append({

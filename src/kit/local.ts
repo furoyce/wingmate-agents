@@ -41,6 +41,7 @@ const Tier = z.object({ model: Model, effort: z.string().min(1) });
 const Path = z.string().min(1);
 /** `.wingmate/launch.json`, written by `installKit` (integrity-protected) and read by `gate` and `spawn`; every field is required. */
 export const LaunchSchema = z.object({
+  spawnMode: z.literal("dispatcher").optional(),
   provider: z.enum(["claude", "codex"]),
   model: Model,
   effort: z.string().min(1),

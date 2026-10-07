@@ -605,14 +605,22 @@ These are the D14 residuals: places where the agent trust boundary is weaker tha
   read-only verifier or reviewer. `coordinatorCascade` and `workers` stay `[claude]` until you accept the D14 extension.
 - **Agent settings are pinned at launch.** A running Claude session keeps the sandbox settings it started with. Deny
   entries for sibling worktrees created later reach it only at its next launch or relaunch.
-- **Orca is not reachable from the sandbox, so role agents cannot start yet.** The `orca` CLI reads its runtime file
-  (the socket endpoint and an auth token) under `~/Library/Application Support/orca`, and the kit sandbox denies that
-  read; the live `doctor` of 2026-10-07 reports `orca_from_sandbox` unreachable. Inside an agent session,
-  `wingmate issue spawn`, `orca orchestration check` and `worker-list` therefore fail, and the plan verifier, the code
-  and security reviewers and graph workers never start. An issue stops at planVerify, retries, then asks you. Slice 2
-  moves spawn to the dispatcher (R36). Do not grant agents that file or socket: the token lets an agent start
-  processes outside its sandbox through Orca. If a later Orca or Claude Code makes `doctor` report it reachable, that
-  residual applies (D14).
+- **Orca remains unavailable inside the sandbox.** Its runtime file contains a socket endpoint and an auth token.
+  Do not grant agents that file or socket. New issue kits queue `spawn` requests locally; the dispatcher launches
+  sandboxed role terminals and captures their final stdout and exit status under `<state>/kit/<ID>/roles/<requestId>/`.
+  These are `terminal-job` requests, not Orca Dispatches: no injected preamble, `check`, `worker_done` or worker release
+  is involved. The coordinator ends its turn after a request wave and resumes from `.wingmate/roles.json` and report files.
+  `gate planVerify|validate|security --request <id>` must match a protected successful review at the input commit; plan
+  verification also pins the plan digest. Altered reports and stale commits refuse the gate. Method `loop` is required;
+  graph workers remain unavailable under the §16.1 fallback. Existing kits keep their legacy behavior until the issue is
+  re-queued after upgrading; do not rewrite a running kit by hand.
+- **Uncertain role starts need inspection.** `role_unverifiable` means a terminal create lost its receipt or the recorded
+  role terminal disappeared without a captured exit. Wingmate will not repeat the create or adopt that role as a coordinator.
+  Inspect Orca and the protected role logs, then stop and re-queue the issue if recovery is impossible. A stop sweeps every
+  process of the worktree. Quota shortages leave requests pending; they do not consume the intent quarantine allowance.
+- **Usage is partly measured.** Role receipts carry CLI-reported tokens (and dollars when supplied). Coordinator minutes
+  use sampled working intervals; role minutes use captured completion time, falling back to the collection time when absent.
+  Status and completion comments label each session's provenance. Unknown dollar or token totals stay unknown.
 - **A `ui-smoke` page can reach the internet.** `ui-smoke` opens the agent's local dev server in Orca's embedded
   browser, which runs outside the agent sandbox with ordinary network access. Script in a page the agent wrote can send
   whatever the agent can read (source, ticket text) to any host, and the sandbox's network allowlist never sees it.
