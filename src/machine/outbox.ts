@@ -17,7 +17,7 @@ import { isTickAbort } from "./guard";
 import { LinearWrites } from "./linearWrites";
 import { syncMirror } from "./mirror";
 import type { Reconciled } from "./reconcile";
-import { coordinatorMarker } from "./resume";
+import { coordinatorMarker, deliver } from "./resume";
 import { saveRecord } from "./save";
 import { addAttention, dropAttention, enterPipelineStage, stageOf, transition } from "./states";
 import { addNote, syncStatus } from "./status";
@@ -44,6 +44,11 @@ export interface OutboxOptions {
    * publish delivers its pointer in the same tick as a resume (§8.1, §6.7).
    */
   canResume: boolean;
+  /**
+   * INT-1: false in reconcile-only ticks — a pointer to the coordinator would start a turn (§6.7), so a `gate` the dispatcher's record
+   * refuses then stays pending, uncounted, for the next normal tick. Absent → true.
+   */
+  canDeliver?: boolean;
 }
 interface Run {
   ctx: Ctx;
@@ -53,6 +58,7 @@ interface Run {
   wt: string;
   res: OutboxResult;
   w: LinearWrites;
+  opts: OutboxOptions;
 }
 
 /** Failures that drop the intent at once (the agent re-asks or re-runs the verb); everything else is retried. */
@@ -110,7 +116,11 @@ async function gate(x: Run, i: Of<"gate">): Promise<void> {
   const idx = PIPELINE.indexOf(stage);
   const missing = PIPELINE.slice(0, idx).filter((s) => !PASSED.has(r.gates[s].verdict ?? ""));
   if (missing.length)
-    throw new WingmateError("stage_prerequisite", `${stage} gated before ${missing.join(",")} passed`);
+    throw new WingmateError(
+      "stage_prerequisite",
+      `${stage} gated before ${missing.join(",")} passed`,
+      `run \`wingmate issue ${r.identifier} gate ${missing[0]} …\``,
+    );
   const g = r.gates[stage];
   if (verdict === "FAIL" && g.failCount >= 2)
     throw new WingmateError("gate_retry_exhausted", `${stage} failed twice already`);
@@ -301,8 +311,33 @@ async function priorFailures(ctx: Ctx, r: WRecord, id: string): Promise<number> 
   ).length;
 }
 
+/**
+ * INT-1 (§8.1, §13.3 a): the agent's own order check passed a gate the dispatcher's record refuses — its gates.json lags the record (for
+ * example a §7.3 reset it did not see). The same intent can never pass, so it is dropped, uncounted, and the coordinator is pointed at
+ * the stage to re-gate (a note in its inbox, then the pointer); in a reconcile-only tick it stays pending for the next normal tick.
+ */
+async function gateRefused(x: Run, i: Of<"gate">, err: WingmateError): Promise<void> {
+  const { ctx, r } = x;
+  x.res.failed += 1;
+  const data = { kind: i.kind, id: i.id, code: err.code, counted: false };
+  await ctx.ledger.append({ at: ctx.now(), issue: r.identifier, type: "intent_failed", data });
+  if (x.opts.canDeliver === false) return;
+  await consumeIntent(x.wt, i.id);
+  addAttention(r, err.code);
+  const text = `gate ${i.payload.stage} was refused by the dispatcher: ${err.message}. The dispatcher's record decides the gate order (publish checks it, not .wingmate/gates.json): ${err.nextStep ?? "re-gate the earliest stage not passed"}, then every later gate again, in order.`;
+  // the note is persisted before its pointer goes out: a failed pointer leaves it in the inbox for the coordinator's next read
+  await deliver(ctx, r, "note", text, x.rec.liveness.get(r.identifier) ?? "exited", r.pipelineStage).catch(
+    (e: unknown) => {
+      if (isTickAbort(e)) throw e;
+      ctx.log.warn({ issue: r.identifier, code: errorCode(e) }, "gate refusal pointer not delivered");
+    },
+  );
+}
+
 async function failed(x: Run, i: Intent, err: unknown): Promise<void> {
   const { ctx, r } = x;
+  if (i.kind === "gate" && err instanceof WingmateError && err.code === "stage_prerequisite")
+    return gateRefused(x, i, err);
   x.res.failed += 1;
   const code = errorCode(err);
   const consumed = CONSUMED_ON_FAILURE.has(code);
@@ -426,7 +461,7 @@ export async function executeOutbox(
   if (!r.worktree) return res;
   // F10: a worktree removed from disk has no outbox; skipping it lets liveness take the exited path (relaunch → worktree_gone)
   if (!existsSync(r.worktree.path)) return res;
-  const x: Run = { ctx, r, issue, rec, wt: r.worktree.path, res, w: new LinearWrites(ctx) };
+  const x: Run = { ctx, r, issue, rec, wt: r.worktree.path, res, w: new LinearWrites(ctx), opts };
   try {
     await drain(x, opts);
   } catch (e) {

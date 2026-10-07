@@ -1,5 +1,6 @@
 // src/machine/humans.ts — §6.3 step 3 and §7: answers resume a parked issue, notes reach a working coordinator, `continue` lifts a
 // block, review feedback resumes a review. Every resume counts against the tick's budget and is deferred in reconcile-only ticks.
+import { resetMirrorGates } from "../kit/local";
 import type { LinearIssue } from "../ports";
 import type { WRecord } from "../state/records";
 import type { Ctx } from "./context";
@@ -161,7 +162,16 @@ export async function comments(a: Advance): Promise<StepOut> {
   return "next";
 }
 
-/** §7.3: In Review → In Progress resumes at `implement`, gates `implement`…`pr` pending, with every approver comment since finish. */
+/** §7.3: the gates a move back to In Progress resets; the agent's own gates.json has no `pr` (the `gate` verb never writes one). */
+const REVIEW_RESET = ["implement", "validate", "ui", "security", "pr"] as const;
+const RESET_NOTE = (id: string) =>
+  `Gates implement, validate, ui and security were reset with this move, on the dispatcher's record and in .wingmate/gates.json: re-run \`wingmate issue ${id} gate implement\` with fresh evidence first, then gate validate, ui and security again at the new HEAD, then finish.`;
+
+/**
+ * §7.3: In Review → In Progress resumes at `implement`, gates `implement`…`pr` pending, with every approver comment since finish.
+ * INT-1: the agent's own gates.json is reset with the record (`resetMirrorGates`), so its local order checks agree with the dispatcher's
+ * and it re-gates `implement` first; the delivered note says so.
+ */
 export async function reviewFeedback(a: Advance, stateName: string): Promise<StepOut> {
   const { ctx, r } = a;
   if (a.ro || a.budget.resumes <= 0) return "stop"; // deferred: the mirror keeps the old state, so the move is seen again
@@ -169,14 +179,16 @@ export async function reviewFeedback(a: Advance, stateName: string): Promise<Ste
   await new LinearWrites(ctx).setLifecycle(r, a.issue, "In-Agent");
   await transition(ctx, r, "working", "review_feedback");
   enterPipelineStage(ctx, r, "implement");
-  for (const g of ["implement", "validate", "ui", "security", "pr"] as const) r.gates[g].verdict = null;
+  for (const g of REVIEW_RESET) r.gates[g].verdict = null;
+  const mirror = r.worktree ? await resetMirrorGates(r.worktree.path, REVIEW_RESET) : "unreadable";
+  await ctx.ledger.append({ at: ctx.now(), issue: r.identifier, type: "gates_reset", data: { mirror } });
   const since = r.linear.finishedAt ?? r.claimedAt;
   const notes = a.evs.filter(
     (e): e is CommentEvent => e.type === "comment" && e.cls === "note" && e.at > since,
   );
   const text = notes.length
-    ? `Review feedback from the owner (the issue moved back to In Progress):\n\n${notes.map((e) => e.body).join("\n\n---\n\n")}`
-    : "The owner moved the issue back to In Progress without a comment; re-check the PR and continue from implement.";
+    ? `${RESET_NOTE(r.identifier)}\n\nReview feedback from the owner (the issue moved back to In Progress):\n\n${notes.map((e) => e.body).join("\n\n---\n\n")}`
+    : `The owner moved the issue back to In Progress without a comment; re-check the PR. ${RESET_NOTE(r.identifier)}`;
   const d = await deliver(ctx, r, "note", text, a.live ?? "exited", "implement");
   if (d === "exited") await relaunch(ctx, r, "review_feedback");
   r.linear.state = stateName;

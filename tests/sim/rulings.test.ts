@@ -1,8 +1,11 @@
 // tests/sim/rulings.test.ts — controller rulings and Task 9 carry-overs exercised through whole ticks
 import { describe, expect, test } from "bun:test";
-import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { issueCommand } from "../../src/cli/commands/issue";
+import { parseArgv } from "../../src/cli/index";
 import { writeIntent } from "../../src/kit/intents";
+import { readLocal, writeLocal } from "../../src/kit/local";
 import { scan } from "../../src/machine/scan";
 import { readHeartbeat, requestStop } from "../../src/state/heartbeat";
 import { withRecordLock } from "../../src/state/lock";
@@ -40,6 +43,40 @@ const foreignLock = JSON.stringify({
   token: "another-tick",
   heartbeatAt: "2026-10-06T10:20:00Z",
 });
+/** The agent's own `.wingmate/gates.json` as `gate` writes it: every stage up to security passed (ui NA) at `headSha`, validate after one FAIL. */
+async function passLocalGates(wt: string, headSha: string): Promise<void> {
+  const local = await readLocal(wt);
+  for (const s of ["intake", "plan", "planVerify", "implement", "validate", "ui", "security"])
+    local.gates[s] = {
+      verdict: s === "ui" ? "NA" : "PASS",
+      failCount: s === "validate" ? 1 : 0,
+      at: null,
+      evidencePath: null,
+      headSha,
+      note: null,
+      method: null,
+      dispatchId: null,
+    };
+  await writeLocal(wt, local);
+}
+/** One `wingmate issue JRF-501 <verb> …` run inside the worktree, as the coordinator runs it (no Orca: no workers to check). */
+async function agentVerb(wt: string, args: string[]): Promise<{ code: number; out: string }> {
+  const out: string[] = [];
+  const orig = process.stdout.write.bind(process.stdout);
+  process.stdout.write = ((s: string) => {
+    out.push(String(s));
+    return true;
+  }) as typeof process.stdout.write;
+  try {
+    const code = await issueCommand(parseArgv(["issue", "JRF-501", ...args]), {
+      cwd: wt,
+      orca: { workerList: async () => [] },
+    });
+    return { code, out: out.join("") };
+  } finally {
+    process.stdout.write = orig;
+  }
+}
 type Settings = { sandbox: { filesystem: { denyWrite: string[] } } };
 const denyOf = (w: World, id: string) =>
   (JSON.parse(readFileSync(join(w.ctx.kitDirFor(id), "claude-settings.json"), "utf8")) as Settings).sandbox
@@ -392,6 +429,98 @@ describe("owner overrides (§7.4)", () => {
       .filter((f) => f.startsWith("note-"))
       .map((f) => readFileSync(join(inbox, f), "utf8"));
     expect(notes.some((n) => n.includes("please rename the endpoint"))).toBe(true);
+  });
+
+  test("INT-1: review → feedback → re-gate → finish — the agent's gates.json is reset with the record, one PR updated, no intent_failed", async () => {
+    const w = await world();
+    const r = await claimed(w);
+    const wt = r.worktree?.path ?? "";
+    await readyToFinish(w, "JRF-501");
+    await passLocalGates(wt, "headsha"); // what `gate` wrote into the agent's own gates.json for the first finish
+    await writeIntent(wt, {
+      issue: "JRF-501",
+      kind: "finish",
+      payload: { summaryFile: ".wingmate/s.md", title: null, draft: false, repos: [] },
+    });
+    advance(w, 5);
+    expect((await runTick(w)).finished).toEqual(["JRF-501"]);
+    w.orca.setAgentState(r.worktree?.id ?? "", r.coordinator.paneKey ?? "", "done", w.ctx.now());
+    advance(w, 5);
+    w.linear.humanComment("i1", "please rename the endpoint", OWNER, w.ctx.now());
+    advance(w, 5);
+    w.linear.setState("i1", "In Progress", OWNER, w.ctx.now());
+    advance(w, 5);
+    expect((await runTick(w)).resumes).toEqual(["JRF-501"]);
+    // the mirror: implement…security reset as on the record, fail counts and the earlier stages kept
+    const local = (await readLocal(wt)).gates;
+    for (const s of ["implement", "validate", "ui", "security"]) expect(local[s]?.verdict ?? null).toBeNull();
+    expect(local.planVerify?.verdict).toBe("PASS");
+    expect(local.validate?.failCount).toBe(1);
+    const inbox = join(wt, ".wingmate", "inbox");
+    const feedback = readdirSync(inbox)
+      .filter((f) => f.startsWith("note-"))
+      .map((f) => readFileSync(join(inbox, f), "utf8"))
+      .find((n) => n.includes("please rename the endpoint"));
+    expect(feedback).toContain("gate implement");
+    // the agent's own order check now agrees with the dispatcher's: validate is refused locally and points at implement
+    const refused = await agentVerb(wt, ["gate", "validate"]);
+    expect(refused.code).toBe(2);
+    expect(JSON.parse(refused.out)).toMatchObject({ code: "stage_prerequisite" });
+    expect(JSON.parse(refused.out).nextStep).toContain("gate implement");
+    // the agent re-gates from implement at its new commit, then validate, ui and security, and finishes again
+    w.git.heads.set(wt, "headsha2");
+    writeFileSync(join(wt, ".wingmate", "evidence", "impl.md"), "renamed the endpoint");
+    expect(
+      (
+        await agentVerb(wt, [
+          "gate",
+          "implement",
+          "--verdict",
+          "PASS",
+          "--evidence",
+          ".wingmate/evidence/impl.md",
+        ])
+      ).code,
+    ).toBe(0);
+    mkdirSync(join(wt, ".wingmate", "evidence", "security"), { recursive: true });
+    writeFileSync(join(wt, ".wingmate", "evidence", "security", "report.txt"), "secrets: 0\n");
+    const gate = (
+      stage: "validate" | "ui" | "security",
+      verdict: "PASS" | "NA",
+      evidencePath: string | null,
+    ) =>
+      writeIntent(wt, {
+        issue: "JRF-501",
+        kind: "gate",
+        payload: {
+          stage,
+          verdict,
+          evidencePath,
+          note: null,
+          method: null,
+          headSha: "headsha2",
+          dispatchId: null,
+        },
+      });
+    await gate("validate", "PASS", ".wingmate/evidence/validate/report.txt");
+    await gate("ui", "NA", null);
+    await gate("security", "PASS", ".wingmate/evidence/security/report.txt");
+    writeFileSync(join(wt, ".wingmate", "s.md"), "Renamed the endpoint after review.");
+    await writeIntent(wt, {
+      issue: "JRF-501",
+      kind: "finish",
+      payload: { summaryFile: ".wingmate/s.md", title: null, draft: false, repos: [] },
+    });
+    advance(w, 5);
+    expect((await runTick(w)).finished).toEqual(["JRF-501"]);
+    expect(w.gh.prs).toHaveLength(1); // the same PR, updated by the second push
+    expect(w.git.pushed).toHaveLength(2);
+    expect(w.linear.comments.filter((c) => c.body.startsWith("<!-- wingmate:completion"))).toHaveLength(1);
+    const after = await rec(w);
+    expect(after).toMatchObject({ stage: "review" });
+    expect(after.gates.implement.verdict).toBe("PASS");
+    const events = await w.ctx.ledger.readIssue("JRF-501");
+    expect(events.filter((e) => e.type === "intent_failed" || e.type === "publish_refused")).toEqual([]);
   });
 });
 

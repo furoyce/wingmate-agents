@@ -148,7 +148,8 @@ A finished issue sits in **In Review** with `Review-Ready`, its PR attached and 
 The next tick handles it as a resume (one of `resumesPerTick`); it does not happen while paused:
 
 - `Review-Ready` becomes `In-Agent`, the stage becomes `working` at `implement`, and the gates from `implement` to
-  `pr` reset.
+  `pr` reset, both on Wingmate's record and in the coordinator's own `.wingmate/gates.json`. The coordinator re-gates
+  from `implement` with fresh evidence; the delivered note tells it so.
 - Every comment an approver (you) made since the finish is delivered to the coordinator as feedback.
 - The next `finish` pushes to the same branch, so the same PR updates, and edits the same completion comment.
 
@@ -297,6 +298,7 @@ meanwhile the 80% and 90% caps rest on that old reading.
 | `intent_invalid` † | An outbox intent failed validation, or named another issue. It was moved to `outbox/invalid/`. | Usually the agent retries. The ledger has the error. |
 | `intent_failed` † | An intent failed three counted times and was moved to `outbox/failed/`. | Read the `intent_failed` ledger events for the code, then comment on the issue or re-queue it. |
 | `workers_live` † | An `ask` or `finish` was refused, and consumed, because workers were still live. | Nothing: the coordinator settles its workers and retries. |
+| `stage_prerequisite` † | A `gate` named a stage whose earlier gates Wingmate's record does not show as passed (the coordinator's own `gates.json` lagged the record). The intent was dropped, uncounted, and the coordinator was pointed at the stage to re-gate. In a reconcile-only tick it waits instead. | Nothing, unless it repeats: then read the `intent_failed` ledger events. |
 | `secret_detected` † | A note, question or follow-up from the agent held a secret-like token, so it was not posted. | Inspect the worktree. If a real credential leaked, rotate it. |
 | `plan_verify_unverified` † | The `planVerify` gate comes from the coordinator's own report. Checking it against Orca's `worker-show` comes in slice 2. | Nothing (it is informational). |
 | `publish_step_failed` | A publish step failed: push, PR, attachment, completion or Linear state. The finish retries on later ticks with its progress kept. | Read `ledger/<ID>.jsonl`; check `gh auth status` and the repository's `origin` (section 9). |

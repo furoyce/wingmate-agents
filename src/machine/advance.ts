@@ -219,6 +219,7 @@ async function outbox(a: Advance): Promise<StepOut> {
   const o = await executeOutbox(ctx, r, a.issue, a.rec, {
     canHandoff: !a.ro && a.budget.handoffs > 0,
     canResume: !a.ro && a.budget.resumes > 0,
+    canDeliver: !a.ro,
   });
   if (o.parked) a.s.parked.push(r.identifier);
   if (o.finished) a.s.finished.push(r.identifier);

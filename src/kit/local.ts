@@ -149,7 +149,8 @@ export async function readMirrorQuestions(wt: string): Promise<Local["questions"
 
 /**
  * The dispatcher's half of the mirror (§8.0): `record.json` and `questions.json` only, each written when its content changed.
- * `gates.json` belongs to the `gate` verb and `run.json` to `spawn`/`run`; the dispatcher never rewrites either.
+ * `gates.json` belongs to the `gate` verb and `run.json` to `spawn`/`run`: the mirror never rewrites either (the one exception is the
+ * §7.3 review loop's reset, `resetMirrorGates`).
  */
 export async function writeMirror(
   wt: string,
@@ -166,6 +167,42 @@ export async function writeMirror(
     wrote.push(file);
   }
   return wrote;
+}
+
+const Gates = LocalSchema.shape.gates;
+const GATES_MAX_BYTES = 1024 * 1024;
+
+/**
+ * INT-1 (§7.3): the review loop resets gates on the record, and the agent's own `gates.json` — what its `gate` and `finish` order checks
+ * read — gets the same reset (verdicts nulled; fail counts, evidence names and the other stages kept), so both sides re-gate from
+ * `implement`. Read and written only through `.wingmate` as a plain directory of the worktree, never through a symlink. `unreadable`:
+ * missing, a symlink, or not the verbs' shape — left as it is (the verbs refuse `local_state_invalid` on their own).
+ */
+export async function resetMirrorGates(
+  wt: string,
+  stages: readonly string[],
+): Promise<"reset" | "unchanged" | "unreadable"> {
+  let dir: string;
+  let parsed: ReturnType<typeof Gates.safeParse>;
+  try {
+    dir = await worktreeDir(wt, ".wingmate");
+    const text = (await readNoFollow(join(dir, "gates.json"), GATES_MAX_BYTES)).toString("utf8");
+    parsed = Gates.safeParse(JSON.parse(text));
+  } catch {
+    return "unreadable"; // gone, a symlink (ELOOP), unsafe or not JSON
+  }
+  if (!parsed.success) return "unreadable";
+  let changed = false;
+  for (const s of stages) {
+    const g = parsed.data[s];
+    if (g && g.verdict !== null) {
+      g.verdict = null;
+      changed = true;
+    }
+  }
+  if (!changed) return "unchanged";
+  await writeInWorktree(dir, "gates.json", JSON.stringify(parsed.data, null, 2));
+  return "reset";
 }
 
 export async function readLaunch(wt: string): Promise<Launch> {

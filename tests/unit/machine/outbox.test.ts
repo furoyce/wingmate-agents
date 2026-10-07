@@ -11,8 +11,9 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { writeIntent } from "../../../src/kit/intents";
+import { resetMirrorGates } from "../../../src/kit/local";
 import { claimIssue } from "../../../src/machine/claim";
-import { executeOutbox } from "../../../src/machine/outbox";
+import { type OutboxOptions, executeOutbox } from "../../../src/machine/outbox";
 import { reconcile } from "../../../src/machine/reconcile";
 import type { LinearIssue } from "../../../src/ports";
 import { type WRecord, readRecord } from "../../../src/state/records";
@@ -40,7 +41,7 @@ async function claimed(): Promise<{ w: World; r: WRecord; wt: string }> {
   return { w, r, wt: r.worktree?.path ?? "" };
 }
 /** One outbox pass on a freshly read record, as the tick does it. */
-async function drain(w: World, opts = { canHandoff: true, canResume: true }) {
+async function drain(w: World, opts: OutboxOptions = { canHandoff: true, canResume: true }) {
   const r = await readRecord(w.dirs, ID);
   if (!r) throw new Error("record missing");
   const res = await executeOutbox(w.ctx, r, await issueOf(w), await reconcile(w.ctx), opts);
@@ -93,16 +94,15 @@ describe("executeOutbox: quarantine (Task 9 carry-over)", () => {
 
   test("an intent failing three times moves to outbox/failed/ with attention intent_failed; the next one runs afterwards", async () => {
     const { w, wt } = await claimed();
-    file(wt, ".wingmate/evidence/impl.md", "done");
     await writeIntent(wt, {
       issue: ID,
       kind: "gate",
       payload: {
-        stage: "implement",
+        stage: "intake",
         verdict: "PASS",
-        evidencePath: ".wingmate/evidence/impl.md",
+        evidencePath: ".wingmate/evidence/missing.md", // never written: evidence_invalid, a counted failure
         note: null,
-        method: null,
+        method: "loop",
         headSha: null,
         dispatchId: null,
       },
@@ -118,7 +118,51 @@ describe("executeOutbox: quarantine (Task 9 carry-over)", () => {
     const codes = (await w.ctx.ledger.readIssue(ID))
       .filter((e) => e.type === "intent_failed")
       .map((e) => e.data.code);
-    expect(codes).toEqual(["stage_prerequisite", "stage_prerequisite", "stage_prerequisite"]);
+    expect(codes).toEqual(["evidence_invalid", "evidence_invalid", "evidence_invalid"]);
+  });
+
+  test("INT-1: a gate the dispatcher's record refuses (stage_prerequisite) is dropped, uncounted, and the coordinator is pointed at the stage to re-gate; a reconcile-only tick keeps it pending", async () => {
+    const { w, wt } = await claimed();
+    file(wt, ".wingmate/evidence/impl.md", "done");
+    await writeIntent(wt, {
+      issue: ID,
+      kind: "gate",
+      payload: {
+        stage: "implement",
+        verdict: "PASS",
+        evidencePath: ".wingmate/evidence/impl.md",
+        note: null,
+        method: null,
+        headSha: null,
+        dispatchId: null,
+      },
+    });
+    await writeIntent(wt, { issue: ID, kind: "note", payload: { text: "after" } });
+    const inbox = join(wt, ".wingmate", "inbox");
+    const notes = () => (existsSync(inbox) ? readdirSync(inbox).filter((f) => f.startsWith("note-")) : []);
+    // reconcile-only: a pointer would start a turn, so nothing is delivered and the intent stays pending, uncounted
+    const ro = await drain(w, { canHandoff: false, canResume: false, canDeliver: false });
+    expect(ro.res).toMatchObject({ executed: 0, failed: 1, quarantined: 0 });
+    expect(outbox(wt)).toHaveLength(2);
+    expect(notes()).toEqual([]);
+    const sent = w.orca.calls.filter((c) => c.verb === "terminalSend").length;
+    const { r, res } = await drain(w);
+    expect(res).toMatchObject({ executed: 0, failed: 1, quarantined: 0 });
+    expect(outbox(wt)).toHaveLength(1); // the refused gate left the outbox; the note behind it waits for the next pass
+    expect(outbox(wt, "done")).toHaveLength(1);
+    expect(r.attention).toContain("stage_prerequisite");
+    expect(r.attention).not.toContain("intent_failed");
+    const [note] = notes();
+    const text = readFileSync(join(inbox, note ?? ""), "utf8");
+    expect(text).toContain("gate implement was refused by the dispatcher");
+    expect(text).toContain(`wingmate issue ${ID} gate intake`);
+    expect(w.orca.calls.filter((c) => c.verb === "terminalSend").length).toBe(sent + 1);
+    const failed = (await w.ctx.ledger.readIssue(ID)).filter((e) => e.type === "intent_failed");
+    expect(failed.map((e) => [e.data.code, e.data.counted])).toEqual([
+      ["stage_prerequisite", false],
+      ["stage_prerequisite", false],
+    ]);
+    expect((await drain(w)).res).toMatchObject({ executed: 1, failed: 0 });
   });
 
   test("Linear trouble never counts toward the quarantine", async () => {
@@ -328,6 +372,52 @@ describe("executeOutbox: the local mirror", () => {
     const handed = await drain(w, { canHandoff: true, canResume: true });
     expect(handed.res.handoff?.payload.reason).toBe("wrong_repo_guess");
     expect(statusEdits(w)).toBe(edits + 1); // R1: an executed intent refreshes the status once
+  });
+});
+
+describe("INT-1: resetMirrorGates (the §7.3 review loop's reset of the agent's own gates.json)", () => {
+  const gate = (verdict: string | null, failCount = 0) => ({
+    verdict,
+    failCount,
+    at: null,
+    evidencePath: null,
+    headSha: "h1",
+    note: null,
+    method: null,
+    dispatchId: null,
+  });
+  test("nulls the named verdicts and keeps fail counts and the other stages; nothing to reset is no write", async () => {
+    const { wt } = await claimed();
+    const path = join(wt, ".wingmate", "gates.json");
+    writeFileSync(
+      path,
+      JSON.stringify({ plan: gate("PASS"), implement: gate("PASS"), validate: gate("PASS", 1) }),
+    );
+    expect(await resetMirrorGates(wt, ["implement", "validate", "ui", "security"])).toBe("reset");
+    const g = JSON.parse(readFileSync(path, "utf8"));
+    expect([g.plan.verdict, g.implement.verdict, g.validate.verdict, g.validate.failCount]).toEqual([
+      "PASS",
+      null,
+      null,
+      1,
+    ]);
+    expect(g.ui).toBeUndefined();
+    expect(await resetMirrorGates(wt, ["implement"])).toBe("unchanged");
+  });
+
+  test("a gates.json that is a symlink, or does not parse, is left alone (never followed, never rewritten)", async () => {
+    const { w, wt } = await claimed();
+    const path = join(wt, ".wingmate", "gates.json");
+    const outside = join(w.root, "outside.json");
+    writeFileSync(outside, JSON.stringify({ implement: gate("PASS") }));
+    rmSync(path);
+    symlinkSync(outside, path);
+    expect(await resetMirrorGates(wt, ["implement"])).toBe("unreadable");
+    expect(JSON.parse(readFileSync(outside, "utf8")).implement.verdict).toBe("PASS");
+    rmSync(path);
+    writeFileSync(path, "{ not json");
+    expect(await resetMirrorGates(wt, ["implement"])).toBe("unreadable");
+    expect(readFileSync(path, "utf8")).toBe("{ not json");
   });
 });
 
