@@ -823,6 +823,42 @@ describe("claudeProbe setup (R34: its first live run met a repository without or
     expect(exec2.calls.length).toBe(0);
     expect(w2.orca.calls.some((c) => c.verb === "worktreeCreate")).toBe(false);
   });
+
+  test("never from a pilot repository or an issue's wm- worktree: an agent writes their content and refs, which the probe would load", async () => {
+    const w = await world();
+    const pilot = Object.values(w.cfg.projects).flatMap((p) => Object.values(p.repos))[0];
+    if (!pilot) throw new Error("the test config has no pilot repository");
+    for (const [current, why] of [
+      [{ ...w.orca.current, repoId: pilot.orcaRepo }, "a pilot repository"],
+      [{ ...w.orca.current, path: "/wt/wm-jrf-402" }, "an issue's wm- worktree"],
+    ] as const) {
+      w.orca.calls.length = 0;
+      w.orca.current = current;
+      const exec = fakeClaude(async () => "", []);
+      const r = await claudeProbe(w.ctx, { exec: exec.exec, cwd: "/wt/self" });
+      expect(r).toMatchObject({ ok: false, orcaReachable: null });
+      expect(r.detail).toContain(`probe not run: /wt/self is in ${why}`);
+      expect(r.detail).toContain("wingmate-dispatcher");
+      expect(exec.calls.length).toBe(0);
+      expect(w.orca.calls.some((c) => c.verb === "worktreeCreate")).toBe(false);
+    }
+  });
+
+  test("a create that fails after Orca made the worktree still removes it, found by its name", async () => {
+    const w = await world();
+    const create = w.orca.worktreeCreate.bind(w.orca);
+    w.orca.worktreeCreate = async (a) => {
+      await create(a); // Orca made it, then the reply timed out
+      throw new OrcaError("orca_timeout", "no reply in 120 s");
+    };
+    const exec = fakeClaude(async () => "", []);
+    const r = await claudeProbe(w.ctx, { exec: exec.exec, cwd: "/wt/self" });
+    expect(r).toMatchObject({ ok: false, orcaReachable: null });
+    expect(r.detail).toContain("(orca_timeout)");
+    expect(exec.calls.length).toBe(0);
+    expect(w.orca.removed.length).toBe(1);
+    expect(basename(w.orca.removed[0] ?? "")).toMatch(/^wm-doctor-[0-9a-z]{26}$/);
+  });
 });
 
 describe("codexProbe (R8)", () => {

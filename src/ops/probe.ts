@@ -471,6 +471,16 @@ export interface ClaudeProbeDeps {
   cwd: string;
 }
 
+/** R34 review: a create that failed after Orca made the worktree (a timeout, an unreadable reply) leaves none behind. */
+async function removeByName(ctx: Ctx, repoId: string, name: string): Promise<void> {
+  const fleet = await ctx.orca.worktreePs().catch(() => null);
+  for (const w of fleet?.worktrees ?? [])
+    if (w.repoId === repoId && (w.displayName === name || basename(w.path) === name))
+      await ctx.orca.worktreeRm(w.worktreeId).catch((e: unknown) => {
+        ctx.log.warn({ worktree: w.worktreeId, code: errorCode(e) }, "doctor: probe worktree not removed");
+      });
+}
+
 /** §13.3(b) from a real `wm-` worktree under the owner's home, with the issue kit's settings and environment. */
 export async function claudeProbe(ctx: Ctx, d: ClaudeProbeDeps): Promise<ClaudeProbeResult> {
   const tier = await resolveTier("claude", { home: ctx.home });
@@ -491,6 +501,22 @@ export async function claudeProbe(ctx: Ctx, d: ClaudeProbeDeps): Promise<ClaudeP
       orcaReachable: null,
     };
   }
+  // R34 review: the probe loads the scratch worktree's content (project settings, hooks, CLAUDE.md) and resolves its base there,
+  // so it runs only from a checkout no agent writes — never a pilot repository, whose content and refs agents write, nor a wm- one
+  const pilotRepos = new Set(
+    Object.values(ctx.cfg.projects).flatMap((p) => Object.values(p.repos).map((r) => r.orcaRepo)),
+  );
+  const untrusted = pilotRepos.has(self.repoId)
+    ? "a pilot repository"
+    : basename(self.path).startsWith("wm-")
+      ? "an issue's wm- worktree"
+      : null;
+  if (untrusted)
+    return {
+      ok: false,
+      detail: `probe not run: ${d.cwd} is in ${untrusted}, whose content an agent can write; run doctor from the main checkout of the wingmate repository or its wingmate-dispatcher worktree`,
+      orcaReachable: null,
+    };
   // R34: the commit doctor's checkout is at, so a repository without a fetched origin/main (no remote yet) can be probed too
   const base = self.head ?? "origin/main";
   const name = `wm-doctor-${newUlid().toLowerCase()}`;
@@ -506,6 +532,7 @@ export async function claudeProbe(ctx: Ctx, d: ClaudeProbeDeps): Promise<ClaudeP
       comment: "wingmate doctor probe (removed when it ends)",
     });
   } catch (e) {
+    await removeByName(ctx, self.repoId, name);
     return {
       ok: false,
       detail: `probe not run: Orca could not create the scratch worktree from ${base} (${errorCode(e)})${base === "origin/main" ? ": the repository needs origin/main (a GitHub remote, fetched)" : ""}`,

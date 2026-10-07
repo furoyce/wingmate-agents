@@ -99,9 +99,11 @@ Wingmate never sets Done or Canceled.
 wingmate doctor
 ```
 
-The full doctor makes a scratch `wm-doctor-<id>` worktree of this repository, at the commit your checkout is on, so run
-it from a checkout of this repository that Orca manages. In it, it runs one sandboxed `claude -p` probe, which cost
-about $0.75 in the 2026-10-06 spike, and then removes the worktree. `wingmate doctor --quick` skips the probe.
+The full doctor makes a scratch `wm-doctor-<id>` worktree of this repository, at the commit your checkout is on. Run it
+from the main checkout of this repository or its `wingmate-dispatcher` worktree. Doctor will not probe from a pilot
+repository or an issue's `wm-` worktree, because an agent can write their content. In the scratch worktree it runs one
+sandboxed `claude -p` probe, which cost about $0.75 in the 2026-10-06 spike, and then removes the worktree.
+`wingmate doctor --quick` skips the probe.
 
 At this point, expect `ok` on every line except these:
 
