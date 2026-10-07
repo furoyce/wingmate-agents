@@ -29,7 +29,53 @@ export interface SettingsInput {
   siblingGitdirs?: string[] | undefined;
   /** Branches the other worktrees have checked out (the own one is skipped); omitted → read from their HEADs now (`siblingBranches`). */
   siblingBranches?: string[] | undefined;
+  /** SEC-1: credential-named variables to blank besides the fixed ones (`userClaudeCredentialEnv`); only names, never values. */
+  blankEnv?: readonly string[] | undefined;
 }
+
+/**
+ * SEC-1 (§13.3 a/b): credential-bearing variables, by name only — never by value. Claude Code applies the owner's user-level `env`
+ * (`~/.claude/settings.json`) to every session and its Bash subprocesses, under the kit's own settings; the kit's `--settings` file
+ * loads at `policy` precedence (spike §3.4b: `sandbox status` reports its keys from source `policy`), so its `env` block setting each
+ * such name to "" wins. The doctor probe fails while any is still visible inside the sandbox (probe 13).
+ */
+export const CREDENTIAL_ENV_PATTERN = "TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|_KEY|CREDENTIAL";
+/** Never blanked, never flagged: Claude Code's own model access (the session holds it by design, D14) and Orca's agent-integration variables. */
+export const AGENT_OWN_ENV_PATTERN =
+  "^(ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN|CLAUDE_CODE_OAUTH_TOKEN|ORCA_[A-Za-z0-9_]*)$";
+const CREDENTIAL_ENV = new RegExp(CREDENTIAL_ENV_PATTERN, "i");
+const AGENT_OWN_ENV = new RegExp(AGENT_OWN_ENV_PATTERN);
+const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
+/** Always blank: the variables gh reads a token from, GitHub's MCP server token, and the owner's personal Linear key (F4). */
+const ALWAYS_BLANK = [
+  "GH_TOKEN",
+  "GITHUB_TOKEN",
+  "GH_ENTERPRISE_TOKEN",
+  "GITHUB_ENTERPRISE_TOKEN",
+  "GITHUB_PERSONAL_ACCESS_TOKEN",
+  "WINGMATE_LINEAR_TOKEN",
+];
+export const isCredentialEnv = (name: string): boolean =>
+  ENV_NAME.test(name) && CREDENTIAL_ENV.test(name) && !AGENT_OWN_ENV.test(name);
+
+/** SEC-1: the credential-named keys of the owner's user-level Claude `env` — names only, sorted; none when the file is unreadable. */
+export function userClaudeCredentialEnv(home: string): string[] {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(join(home, ".claude", "settings.json"), "utf8"));
+  } catch {
+    return [];
+  }
+  const env = raw && typeof raw === "object" ? (raw as { env?: unknown }).env : undefined;
+  if (!env || typeof env !== "object" || Array.isArray(env)) return [];
+  return Object.keys(env).filter(isCredentialEnv).sort();
+}
+
+/** SEC-1: the kit settings' `env` block — every always-blank name and every given credential name set to "". */
+export const blankedEnv = (extra: readonly string[] = []): Record<string, string> =>
+  Object.fromEntries(
+    [...new Set([...ALWAYS_BLANK, ...extra.filter(isCredentialEnv)])].sort().map((n) => [n, ""]),
+  );
 
 /** §13.3(b) browser verbs, plus the Orca 1.4.220 browser verbs the spec list predates; denied for every role but ui-reviewer. */
 const BROWSER_VERBS = [
@@ -472,6 +518,7 @@ export function claudeSettings(i: SettingsInput): object {
       },
     },
     permissions: { deny: [...deny, "WebFetch", "WebSearch"] },
+    env: blankedEnv(i.blankEnv),
   };
 }
 
@@ -581,8 +628,15 @@ export const roleArgv = (a: {
         role: a.role,
       });
 
-/** The environment every agent is launched with (§13.3 b); `role` is the agent's own, which `spawn` checks (C2). */
-export const agentEnv = (kitDir: string, role: Role = "coordinator"): Record<string, string> => ({
+/**
+ * The environment every agent is launched with (§13.3 b); `role` is the agent's own, which `spawn` checks (C2). SEC-1: `blank` adds
+ * credential-named variables (`userClaudeCredentialEnv`) blanked on the launch line too, for any process that inherited them.
+ */
+export const agentEnv = (
+  kitDir: string,
+  role: Role = "coordinator",
+  blank: readonly string[] = [],
+): Record<string, string> => ({
   GH_TOKEN: "",
   // gh falls back to these when GH_TOKEN is empty, so an owner shell exporting one would hand it to the agent (F9, §13.3 a)
   GITHUB_TOKEN: "",
@@ -590,6 +644,7 @@ export const agentEnv = (kitDir: string, role: Role = "coordinator"): Record<str
   GITHUB_ENTERPRISE_TOKEN: "",
   // F4 (§13.3 a): the owner's personal Linear key (Task 13), blank even when the login shell Orca types the launch line into exports it
   WINGMATE_LINEAR_TOKEN: "",
+  ...blankedEnv(blank),
   GH_CONFIG_DIR: join(kitDir, "gh-empty"),
   GIT_CONFIG_NOSYSTEM: "1",
   GIT_CONFIG_GLOBAL: join(kitDir, "gitconfig"),

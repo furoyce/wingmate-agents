@@ -9,7 +9,7 @@ import { discoverGitLinks, mainCheckoutTarget } from "../git/trust";
 import { pointerBrief } from "../kit/brief";
 import { installKit } from "../kit/install";
 import { staleIntents } from "../kit/intents";
-import { agentEnv, coordinatorArgv, launchCommand } from "../kit/settings";
+import { agentEnv, coordinatorArgv, launchCommand, userClaudeCredentialEnv } from "../kit/settings";
 import { MARK } from "../linear/markers";
 import { resolveTier } from "../policy/providers";
 import { capMinFor } from "../policy/timers";
@@ -573,6 +573,7 @@ async function installAndSetup(
     tiers,
     toolchainPaths: ctx.toolchainPaths,
     allowDeps: await allowDepsGranted(ctx, r, issue),
+    blankEnv: userClaudeCredentialEnv(ctx.home),
   });
   await ctx.ledger.append({
     at: ctx.now(),
@@ -591,7 +592,9 @@ async function installAndSetup(
   else if (repo.setup !== "none") {
     const timeoutMs = setupTimeoutMs(ctx);
     if (timeoutMs === null) throw new TickAbort("error", "tick_deadline"); // no time for it in this tick: the next tick replays it
-    const s = await run(repo.setup, { cwd: wt.path, timeoutMs, env: agentEnv(kitDir) });
+    // SEC-1: the owner's credential variables are blank for the setup too (it runs outside the sandbox, as the owner)
+    const env = agentEnv(kitDir, "coordinator", userClaudeCredentialEnv(ctx.home));
+    const s = await run(repo.setup, { cwd: wt.path, timeoutMs, env });
     await ctx.ledger.append({
       at: ctx.now(),
       issue: r.identifier,
@@ -658,7 +661,11 @@ async function createCoordinator(ctx: Ctx, r: WRecord, tier: Tier): Promise<void
   else r.coordinator.startedAt = ctx.now();
   const term = prior
     ? { handle: prior.handle, tabId: prior.tabId, leafId: prior.leafId }
-    : await ctx.orca.terminalCreate(wt.id, title, launchCommand(r.coordinator.argv, agentEnv(kitDir)));
+    : await ctx.orca.terminalCreate(
+        wt.id,
+        title,
+        launchCommand(r.coordinator.argv, agentEnv(kitDir, "coordinator", userClaudeCredentialEnv(ctx.home))),
+      );
   r.coordinator.terminalHandle = term.handle;
   r.coordinator.paneKey = `${term.tabId}:${term.leafId}`;
   await saveRecord(ctx, r);

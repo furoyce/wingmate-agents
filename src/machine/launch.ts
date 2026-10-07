@@ -3,6 +3,7 @@ import { mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { gitTarget } from "../git/trust";
 import { refreshSiblingDenies, verifyIntegrity } from "../kit/install";
+import { blankedEnv, userClaudeCredentialEnv } from "../kit/settings";
 import { WingmateError, errorCode, errorText } from "../shared/errors";
 import type { WRecord } from "../state/records";
 import type { Ctx } from "./context";
@@ -25,7 +26,13 @@ export async function prepareLaunch(ctx: Ctx, r: WRecord): Promise<void> {
     : [];
   if (changed.length)
     throw new WingmateError("kit_tampered", `${r.identifier}: ${changed.slice(0, 5).join(",")}`);
-  await refreshSiblingDenies(ctx.kitDirFor(r.identifier), wt.gitCommonDir, wt.gitdirName, wt.branch);
+  await refreshSiblingDenies(
+    ctx.kitDirFor(r.identifier),
+    wt.gitCommonDir,
+    wt.gitdirName,
+    wt.branch,
+    blankedEnv(userClaudeCredentialEnv(ctx.home)),
+  );
   await mkdir(dirname(join(wt.gitCommonDir, "refs", "heads", wt.branch)), { recursive: true });
 }
 

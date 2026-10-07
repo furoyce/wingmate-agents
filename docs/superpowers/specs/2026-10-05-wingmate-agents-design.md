@@ -1080,7 +1080,13 @@ are advisory; the controls below are enforced in code and verified by `wingmate 
   --strict-mcp-config`, with the environment `GH_TOKEN=`, `GITHUB_TOKEN=`, `GH_ENTERPRISE_TOKEN=`, `GITHUB_ENTERPRISE_TOKEN=` (all
   empty), `GH_CONFIG_DIR=<kit>/gh-empty`,
   `GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL=<kit>/gitconfig` (sets `credential.helper=` and
-  `core.hooksPath=<kit>/no-hooks`), `GIT_TERMINAL_PROMPT=0`. The settings file is dispatcher-owned (inside the
+  `core.hooksPath=<kit>/no-hooks`), `GIT_TERMINAL_PROMPT=0`. Claude Code applies the owner's user-level settings
+  `env` (`~/.claude/settings.json`) to every session and its Bash subprocesses, so the kit's settings file also
+  carries an `env` block, at the `policy` precedence a `--settings` file loads with, that sets to "" those variables,
+  `GITHUB_PERSONAL_ACCESS_TOKEN` and every key of the user-level `env` whose name says credential (`TOKEN`, `SECRET`,
+  `PASSWORD`, `API_KEY`, `_KEY`, `CREDENTIAL`), refreshed before each launch; only names are read, never values; the
+  session's own `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` and `CLAUDE_CODE_OAUTH_TOKEN` and Orca's `ORCA_*` are
+  exempt (amended 2026-10-07). The settings file is dispatcher-owned (inside the
   agents' deny region) and contains `sandbox.enabled: true`, `sandbox.allowUnsandboxedCommands: false`,
   `sandbox.failIfUnavailable: true`, `sandbox.autoAllowBashIfSandboxed: true`; **filesystem:** `denyRead: ["~/"]`
   with `allowRead` for the issue worktree, its child worktrees, the toolchain paths `doctor` discovers, the issue's kit
@@ -1121,7 +1127,8 @@ are advisory; the controls below are enforced in code and verified by `wingmate 
   cannot opt out of per command; `doctor` runs a sandboxed probe from a `wm-` worktree that must fail `git
   ls-remote origin`, `gh api user`, a read of `~/.config/wingmate/credentials.json`, a write to
   `<common>/hooks/pre-commit`, a write to another worktree's gitdir and an HTTPS request to a host outside the
-  allowlist, and must succeed at `git commit`, `wingmate issue <id> show` and a request to an allowlisted registry —
+  allowlist, and must succeed at `git commit`, `wingmate issue <id> show`, a request to an allowlisted registry and
+  seeing no non-empty credential-named variable outside the exemptions above (amended 2026-10-07) —
   any inverted result is a `doctor` failure. `doctor` also reports whether the `orca` CLI is reachable from inside
   the sandbox (see D14).
 - **(c) Codex sessions** run `codex -C <worktree> --model <id> -c model_reasoning_effort=<e> -c

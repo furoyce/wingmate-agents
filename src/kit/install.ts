@@ -46,6 +46,8 @@ export interface InstallInput {
   toolchainPaths: string[];
   /** C28 (§13.3 e): the allow-deps grant as it stands at claim — `launch.json` `allowDeps`, which the agent-side `gate security` reads. */
   allowDeps?: boolean;
+  /** SEC-1: the credential-named keys of the owner's user-level Claude env (`userClaudeCredentialEnv`), blanked in every settings file. */
+  blankEnv?: readonly string[];
 }
 
 export interface InstallResult {
@@ -361,6 +363,7 @@ export async function refreshSiblingDenies(
   commonDir: string,
   gitdirName: string,
   branch: string,
+  env?: Record<string, string>,
 ): Promise<string[]> {
   const files = [];
   for (const file of settingsFiles(kitDir)) files.push({ file, ...(await readKitSettings(file)) });
@@ -370,8 +373,13 @@ export async function refreshSiblingDenies(
       ...s.sandbox.filesystem.denyWrite.filter((p) => !isSiblingDeny(commonDir, p)),
       ...siblings,
     ];
+    // SEC-1: before a (re)launch the env block follows the owner's user-level Claude env as it is now
     const next = JSON.stringify(
-      { ...s, sandbox: { ...s.sandbox, filesystem: { ...s.sandbox.filesystem, denyWrite } } },
+      {
+        ...s,
+        ...(env ? { env } : {}),
+        sandbox: { ...s.sandbox, filesystem: { ...s.sandbox.filesystem, denyWrite } },
+      },
       null,
       2,
     );
@@ -394,7 +402,10 @@ async function writeKitDir(i: InstallInput, settings: Record<Role, object>): Pro
     join(i.kitDir, "gitconfig"),
     `[credential]\n\thelper =\n[core]\n\thooksPath = ${join(i.kitDir, "no-hooks")}\n[user]\n\tname = Wingmate\n\temail = wingmate@users.noreply.github.com\n`,
   );
-  await writeAtomic(join(i.kitDir, "env.json"), JSON.stringify(agentEnv(i.kitDir), null, 2));
+  await writeAtomic(
+    join(i.kitDir, "env.json"),
+    JSON.stringify(agentEnv(i.kitDir, "coordinator", i.blankEnv), null, 2),
+  );
 }
 
 type Repo = ProjectConfig["repos"][string];
@@ -445,6 +456,7 @@ function agentSettings(i: InstallInput, repo: Repo, w: Worktree): Record<Role, o
     role: "coordinator",
     siblingGitdirs: known.gitdirs,
     siblingBranches: known.branches,
+    blankEnv: i.blankEnv,
   };
   const of = (role: Role) => claudeSettings({ ...base, role });
   return {

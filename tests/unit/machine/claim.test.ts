@@ -246,6 +246,34 @@ describe("claimIssue (§5.4)", () => {
     expect(verbs(w)).not.toContain("terminalCreate");
   });
 
+  test("SEC-1: the user-level Claude env's credential keys are blank in every kit settings file, on the launch line and for the setup", async () => {
+    const w = await makeWorld();
+    writeFileSync(
+      join(w.root, ".claude", "settings.json"),
+      JSON.stringify({ model: "claude-fable-5-1[1m]", env: { LANGFUSE_SECRET_KEY: "sk-lf-x" } }),
+    );
+    const repo = bouncr(w).repos.api;
+    if (!repo) throw new Error("api repo missing");
+    repo.setup = ["sh", "-c", 'test -z "$LANGFUSE_SECRET_KEY" && test -z "$GITHUB_PERSONAL_ACCESS_TOKEN"'];
+    const saved = process.env.LANGFUSE_SECRET_KEY;
+    process.env.LANGFUSE_SECRET_KEY = "sk-lf-dispatcher"; // as if the dispatcher's own environment carried it
+    let r: WRecord;
+    try {
+      r = await claim(w);
+    } finally {
+      if (saved === undefined) Reflect.deleteProperty(process.env, "LANGFUSE_SECRET_KEY");
+      else process.env.LANGFUSE_SECRET_KEY = saved;
+    }
+    expect(r.stage).toBe("working"); // the setup saw both blank
+    const kit = w.ctx.kitDirFor("JRF-501");
+    for (const f of readdirSync(kit).filter((n) => /^claude-settings.*\.json$/.test(n))) {
+      const env = (JSON.parse(readFileSync(join(kit, f), "utf8")) as { env: Record<string, string> }).env;
+      expect(env).toMatchObject({ LANGFUSE_SECRET_KEY: "", GITHUB_PERSONAL_ACCESS_TOKEN: "", GH_TOKEN: "" });
+    }
+    expect(commands(w)[0]).toContain("LANGFUSE_SECRET_KEY='' ");
+    expect(commands(w)[0]).not.toContain("sk-lf");
+  });
+
   test("R6: the folder-trust dialog is answered with Down then Enter, and the brief is sent only after that", async () => {
     const w = await makeWorld();
     w.orca.nextWaitSatisfied = false;
@@ -282,6 +310,22 @@ describe("relaunch", () => {
     const cmd = commands(w)[1] ?? "";
     expect(cmd).toContain(`--resume ${r.coordinator.sessionId}`);
     expect(cmd).not.toContain("--session-id");
+  });
+
+  test("SEC-1: a credential key added to the user-level Claude env after the claim is blank for the successor: the kit's env blocks are refreshed and the launch line blanks it", async () => {
+    const w = await makeWorld();
+    const r = await claim(w);
+    writeFileSync(
+      join(w.root, ".claude", "settings.json"),
+      JSON.stringify({ model: "claude-fable-5-1[1m]", env: { OPENAI_API_KEY: "sk-x" } }),
+    );
+    expect(await relaunch(w.ctx, r, "exited")).toBe(true);
+    const kit = w.ctx.kitDirFor("JRF-501");
+    for (const f of ["claude-settings.json", "claude-settings.worker.json"]) {
+      const env = (JSON.parse(readFileSync(join(kit, f), "utf8")) as { env: Record<string, string> }).env;
+      expect(env.OPENAI_API_KEY).toBe("");
+    }
+    expect(commands(w)[1]).toContain("OPENAI_API_KEY='' ");
   });
 
   test("before any turn of the attempt (a handoff's new attempt) the successor starts a fresh session; uncounted keeps relaunches", async () => {

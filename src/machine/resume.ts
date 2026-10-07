@@ -2,7 +2,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { worktreeDir, writeInWorktree } from "../kit/local";
-import { agentEnv, launchCommand } from "../kit/settings";
+import { agentEnv, launchCommand, userClaudeCredentialEnv } from "../kit/settings";
 import { errorCode, errorText } from "../shared/errors";
 import { fence } from "../shared/fence";
 import { newUlid, newUuid } from "../shared/ids";
@@ -248,7 +248,8 @@ export async function relaunch(
   }
   try {
     await prepareLaunch(ctx, r);
-    const command = launchCommand(argv, agentEnv(ctx.kitDirFor(r.identifier)));
+    const env = agentEnv(ctx.kitDirFor(r.identifier), "coordinator", userClaudeCredentialEnv(ctx.home));
+    const command = launchCommand(argv, env);
     const term = await ctx.orca.terminalCreate(wt.id, `wingmate ${r.identifier}`, command);
     r.coordinator.terminalHandle = term.handle;
     r.coordinator.paneKey = `${term.tabId}:${term.leafId}`;

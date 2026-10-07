@@ -586,6 +586,14 @@ These are the D14 residuals: places where the agent trust boundary is weaker tha
   entries for sibling worktrees created later reach it only at its next launch or relaunch.
 - **Orca may be reachable from the sandbox.** If `doctor` reports `orca_from_sandbox` reachable, an agent can start
   processes outside its sandbox through Orca.
+- **Your user-level Claude `env` reaches every agent session unless blanked.** Claude Code applies the `env` block of
+  `~/.claude/settings.json` to every session and its commands, the agents' too. The kit's settings set to empty every
+  key there whose name says credential (`TOKEN`, `SECRET`, `PASSWORD`, `API_KEY`, `_KEY`, `CREDENTIAL`) and the GitHub
+  and Linear token variables. Wingmate reads only the names, never the values, and refreshes the list before each
+  launch. Claude's own `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` and `CLAUDE_CODE_OAUTH_TOKEN` are left alone.
+  doctor's sandbox probe names any credential variable still visible inside the sandbox
+  (`credential_env_empty: visible to agents: …`) and refuses `install --enable` then. If it names some, move those keys
+  out of the user-level `env`, for example into the settings of a project that is not a pilot repository.
 - **Your git hooks do not run on the dispatcher's push.** For example, Git LFS `pre-push` does not run, so LFS objects
   are not uploaded. Push them yourself, or keep LFS files out of agent work.
 - **PRs are not opened while paused.** A `finish` waits for a tick that may resume work.

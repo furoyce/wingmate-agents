@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -17,6 +17,7 @@ import {
   siblingBranchDenyWrite,
   siblingBranches,
   siblingDenyWrite,
+  userClaudeCredentialEnv,
 } from "../../../src/kit/settings";
 import { TOKEN_ENV } from "../../../src/linear/envToken";
 import { run } from "../../../src/shared/exec";
@@ -597,6 +598,7 @@ describe("settings", () => {
       GH_ENTERPRISE_TOKEN: "",
       GITHUB_ENTERPRISE_TOKEN: "",
       WINGMATE_LINEAR_TOKEN: "",
+      GITHUB_PERSONAL_ACCESS_TOKEN: "",
       GH_CONFIG_DIR: "/home/.local/share/wingmate/kit/JRF-404/gh-empty",
       GIT_CONFIG_NOSYSTEM: "1",
       GIT_CONFIG_GLOBAL: "/home/.local/share/wingmate/kit/JRF-404/gitconfig",
@@ -607,6 +609,60 @@ describe("settings", () => {
     expect(launchCommand(["claude", "--model", "a[1m]"], { GH_TOKEN: "", A: "b c" })).toBe(
       "GH_TOKEN='' A='b c' exec claude --model 'a[1m]'",
     );
+  });
+  test("SEC-1: every kit settings file blanks the credential variables at policy precedence — the fixed GitHub/Linear ones and the credential-named keys of the owner's user-level Claude env; Claude's own auth and Orca's variables never", () => {
+    const blankEnv = [
+      "LANGFUSE_SECRET_KEY",
+      "LANGFUSE_PUBLIC_KEY",
+      "ANTHROPIC_API_KEY",
+      "ORCA_AGENT_TOKEN",
+      "DEBUG",
+    ];
+    for (const role of ["coordinator", "worker", "ui-reviewer"] as const) {
+      const env = (claudeSettings({ ...input, role, blankEnv }) as { env: Record<string, string> }).env;
+      expect(env).toEqual({
+        GH_ENTERPRISE_TOKEN: "",
+        GH_TOKEN: "",
+        GITHUB_ENTERPRISE_TOKEN: "",
+        GITHUB_PERSONAL_ACCESS_TOKEN: "",
+        GITHUB_TOKEN: "",
+        LANGFUSE_PUBLIC_KEY: "",
+        LANGFUSE_SECRET_KEY: "",
+        WINGMATE_LINEAR_TOKEN: "",
+      });
+    }
+    // the launch line blanks them too (a process the owner's shell or the dispatcher exported them to)
+    const env = agentEnv(input.kitDir, "coordinator", ["LANGFUSE_SECRET_KEY", "ANTHROPIC_AUTH_TOKEN"]);
+    expect(env.LANGFUSE_SECRET_KEY).toBe("");
+    expect(env.GITHUB_PERSONAL_ACCESS_TOKEN).toBe("");
+    expect(env.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
+  });
+  test("SEC-1: userClaudeCredentialEnv reads only the names of the user-level Claude env's credential keys; nothing when unreadable", () => {
+    const home = mkdtempSync(join(tmpdir(), "wm-home-"));
+    expect(userClaudeCredentialEnv(home)).toEqual([]);
+    mkdirSync(join(home, ".claude"));
+    writeFileSync(
+      join(home, ".claude", "settings.json"),
+      JSON.stringify({
+        model: "m",
+        env: {
+          GITHUB_PERSONAL_ACCESS_TOKEN: "ghp_x",
+          LANGFUSE_SECRET_KEY: "sk-lf-x",
+          LANGFUSE_PUBLIC_KEY: "pk-lf-x",
+          ANTHROPIC_API_KEY: "sk-ant-x",
+          ORCA_AGENT_TOKEN: "o",
+          DEBUG: "1",
+          "not a name": "x",
+        },
+      }),
+    );
+    expect(userClaudeCredentialEnv(home)).toEqual([
+      "GITHUB_PERSONAL_ACCESS_TOKEN",
+      "LANGFUSE_PUBLIC_KEY",
+      "LANGFUSE_SECRET_KEY",
+    ]);
+    writeFileSync(join(home, ".claude", "settings.json"), "{ not json");
+    expect(userClaudeCredentialEnv(home)).toEqual([]);
   });
   test("F9: every token variable gh falls back to after GH_TOKEN is blanked", () => {
     const env = agentEnv(input.kitDir);

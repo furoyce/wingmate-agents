@@ -13,7 +13,14 @@ import { basename, join } from "node:path";
 import { z } from "zod";
 import { DISPATCHER_GIT_ENV } from "../git/cli";
 import { discoverGitLinks, verifyGitLinks } from "../git/trust";
-import { agentEnv, claudeSettings, shellQuote } from "../kit/settings";
+import {
+  AGENT_OWN_ENV_PATTERN,
+  CREDENTIAL_ENV_PATTERN,
+  agentEnv,
+  claudeSettings,
+  shellQuote,
+  userClaudeCredentialEnv,
+} from "../kit/settings";
 import type { Ctx } from "../machine/context";
 import { resolveTier } from "../policy/providers";
 import type { GitTarget } from "../ports";
@@ -192,10 +199,12 @@ export function claudeProbes(p: ProbePaths): Probe[] {
       body: `w=$(command -v wingmate); c=$?; case "$w" in ${q(join(p.home, ".local", "bin", "wingmate"))}) o=local ;; '') o=none ;; *) o=elsewhere ;; esac`,
     },
     {
+      // SEC-1 (§13.3 a/b): the NAMES of every non-empty credential-named variable the sandboxed session sees — the owner's
+      // user-level Claude `env` included — outside Claude's own auth and Orca's variables; never a value. Any one fails doctor.
       n: 13,
-      name: "github_token_empty",
+      name: "credential_env_empty",
       expect: "succeed",
-      body: `test -z "\${GH_TOKEN:-}\${GITHUB_TOKEN:-}\${GH_ENTERPRISE_TOKEN:-}\${GITHUB_ENTERPRISE_TOKEN:-}"; c=$?; if printenv GITHUB_TOKEN >/dev/null 2>&1; then o=set; else o=unset; fi`,
+      body: `n=$(env | sed -n 's/^\\([A-Za-z_][A-Za-z0-9_]*\\)=..*$/\\1/p' | grep -Ei ${q(CREDENTIAL_ENV_PATTERN)} | grep -Ev ${q(AGENT_OWN_ENV_PATTERN)} | sort -u | head -20 | tr '\\n' ' '); if [ -n "$n" ]; then echo "CREDENV $n"; c=1; o=set; else c=0; o=unset; fi`,
     },
     {
       n: 14,
@@ -210,7 +219,8 @@ export function claudeProbes(p: ProbePaths): Probe[] {
 export function probeScript(p: Probe): string {
   const sig =
     p.n === 9 || p.n === 11 || p.n === 12 || p.n === 13 || p.n === 14
-      ? `$(case "$o" in http[0-9][0-9][0-9]|ok|local|none|elsewhere|set|unset|reachable|unreachable) echo "$o" ;; *) classify "$o" ;; esac)`
+      ? // `(pattern)` form: macOS /bin/sh (bash 3.2) ends a `$(…)` at a case pattern's bare `)`, leaving `sig= echo …` (no PROBE line)
+        `$(case "$o" in (http[0-9][0-9][0-9]|ok|local|none|elsewhere|set|unset|reachable|unreachable) echo "$o" ;; (*) classify "$o" ;; esac)`
       : `$(classify "$o")`;
   return `#!/bin/sh\n# wingmate doctor probe ${p.n} (${p.name}): must ${p.expect === "report" ? "be reported" : p.expect}\n${CLASSIFY}\n${p.body}\necho "PROBE ${p.n} exit=$c sig=${sig}"\n`;
 }
@@ -291,6 +301,16 @@ export function streamCalls(stdout: string): BashCall[] {
     }
   }
   return uses.map((u) => ({ ...u, result: results.get(u.id) ?? null }));
+}
+
+/** SEC-1: the variable names probe 13 printed (`CREDENV …`) in the tool result of the call that ran its own script — names, never values. */
+export function credentialNames(calls: BashCall[], script: string): string[] {
+  const text = calls
+    .filter((c) => runsScript(c.command, script))
+    .map((c) => c.result?.text ?? "")
+    .join("\n");
+  const m = /CREDENV ((?:[A-Za-z_][A-Za-z0-9_]{0,63} ?){1,20})/.exec(text);
+  return m?.[1] ? [...new Set(m[1].trim().split(/\s+/))] : [];
 }
 
 /** Whether `command` runs `script`: its full path, not a longer path that merely starts with it. */
@@ -438,6 +458,7 @@ export async function claudeProbe(ctx: Ctx, d: ClaudeProbeDeps): Promise<ClaudeP
       `[credential]\n\thelper =\n[core]\n\thooksPath = ${join(kitDir, "no-hooks")}\n[user]\n\tname = Wingmate Probe\n\temail = wingmate@users.noreply.github.com\n`,
     );
     const settingsFile = join(kitDir, "claude-settings.json");
+    const blankEnv = userClaudeCredentialEnv(ctx.home); // SEC-1: as the kit writes them, so probe 13 tests the real block
     await writeAtomic(
       settingsFile,
       JSON.stringify(
@@ -452,6 +473,7 @@ export async function claudeProbe(ctx: Ctx, d: ClaudeProbeDeps): Promise<ClaudeP
           toolchainPaths: ctx.toolchainPaths,
           allowedDomains: hosts.allowed,
           role: "coordinator",
+          blankEnv,
         }),
         null,
         2,
@@ -515,11 +537,17 @@ export async function claudeProbe(ctx: Ctx, d: ClaudeProbeDeps): Promise<ClaudeP
         "stream-json",
         "--verbose",
       ],
-      { cwd: shown.path, timeoutMs: 8 * 60_000, env: agentEnv(kitDir) },
+      { cwd: shown.path, timeoutMs: 8 * 60_000, env: agentEnv(kitDir, "coordinator", blankEnv) },
     );
     if (r.timedOut) notes.push("claude timed out");
     if (r.truncated) notes.push("claude output truncated");
-    const { failures, lines } = judge(probes, streamCalls(r.stdout), scriptOf);
+    const calls = streamCalls(r.stdout);
+    const { failures, lines } = judge(probes, calls, scriptOf);
+    const leaked = credentialNames(calls, scriptOf(13));
+    if (leaked.length)
+      failures.push(
+        `credential_env_empty: visible to agents: ${leaked.join(", ")} (move them out of the user-level Claude env, runbook §16)`,
+      );
     // on disk, whatever the lines say: a write that went through is an inverted result (and is undone where it can be)
     const after = {
       hook: await fileState(watched.hook),
@@ -717,6 +745,7 @@ export async function settingsPosture(ctx: Ctx, exec: Runner): Promise<ProbeResu
         toolchainPaths: ctx.toolchainPaths,
         allowedDomains: hosts.allowed,
         role: "coordinator",
+        blankEnv: userClaudeCredentialEnv(ctx.home), // SEC-1: the env block validates as the kit writes it
       }),
       null,
       2,

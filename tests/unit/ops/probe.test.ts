@@ -20,6 +20,7 @@ import {
   claudeProbe,
   claudeProbes,
   codexProbe,
+  credentialNames,
   invalidSettings,
   judge,
   probeLines,
@@ -60,7 +61,7 @@ const GOOD: Record<number, string> = {
   10: "exit=0 sig=none",
   11: "exit=0 sig=ok",
   12: "exit=0 sig=local",
-  13: "exit=0 sig=set",
+  13: "exit=0 sig=unset",
   14: "exit=0 sig=reachable",
 };
 const lines = (over: Record<number, string | null> = {}) =>
@@ -165,6 +166,26 @@ describe("PROBE lines (inverted or missing lines fail the probe)", () => {
       "credentials_read: ALLOWED (exit=0 sig=none)",
       "git_commit: failed (exit=1 sig=eperm)",
     ]);
+  });
+  test("SEC-1: credential variables seen inside the sandbox fail probe 13, and their names (never values) come from its own tool result", () => {
+    const out = streamOf(
+      callsExcept({
+        13: {
+          n: 13,
+          text: "CREDENV GITHUB_PERSONAL_ACCESS_TOKEN LANGFUSE_SECRET_KEY \nPROBE 13 exit=1 sig=set",
+        },
+      }),
+    );
+    expect(judged(out)).toEqual(["credential_env_empty: failed (exit=1 sig=set)"]);
+    expect(credentialNames(streamCalls(out), scriptOf(13))).toEqual([
+      "GITHUB_PERSONAL_ACCESS_TOKEN",
+      "LANGFUSE_SECRET_KEY",
+    ]);
+    // a name typed by the model into another call's result is not probe 13's
+    const elsewhere = streamOf(
+      callsExcept({ 12: { n: 12, text: "CREDENV FAKE_TOKEN\nPROBE 12 exit=0 sig=local" } }),
+    );
+    expect(credentialNames(streamCalls(elsewhere), scriptOf(13))).toEqual([]);
   });
   test("a private-repo style auth failure is not accepted as network proof", () => {
     const f = judged(stream(lines({ 2: "128 sig=auth" })));
@@ -395,9 +416,60 @@ describe("probe scripts (real sh, temp files only)", () => {
       "ref: refs/heads/decoy\nwingmate-probe\n",
     );
   });
+  test("the probes whose body sets their own class (9, 11–14) print a parseable PROBE line under the system sh (bash 3.2 as sh on macOS)", async () => {
+    for (const [n, o] of [
+      [9, "http200"],
+      [11, "ok"],
+      [12, "local"],
+      [13, "unset"],
+      [14, "reachable"],
+      [14, "Some Other Text"],
+    ] as const) {
+      const out = await sh(
+        probeScript({ n, name: "stub", expect: "report", body: `o=${JSON.stringify(o)}; c=0` }),
+      );
+      expect(probeLines(out).get(n)).toEqual([{ exit: 0, sig: o === "Some Other Text" ? "other" : o }]);
+    }
+  });
+  test("SEC-1: probe 13 names every non-empty credential-named variable it can see (never a value), except Claude's own auth and Orca's", async () => {
+    const probe = PROBES.find((x) => x.n === 13);
+    if (!probe) throw new Error("no probe 13");
+    expect(probe.name).toBe("credential_env_empty");
+    const inEnv = async (vars: string[]) =>
+      (
+        await run(
+          [
+            "env",
+            "-i",
+            `PATH=${process.env.PATH ?? "/usr/bin:/bin"}`,
+            ...vars,
+            "sh",
+            "-c",
+            probeScript(probe),
+          ],
+          {},
+        )
+      ).stdout.trim();
+    const clean = await inEnv([
+      "GH_TOKEN=",
+      "GITHUB_TOKEN=",
+      "ANTHROPIC_API_KEY=sk-ant-own",
+      "ORCA_AGENT_TOKEN=pane",
+    ]);
+    expect(probeLines(clean).get(13)).toEqual([{ exit: 0, sig: "unset" }]);
+    const leaked = await inEnv([
+      "GH_TOKEN=",
+      "GITHUB_PERSONAL_ACCESS_TOKEN=ghp_value_never_printed",
+      "langfuse_secret_key=sk-lf-value",
+      "PATHLIKE=1",
+    ]);
+    expect(probeLines(leaked).get(13)).toEqual([{ exit: 1, sig: "set" }]);
+    expect(leaked).toContain("CREDENV GITHUB_PERSONAL_ACCESS_TOKEN langfuse_secret_key");
+    expect(leaked).not.toContain("value");
+  });
   test("the token probe never echoes a token, and the credentials probe discards what it reads", () => {
-    const token = PROBES.find((x) => x.name === "github_token_empty");
-    expect(token?.body).toContain("test -z");
+    const token = PROBES.find((x) => x.name === "credential_env_empty");
+    expect(token?.body).toContain("sed -n");
     expect(token?.body).not.toMatch(/echo "?\$\{?GITHUB_TOKEN/);
     expect(PROBES.find((x) => x.n === 1)?.body).toContain(">/dev/null");
     expect(PROBES.find((x) => x.n === 2)?.body).toContain("https://github.com/git/git.git"); // public: no auth needed
@@ -491,6 +563,34 @@ describe("claudeProbe (a real wm-doctor worktree; the agent simulated)", () => {
     const common = join(w.root, "orca", "repos", "repo-self", ".git");
     const admin = join(common, "worktrees"); // git removes it with its last worktree
     expect(existsSync(admin) ? readdirSync(admin).filter((n) => n.includes("decoy")) : []).toEqual([]);
+  });
+
+  test("SEC-1: the probe's settings and launch environment blank the user-level Claude env's credential keys; a variable still visible fails, named", async () => {
+    const w = await world();
+    writeFileSync(
+      join(w.root, ".claude", "settings.json"),
+      JSON.stringify({ model: "claude-fable-5-1[1m]", env: { LANGFUSE_SECRET_KEY: "sk-lf-x", DEBUG: "1" } }),
+    );
+    const seen: Seen[] = [];
+    const exec = fakeClaude(async (cwd, kit) => {
+      await commit(cwd);
+      const leak = { n: 13, text: "CREDENV LANGFUSE_SECRET_KEY \nPROBE 13 exit=1 sig=set" };
+      return streamOf(
+        callsExcept({ 13: leak }).map((c) => ({ ...c, command: `sh ${SCRIPT(c.n, kit)}` })),
+        {},
+      );
+    }, seen);
+    const r = await claudeProbe(w.ctx, { exec: exec.exec, cwd: "/wt/self" });
+    const s = seen[0];
+    if (!s) throw new Error("claude was not run");
+    expect((s.settings as unknown as { env: Record<string, string> }).env).toMatchObject({
+      LANGFUSE_SECRET_KEY: "",
+      GITHUB_PERSONAL_ACCESS_TOKEN: "",
+    });
+    expect(s.opts.env).toMatchObject({ LANGFUSE_SECRET_KEY: "", GITHUB_PERSONAL_ACCESS_TOKEN: "" });
+    expect(r.ok).toBe(false);
+    expect(r.detail).toContain("credential_env_empty: visible to agents: LANGFUSE_SECRET_KEY");
+    expect(r.detail).not.toContain("sk-lf-x");
   });
 
   test("a broken sandbox fails on the lines and on disk, and the files its writes created are removed", async () => {
