@@ -6,7 +6,7 @@ import { IDENTIFIER_RE } from "../../shared/ids";
 import { homeDirs } from "../../shared/paths";
 import type { Argv } from "../index";
 import { type OpsCtx, UsageError, buildOps, liveDoctorOptions, readFlags } from "../ops";
-import { FLAG_KEPT, type StopCommandDeps } from "./stop";
+import { FLAG_KEPT, type StopCommandDeps, flagLines, readConfigFirst } from "./stop";
 import { stderr, stdout } from "./tick";
 
 const USAGE =
@@ -37,13 +37,17 @@ export type DoctorCommandDeps = StopCommandDeps & {
 
 const ROTATE_REASON = "credential rotation (wingmate doctor --rotate)";
 
-/** `--rotate`: `stop --all` (F2: its flag written before the live context is built), the cached token dropped, the steps printed. */
+/**
+ * `--rotate`: `stop --all` (F2: its flag written before the live context is built; F8: the config read before the flag), the cached
+ * token dropped, the steps printed.
+ */
 async function rotate(
   deps: DoctorCommandDeps,
   json: boolean,
   out: (l: string) => void,
   err: (l: string) => void,
 ) {
+  await readConfigFirst(deps, err);
   const at = (deps.now ?? (() => new Date().toISOString()))();
   const requested = await requestScopedStop(deps.dirs ?? homeDirs(), { kind: "all" }, ROTATE_REASON, at);
   let ctx: OpsCtx;
@@ -63,9 +67,8 @@ async function rotate(
     : "no token store";
   if (json) out(JSON.stringify({ stop: report, token: dropped }, null, 2));
   else {
-    out(
-      `stopped: ${report.stopped.join(", ") || "none"}; flag ${report.flagCleared ? "cleared" : "KEPT (re-run stop)"}`,
-    );
+    out(`stopped: ${report.stopped.join(", ") || "none"}`);
+    for (const l of flagLines(report, requested)) out(l);
     out(`cached Linear token: ${dropped}`);
     for (const s of ROTATION_STEPS) out(s);
   }

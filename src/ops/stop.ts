@@ -4,7 +4,8 @@
 // record's agents are stopped (worker-stop, then worker-abandon when not proven exited; terminal close for the issue and child
 // worktrees) and (3) its processes swept; with `--all` also every `wm-` worktree with a working agent no record covers; (4) each record
 // is blocked `owner_stop` with one blocked comment, every write under the record lock (compare-and-write, retried when a tick wrote
-// in between); then this stop's flag entry is cleared and the stop is ledgered. Linear being unreachable never keeps a record from
+// in between); then this stop's flag entry, and every older entry of the same or a narrower scope (F8: the one a failed stop kept),
+// is cleared and the stop is ledgered with the entries that still hold its scope. Linear being unreachable never keeps a record from
 // being blocked on disk: its label and comment then follow on the next tick (`finishBlock`).
 import { readdir } from "node:fs/promises";
 import { basename, join } from "node:path";
@@ -17,7 +18,7 @@ import type { FleetSnapshot, LinearIssue } from "../ports";
 import { errorCode, errorText } from "../shared/errors";
 import type { Dirs } from "../shared/paths";
 import { readText } from "../state/fs";
-import { releaseStop, requestStop } from "../state/heartbeat";
+import { type StopFlagEntry, readStops, releaseStops, requestStop } from "../state/heartbeat";
 import { RecordSchema, type WRecord, readRecord } from "../state/records";
 
 export type StopScope = { kind: "all" } | { kind: "project"; key: string } | { kind: "issue"; key: string };
@@ -38,7 +39,12 @@ export interface StopReport {
   /** What could not be verified stopped: dispatch ids, `run:<id>`, `terminals:<worktreeId>`. */
   unverifiable: string[];
   sweptWorktrees: string[];
-  /** False when a record could not be blocked: the flag stays, so no tick resumes that work; re-run the stop. */
+  /**
+   * The entries that still hold ticks back for this scope (F8): this stop's own while a record could not be blocked (re-run the stop),
+   * a broader one (`--all` over a project) or one written after this stop began.
+   */
+  heldBy: StopEntry[];
+  /** True exactly when no entry holds this scope any more (`heldBy` is empty): the flag is never reported cleared while one does. */
   flagCleared: boolean;
 }
 
@@ -174,6 +180,65 @@ async function sweepUnrecorded(
   }
 }
 
+const asEntry = (e: StopFlagEntry): StopEntry => ({
+  scope: e.scope,
+  ...(e.key === null ? {} : { key: e.key }),
+  at: e.at,
+});
+const isEntry = (e: StopFlagEntry, mine: StopEntry) =>
+  e.scope === mine.scope && e.key === (mine.key ?? null) && e.at === mine.at;
+/** `a` was written no later than `b`; a time that does not parse is never older. */
+const notLater = (a: string, b: string) => Date.parse(a) <= Date.parse(b);
+
+/**
+ * F8: a finished stop of scope `s` did all that entry `e` asks for: the same or a narrower scope. `--all` covers every entry, a project
+ * its own and those of the issues whose record is in it, an issue only its own.
+ */
+function supersedes(s: StopScope, e: StopFlagEntry, projectOf: Map<string, string>): boolean {
+  if (s.kind === "all") return true;
+  if (e.key === null) return false;
+  if (s.kind === "issue") return e.scope === "issue" && e.key === s.key;
+  return e.scope === "project" ? e.key === s.key : e.scope === "issue" && projectOf.get(e.key) === s.key;
+}
+
+/**
+ * Entry `e` holds ticks back for scope `s`, as the tick reads the flag at that level (`stopRequested`): `all` holds every scope, a
+ * project entry its project and its issues, an issue entry its issue. For an issue without a record (project unknown) every project
+ * entry counts.
+ */
+function holds(e: StopFlagEntry, s: StopScope, projectOf: Map<string, string>): boolean {
+  if (e.scope === "all") return true;
+  if (s.kind === "all") return false;
+  if (s.kind === "project") return e.scope === "project" && e.key === s.key;
+  if (e.scope === "issue") return e.key === s.key;
+  const p = projectOf.get(s.key);
+  return p === undefined || e.key === p;
+}
+
+/**
+ * (4) The flag after the stop. A finished stop releases its own entry and every entry no later than its own that its scope covers, so
+ * re-running a stop that failed (its build, or a record) clears the entry that one kept (F8). A stop with a record still unblocked
+ * releases nothing, so no tick resumes that work. Returns what was released and the entries still holding the scope.
+ */
+async function settleFlag(
+  ctx: Ctx,
+  scope: StopScope,
+  entry: StopEntry,
+  finished: boolean,
+  projectOf: Map<string, string>,
+): Promise<{ released: StopEntry[]; heldBy: StopEntry[] }> {
+  const { released, left } = finished
+    ? await releaseStops(
+        ctx.dirs,
+        (e) => isEntry(e, entry) || (supersedes(scope, e, projectOf) && notLater(e.at, entry.at)),
+      )
+    : { released: [] as StopFlagEntry[], left: await readStops(ctx.dirs) };
+  return {
+    released: released.map(asEntry),
+    heldBy: left.filter((e) => holds(e, scope, projectOf)).map(asEntry),
+  };
+}
+
 /**
  * (1) This stop's flag entry. `wingmate stop` and `doctor --rotate` write it before they build the live context (F2), whose eager
  * Linear read may retry for a minute or more, and hand the entry to `stop`.
@@ -205,6 +270,7 @@ export async function stop(
     failed: [],
     unverifiable: [],
     sweptWorktrees: [],
+    heldBy: [],
     flagCleared: false,
   };
   const fleet: FleetSnapshot | null = await ctx.orca.worktreePs().catch((e: unknown) => {
@@ -214,9 +280,12 @@ export async function stop(
   const detail = `stopped by the owner (wingmate stop ${scopeFlag(scope)}): ${why}`;
   const handled = new Set<string>();
   const seen = new Set<string>();
+  const projectOf = new Map<string, string>(); // every record's project: which issue entries a project stop covers (F8)
   // a second pass catches a record a running tick created after the first listing (its claim aborts at its next external action)
   for (let pass = 0; pass < 2; pass++) {
-    const targets = (await readRecords(ctx, pass === 0 ? report.failed : [])).filter(
+    const records = await readRecords(ctx, pass === 0 ? report.failed : []);
+    for (const r of records) projectOf.set(r.identifier, r.project);
+    const targets = records.filter(
       (r) => ACTIVE.has(r.stage) && inScope(scope, r) && !seen.has(r.identifier),
     );
     for (const r of targets) seen.add(r.identifier);
@@ -225,10 +294,9 @@ export async function stop(
     for (const t of targets) await blockOne(ctx, t.identifier, detail, report); // (4)
   }
   const stuck = report.failed.filter((f) => !f.endsWith(":record_invalid"));
-  if (stuck.length === 0) {
-    await releaseStop(ctx.dirs, entry);
-    report.flagCleared = true;
-  }
+  const { released, heldBy } = await settleFlag(ctx, scope, entry, stuck.length === 0, projectOf);
+  report.heldBy = heldBy;
+  report.flagCleared = heldBy.length === 0;
   await ctx.ledger.append({
     at: ctx.now(),
     issue: null,
@@ -242,6 +310,8 @@ export async function stop(
       failed: report.failed,
       unverifiable: report.unverifiable,
       flagCleared: report.flagCleared,
+      released,
+      heldBy,
     },
   });
   return report;

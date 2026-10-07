@@ -1,10 +1,12 @@
 // tests/unit/ops/stop.test.ts — §13.3(i) the kill switch: lock-free, the stop file first, agents stopped and swept, each record
 // blocked owner_stop with one comment, the flag cleared, the scoped forms.
 import { describe, expect, test } from "bun:test";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { tick } from "../../../src/machine/tick";
-import { stop, stopReason } from "../../../src/ops/stop";
+import { requestScopedStop, stop, stopReason } from "../../../src/ops/stop";
 import { WingmateError } from "../../../src/shared/errors";
-import { requestStop, stopRequested } from "../../../src/state/heartbeat";
+import { readStops, requestStop, stopRequested } from "../../../src/state/heartbeat";
 import { TickLock } from "../../../src/state/lock";
 import { readRecord, writeRecord } from "../../../src/state/records";
 import { labeledByOwner, runTick, todo, world } from "../../sim/harness";
@@ -168,8 +170,76 @@ describe("wingmate stop — Task 12 coverage", () => {
     const report = await stop(w.ctx, { kind: "project", key: "smart-dispatcher" }, "x");
     expect(report.stopped).toEqual(["JRF-715"]);
     expect(await stopRequested(w.dirs)).toBe(true); // the other stop's `all` entry survives
+    // F8: …and still holds this project, so the flag is not reported cleared
+    expect(report).toMatchObject({
+      flagCleared: false,
+      heldBy: [{ scope: "all", at: "2026-10-06T09:59:00.000Z" }],
+    });
     expect(w.orca.closed).not.toContain(other?.worktree?.id);
     expect((await readRecord(w.dirs, "JRF-714"))?.stage).toBe("working");
+  });
+
+  test("F8: a completed stop releases its own entry and every older entry of the same or a narrower scope; a broader, newer or unrelated entry stays, and those holding its scope are reported", async () => {
+    const { w } = await working("JRF-731"); // a bouncr issue
+    const at = (min: number) => new Date(Date.parse(w.ctx.now()) + min * 60_000).toISOString();
+    for (const e of [
+      { scope: "issue", key: "JRF-731", at: at(-2) }, // narrower: its record is in bouncr → released
+      { scope: "project", key: "bouncr", at: at(-1) }, // the same scope, older (a stop that failed) → released
+      { scope: "project", key: "smart-dispatcher", at: at(-1) }, // another project: stays, does not hold bouncr
+      { scope: "issue", key: "JRF-999", at: at(-1) }, // no record, so its project is unknown: stays
+      { scope: "all", at: at(-3) }, // broader: stays, and holds bouncr
+    ] as const)
+      await requestStop(w.dirs, e);
+    const scope = { kind: "project", key: "bouncr" } as const;
+    const requested = await requestScopedStop(w.dirs, scope, "x", at(0));
+    await requestStop(w.dirs, { scope: "project", key: "bouncr", at: at(1) }); // written after this stop began: stays, holds
+    const report = await stop(w.ctx, scope, "x", { requested });
+    expect(report.stopped).toEqual(["JRF-731"]);
+    expect(report.flagCleared).toBe(false);
+    expect(report.heldBy).toEqual([
+      { scope: "all", at: at(-3) },
+      { scope: "project", key: "bouncr", at: at(1) },
+    ]);
+    expect((await readStops(w.dirs)).map((e) => `${e.scope}:${e.key}@${e.at}`)).toEqual([
+      `project:smart-dispatcher@${at(-1)}`,
+      `issue:JRF-999@${at(-1)}`,
+      `all:null@${at(-3)}`,
+      `project:bouncr@${at(1)}`,
+    ]);
+    const ledgered = readFileSync(join(w.dirs.ledger, "global.jsonl"), "utf8")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l) as { type: string; data: { flagCleared: boolean; released: unknown[] } })
+      .filter((e) => e.type === "stop")
+      .at(-1)?.data;
+    expect(ledgered).toMatchObject({ flagCleared: false, heldBy: report.heldBy });
+    expect(ledgered?.released).toHaveLength(3); // its own, the older bouncr one and JRF-731's
+    // a completed --all, begun later, supersedes every entry older than its own, whatever the scope
+    w.clock.advance(120_000);
+    expect(await stop(w.ctx, { kind: "all" }, "x")).toMatchObject({ flagCleared: true, heldBy: [] });
+    expect(await readStops(w.dirs)).toEqual([]);
+    expect(existsSync(join(w.dirs.state, "stop-requested.json"))).toBe(false);
+  });
+
+  test("F8: an issue stop is held by an entry of its record's project (by any project entry when it has no record), never by another project's", async () => {
+    const { w } = await working("JRF-732");
+    const older = new Date(Date.parse(w.ctx.now()) - 60_000).toISOString();
+    await requestStop(w.dirs, { scope: "project", key: "smart-dispatcher", at: older });
+    expect(await stop(w.ctx, { kind: "issue", key: "JRF-732" }, "x")).toMatchObject({
+      stopped: ["JRF-732"],
+      flagCleared: true,
+      heldBy: [],
+    });
+    await requestStop(w.dirs, { scope: "project", key: "bouncr", at: older }); // broader: an issue stop never releases it
+    const held = await stop(w.ctx, { kind: "issue", key: "JRF-732" }, "x");
+    expect(held).toMatchObject({
+      flagCleared: false,
+      heldBy: [{ scope: "project", key: "bouncr", at: older }],
+    });
+    const unknown = await stop(w.ctx, { kind: "issue", key: "JRF-998" }, "x"); // no record: its project is unknown
+    expect(unknown.flagCleared).toBe(false);
+    expect(unknown.heldBy.map((e) => e.key)).toEqual(["smart-dispatcher", "bouncr"]);
+    expect(await readStops(w.dirs)).toHaveLength(2); // neither project entry was released
   });
 
   test("Linear unreachable: the record is blocked on disk at once (deferred); the next tick posts the Blocked label and the one comment", async () => {
@@ -201,11 +271,16 @@ describe("wingmate stop — Task 12 coverage", () => {
     w.orca.workerList = async () => {
       throw new Error("worker-list crashed"); // not an OrcaError: stopAgents lets it through
     };
+    const older = { scope: "all" as const, at: new Date(Date.parse(w.ctx.now()) - 60_000).toISOString() };
+    await requestStop(w.dirs, older); // an earlier stop's entry
     const report = await stop(w.ctx, { kind: "all" }, "drill");
     expect(report.stopped).toEqual([]);
     expect(report.failed).toEqual(["JRF-717:internal_error"]);
     expect(report.flagCleared).toBe(false);
     expect(await stopRequested(w.dirs)).toBe(true);
+    // F8: a stop that did not finish supersedes nothing: the earlier entry and its own both stay
+    expect(report.heldBy).toEqual([older, { scope: "all", at: w.ctx.now() }]);
+    expect(await readStops(w.dirs)).toHaveLength(2);
     const s = await tick(w.ctx, { dryRun: false, precheck: true });
     expect(s.outcome).toBe("stopped");
   });

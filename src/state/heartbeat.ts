@@ -92,19 +92,35 @@ export async function stopRequested(dirs: Dirs, projectKey?: string, identifier?
 
 export const clearStop = (dirs: Dirs) => unlink(stopPath(dirs)).catch(() => undefined);
 
+export type StopFlagEntry = z.infer<typeof StopSchema>["scopes"][number];
+
+/** Every entry of stop-requested.json, in the order written (none without the file). */
+export async function readStops(dirs: Dirs): Promise<StopFlagEntry[]> {
+  const t = await readText(stopPath(dirs));
+  return t ? StopSchema.parse(JSON.parse(t)).scopes : [];
+}
+
 /**
- * Removes the one scope entry a `wingmate stop` wrote (same scope, key and time), and the file once no entry is left: a stop that
- * finishes never clears the flag of another stop still running (§13.3 i).
+ * Removes every entry `drop` selects — a finished stop's own and (F8) the older ones it supersedes — and the file once no entry is
+ * left; returns what it removed and what is left.
  */
+export async function releaseStops(
+  dirs: Dirs,
+  drop: (e: StopFlagEntry) => boolean,
+): Promise<{ released: StopFlagEntry[]; left: StopFlagEntry[] }> {
+  const released: StopFlagEntry[] = [];
+  const left: StopFlagEntry[] = [];
+  for (const e of await readStops(dirs)) (drop(e) ? released : left).push(e);
+  if (released.length === 0) return { released, left };
+  if (left.length === 0) await clearStop(dirs);
+  else await writeAtomic(stopPath(dirs), JSON.stringify({ scopes: left }, null, 2));
+  return { released, left };
+}
+
+/** Removes exactly one stop's entry (same scope, key and time), and the file once no entry is left; every other entry stays. */
 export async function releaseStop(
   dirs: Dirs,
   s: { scope: "all" | "project" | "issue"; key?: string; at: string },
 ): Promise<void> {
-  const t = await readText(stopPath(dirs));
-  if (!t) return;
-  const cur = StopSchema.parse(JSON.parse(t));
-  const i = cur.scopes.findIndex((x) => x.scope === s.scope && x.key === (s.key ?? null) && x.at === s.at);
-  if (i >= 0) cur.scopes.splice(i, 1);
-  if (cur.scopes.length === 0) await clearStop(dirs);
-  else await writeAtomic(stopPath(dirs), JSON.stringify(cur, null, 2));
+  await releaseStops(dirs, (x) => x.scope === s.scope && x.key === (s.key ?? null) && x.at === s.at);
 }

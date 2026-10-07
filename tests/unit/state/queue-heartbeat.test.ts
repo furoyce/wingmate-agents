@@ -8,7 +8,9 @@ import {
   clearStop,
   readHeartbeat,
   readLastTick,
+  readStops,
   releaseStop,
+  releaseStops,
   requestStop,
   stopRequested,
   writeHeartbeat,
@@ -109,6 +111,27 @@ describe("releaseStop (Task 12)", () => {
     await releaseStop(dirs, { scope: "issue", key: "JRF-1", at: "2026-10-06T10:01:00.000Z" }); // already gone: no-op
     await releaseStop(dirs, all);
     expect(await stopRequested(dirs)).toBe(false);
+    expect(existsSync(join(dirs.state, "stop-requested.json"))).toBe(false);
+  });
+  test("F8: releaseStops removes every entry selected and returns what it released and what is left; readStops lists them in order", async () => {
+    expect(await readStops(dirs)).toEqual([]);
+    expect(await releaseStops(dirs, () => true)).toEqual({ released: [], left: [] }); // no file: nothing to do
+    await requestStop(dirs, { scope: "all", at: "2026-10-06T10:00:00.000Z" });
+    await requestStop(dirs, {
+      scope: "issue",
+      key: "JRF-1",
+      at: "2026-10-06T10:01:00.000Z",
+      reason: "drill",
+    });
+    await requestStop(dirs, { scope: "project", key: "bouncr", at: "2026-10-06T10:02:00.000Z" });
+    const r = await releaseStops(dirs, (e) => e.scope !== "project");
+    expect(r.released.map((e) => `${e.scope}:${e.key}`)).toEqual(["all:null", "issue:JRF-1"]);
+    expect(r.left).toEqual([
+      { scope: "project", key: "bouncr", at: "2026-10-06T10:02:00.000Z", reason: null },
+    ]);
+    expect(await readStops(dirs)).toEqual(r.left);
+    expect(await stopRequested(dirs, "bouncr")).toBe(true);
+    expect((await releaseStops(dirs, () => true)).left).toEqual([]);
     expect(existsSync(join(dirs.state, "stop-requested.json"))).toBe(false);
   });
 });

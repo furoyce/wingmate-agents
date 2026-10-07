@@ -1,19 +1,20 @@
 // tests/unit/cli/ops.test.ts — the operator commands' CLI: strict flags (usage errors exit 2), what they pass on, what they print
 // (identifiers and codes, never a secret or ticket text) and their exit codes. Contexts are the fake world; nothing live runs.
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { doctorCommand } from "../../../src/cli/commands/doctor";
 import { installCommand } from "../../../src/cli/commands/install";
 import { pauseCommand } from "../../../src/cli/commands/pause";
 import { statusCommand } from "../../../src/cli/commands/status";
-import { stopCommand } from "../../../src/cli/commands/stop";
+import { FLAG_KEPT, NO_FLAG, flagLines, stopCommand } from "../../../src/cli/commands/stop";
 import { main, parseArgv } from "../../../src/cli/index";
 import { type OpsCtx, liveDoctorOptions } from "../../../src/cli/ops";
 import { type RealCtxOptions, buildRealCtx } from "../../../src/cli/wire";
 import type { InstallOptions, InstallResult } from "../../../src/ops/install";
 import { readPause } from "../../../src/ops/pause";
+import type { StopEntry, StopReport } from "../../../src/ops/stop";
 import { WingmateError } from "../../../src/shared/errors";
 import { VERSION } from "../../../src/shared/version";
 import { stopRequested } from "../../../src/state/heartbeat";
@@ -238,6 +239,122 @@ describe("wingmate stop (CLI)", () => {
     await expect(stopCommand(parseArgv(["stop", "--all"]), deps)).rejects.toThrow(/broken/);
     expect(await stopRequested(w.dirs)).toBe(true);
     expect(t.err.join("\n")).toContain("stop flag KEPT");
+  });
+  const brokenBuild = async (): Promise<OpsCtx> => {
+    throw new WingmateError("internal_error", "build broke");
+  };
+  test("F8: the config is read before the flag for every scope — run where no config can be found, nothing is written or built", async () => {
+    const w = await world();
+    const t = io(w);
+    // the default loader the live command uses (no loadCfg injected), with no config where it looks — as when run from another cwd
+    const deps = { build: t.deps.build, out: t.deps.out, err: t.deps.err, dirs: w.dirs, now: t.deps.now };
+    const key = "WINGMATE_CONFIG";
+    const saved = process.env[key];
+    process.env[key] = join(w.root, "no-such-dir", "projects.yaml");
+    try {
+      for (const args of [
+        ["stop", "--all"],
+        ["stop", "--issue", "JRF-1"],
+        ["stop", "--project", "bouncr"],
+      ])
+        await expect(stopCommand(parseArgv(args), deps)).rejects.toMatchObject({ code: "config_missing" });
+      await expect(doctorCommand(parseArgv(["doctor", "--rotate"]), deps)).rejects.toMatchObject({
+        code: "config_missing",
+      });
+    } finally {
+      if (saved === undefined) delete process.env[key];
+      else process.env[key] = saved;
+    }
+    expect(t.builds).toEqual([]);
+    expect(existsSync(join(w.dirs.state, "stop-requested.json"))).toBe(false);
+    expect(t.err).toEqual(Array(4).fill(NO_FLAG)); // the owner is told that nothing was stopped
+  });
+  test("F8: a stop whose live build failed keeps its flag; the re-run clears it (and every older entry it supersedes), so ticks run again", async () => {
+    const w = await world();
+    labeledByOwner(w, todo("i1", "JRF-565"));
+    await runTick(w);
+    const t = io(w);
+    const broken = { ...t.deps, build: brokenBuild };
+    const stop = (args: string[]) => ["stop", ...args];
+    for (const [failed, rerun] of [
+      [stop(["--issue", "JRF-565"]), stop(["--issue", "JRF-565"])],
+      [stop(["--project", "bouncr"]), stop(["--project", "bouncr"])],
+      [stop(["--all"]), stop(["--all"])],
+      [stop(["--issue", "JRF-565"]), stop(["--project", "bouncr"])], // a broader re-run covers it (the record is in bouncr)
+      [stop(["--project", "bouncr"]), stop(["--all"])],
+      [
+        ["doctor", "--rotate"],
+        ["doctor", "--rotate"],
+      ],
+    ] as const) {
+      const command = failed[0] === "doctor" ? doctorCommand : stopCommand;
+      await expect(command(parseArgv([...failed]), broken)).rejects.toThrow(/build broke/);
+      expect(await stopRequested(w.dirs, "bouncr", "JRF-565")).toBe(true);
+      expect(t.err.at(-1)).toBe(FLAG_KEPT);
+      w.clock.advance(60_000);
+      expect(await command(parseArgv([...rerun]), t.deps)).toBe(0);
+      expect(t.out).toContain("stop flag cleared");
+      expect(await stopRequested(w.dirs, "bouncr", "JRF-565")).toBe(false);
+      expect(existsSync(join(w.dirs.state, "stop-requested.json"))).toBe(false);
+      t.out.length = 0;
+    }
+    expect((await readRecord(w.dirs, "JRF-565"))?.stage).toBe("blocked");
+    w.clock.advance(300_000);
+    expect((await runTick(w)).outcome).not.toBe("stopped");
+  });
+  test('F8: "stop flag cleared" is never printed while another entry still holds the scope; a narrower stop never releases a broader one', async () => {
+    const w = await world();
+    labeledByOwner(w, todo("i1", "JRF-566"));
+    await runTick(w);
+    const t = io(w);
+    await expect(
+      stopCommand(parseArgv(["stop", "--all"]), { ...t.deps, build: brokenBuild }),
+    ).rejects.toThrow(/build broke/);
+    const orphan = w.ctx.now();
+    w.clock.advance(60_000);
+    expect(await stopCommand(parseArgv(["stop", "--project", "bouncr"]), t.deps)).toBe(1);
+    expect(t.out).toContain("stopped (blocked owner_stop): JRF-566");
+    expect(t.out).not.toContain("stop flag cleared");
+    expect(t.out.at(-1)).toBe(
+      `stop flag still held for this scope by wingmate stop --all (${orphan}): ticks stay stopped until that stop finishes; re-run it if it is no longer running`,
+    );
+    expect(await stopRequested(w.dirs, "bouncr")).toBe(true);
+    expect(await stopCommand(parseArgv(["stop", "--issue", "JRF-566", "--json"]), t.deps)).toBe(1);
+    expect(JSON.parse(t.out.at(-1) ?? "{}")).toMatchObject({
+      flagCleared: false,
+      heldBy: [{ scope: "all", at: orphan }],
+    });
+    expect(await stopCommand(parseArgv(["stop", "--all"]), t.deps)).toBe(0);
+    expect(t.out.at(-1)).toBe("stop flag cleared");
+    expect(await stopRequested(w.dirs)).toBe(false);
+  });
+  test("F8: flagLines says cleared only with no entry holding the scope; it names the stop's own kept entry and every other holder", () => {
+    const own = { scope: "project" as const, key: "bouncr", at: "2026-10-06T10:00:00.000Z" };
+    const all = { scope: "all" as const, at: "2026-10-06T09:00:00.000Z" };
+    const issue = { scope: "issue" as const, key: "JRF-9", at: "2026-10-06T10:05:00.000Z" };
+    const report = (heldBy: StopEntry[]): StopReport => ({
+      scope: { kind: "project", key: "bouncr" },
+      stopped: [],
+      deferred: [],
+      failed: [],
+      unverifiable: [],
+      sweptWorktrees: [],
+      heldBy,
+      flagCleared: heldBy.length === 0,
+    });
+    const held = (names: string) =>
+      `stop flag still held for this scope by ${names}: ticks stay stopped until that stop finishes; re-run it if it is no longer running`;
+    expect(flagLines(report([]), own)).toEqual(["stop flag cleared"]);
+    expect(flagLines(report([own]), own)).toEqual([FLAG_KEPT]);
+    expect(flagLines(report([all, own]), own)).toEqual([
+      FLAG_KEPT,
+      held("wingmate stop --all (2026-10-06T09:00:00.000Z)"),
+    ]);
+    expect(flagLines(report([all, issue]), own)).toEqual([
+      held(
+        "wingmate stop --all (2026-10-06T09:00:00.000Z), wingmate stop --issue JRF-9 (2026-10-06T10:05:00.000Z)",
+      ),
+    ]);
   });
   test("--issue blocks that record (exit 0) and prints identifiers only; --json prints the report", async () => {
     const w = await world();
