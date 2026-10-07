@@ -43,6 +43,10 @@ export class FakeLinear implements LinearPort {
   issueWrites: IssueWrite[] = [];
   /** When set to a write kind, the next write of that kind throws once (replay tests). */
   failNext: string | null = null;
+  /** REL-3: when set to a write kind, the next write of that kind takes effect, then throws once (a timeout after Linear committed). */
+  commitThenFail: string | null = null;
+  /** Issues `createIssue` made (follow-ups), readable by id through `getIssues` as Linear's are. */
+  created = new Map<string, LinearIssue>();
   /** Called at the start of every port method (reads and writes): tests inject an owner edit "between read and write". */
   onCall: ((method: string) => void) | null = null;
   meta: LinearTeamMeta = {
@@ -67,6 +71,12 @@ export class FakeLinear implements LinearPort {
       throw new WingmateError("linear_unreachable", `fake linear failure: ${kind}`); // as LinearClient reports transport failures
     }
     this.writes.push({ kind, args });
+  }
+  /** After a write took effect: the `commitThenFail` failure, as a client that timed out on a committed write reports it. */
+  private committed(kind: string) {
+    if (this.commitThenFail !== kind) return;
+    this.commitThenFail = null;
+    throw new WingmateError("linear_timeout", `fake linear: ${kind} committed, then timed out`);
   }
 
   add(i: LinearIssue) {
@@ -99,7 +109,7 @@ export class FakeLinear implements LinearPort {
     this.call("getIssues");
     return structuredClone(
       ids.flatMap((id) => {
-        const i = this.issues.get(id);
+        const i = this.issues.get(id) ?? this.created.get(id);
         return i ? [i] : [];
       }),
     );
@@ -146,6 +156,9 @@ export class FakeLinear implements LinearPort {
   }
   async createComment(issueId: string, body: string, opts: { id: string; parentId?: string }) {
     this.call("createComment");
+    // as Linear refuses an entity id it has already (REL-3: a retry of a create that was committed)
+    if (this.comments.some((c) => c.id === opts.id))
+      throw new WingmateError("linear_graphql", `fake linear: comment ${opts.id} already exists`);
     this.bump("commentCreate", { issueId, opts });
     this.comments.push({
       id: opts.id,
@@ -157,6 +170,7 @@ export class FakeLinear implements LinearPort {
       botActorId: "app-wingmate",
       externalUserId: null,
     });
+    this.committed("commentCreate");
     return { id: opts.id };
   }
   async updateComment(id: string, body: string) {
@@ -180,8 +194,23 @@ export class FakeLinear implements LinearPort {
     stateId: string;
   }) {
     this.call("createIssue");
+    if (this.created.has(input.id))
+      throw new WingmateError("linear_graphql", `fake linear: issue ${input.id} already exists`);
     this.bump("issueCreate", input);
-    return { id: input.id, identifier: `JRF-${900 + this.writes.length}` };
+    const identifier = `JRF-${900 + this.writes.length}`;
+    const parent = this.issues.get(input.parentId);
+    if (parent)
+      this.created.set(input.id, {
+        ...structuredClone(parent),
+        id: input.id,
+        identifier,
+        title: input.title,
+        description: input.description,
+        labels: [],
+        children: [],
+      });
+    this.committed("issueCreate");
+    return { id: input.id, identifier };
   }
   async subscribe(issueId: string, userId: string) {
     this.call("subscribe");

@@ -430,7 +430,10 @@ launch that never gets its screen ready blocks `launch_failed` on the next tick 
 - If `heartbeat_fresh` warns while Orca's run history shows the precheck timing out, a tick was killed in a call that
   hung past the 60 s margin. Read `logs/wingmate.log` for the last call it started.
 
-**Linear is down or rate-limited.** Ticks read first and abort before writing. Journaled writes replay later. A block
+**Linear is down or rate-limited.** Ticks read first and abort before writing. A failed write is not replayed as such:
+the operation that made it is retried on a later tick and works out again from Linear what to write. Questions, blocked,
+handoff, release and completion comments, and follow-up issues are keyed: a retry sends the id of the first attempt and
+first looks that id up in Linear, so each is posted once, even when Linear took a write whose answer was lost. A block
 decided while Linear was down shows `blocked_unposted` until its label and comment are posted. There is nothing to do.
 
 ## 12. Incidents: tampering and the journal

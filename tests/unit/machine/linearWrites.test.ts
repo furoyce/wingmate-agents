@@ -74,6 +74,56 @@ describe("LinearWrites", () => {
     expect(w.linear.comments).toHaveLength(2);
   });
 
+  test("REL-3: a keyed comment Linear committed while the client saw a failure is confirmed by its id — one comment, the entry confirmed", async () => {
+    const { w, r, issue } = await setup();
+    w.linear.commitThenFail = "commentCreate";
+    const id = await new LinearWrites(w.ctx).postComment(r, issue, "question one", { key: "ask:01ABC" });
+    expect(w.linear.comments.map((c) => c.id)).toEqual([id]);
+    const entries = (await w.ctx.journal.all()).filter((e) => e.key === "ask:01ABC");
+    expect(entries.map((e) => e.state)).toEqual(["confirmed"]);
+    expect(entries[0]?.receipt).toEqual({ id });
+  });
+
+  test("REL-3: a keyed retry after an ambiguous failure sends the same Wingmate id and confirms it first — never a second comment", async () => {
+    const { w, r, issue } = await setup();
+    const lw = new LinearWrites(w.ctx);
+    w.linear.failNext = "commentCreate";
+    await expect(lw.postComment(r, issue, "blocked: setup", { key: "blocked:x" })).rejects.toThrow();
+    const [first] = (await w.ctx.journal.all()).filter((e) => e.key === "blocked:x");
+    const sent = (first?.input as { id: string }).id;
+    // Linear committed it after all (the response was lost), unseen by the failed attempt's own read-back
+    w.linear.comments.push({
+      id: sent,
+      issueId: issue.id,
+      body: "blocked: setup",
+      createdAt: w.ctx.now(),
+      parentId: null,
+      userId: null,
+      botActorId: "app-wingmate",
+      externalUserId: null,
+    });
+    const creates = w.linear.writes.filter((x) => x.kind === "commentCreate").length;
+    expect(await lw.postComment(r, issue, "blocked: setup", { key: "blocked:x" })).toBe(sent);
+    expect(w.linear.writes.filter((x) => x.kind === "commentCreate")).toHaveLength(creates);
+    expect(w.linear.comments.filter((c) => c.id === sent)).toHaveLength(1);
+    // not committed: the retry posts under the same id
+    w.linear.failNext = "commentCreate";
+    await expect(lw.postComment(r, issue, "handoff", { key: "handoff:y" })).rejects.toThrow();
+    const [h] = (await w.ctx.journal.all()).filter((e) => e.key === "handoff:y");
+    const again = await lw.postComment(r, issue, "handoff", { key: "handoff:y" });
+    expect(again).toBe((h?.input as { id: string }).id);
+    expect(w.linear.comments.filter((c) => c.body === "handoff")).toHaveLength(1);
+  });
+
+  test("REL-3: a keyed follow-up issue Linear committed while the client saw a failure is confirmed, never created twice", async () => {
+    const { w, r, issue } = await setup();
+    w.linear.commitThenFail = "issueCreate";
+    const lw = new LinearWrites(w.ctx);
+    const made = await lw.createFollowup(r, issue, "Add tests", "body", "followup:01F");
+    expect(await lw.createFollowup(r, issue, "Add tests", "body", "followup:01F")).toEqual(made);
+    expect(w.linear.writes.filter((x) => x.kind === "issueCreate")).toHaveLength(1);
+  });
+
   test("§11.2: outbound text with a secret-shaped token is refused before any journal entry or Linear write", async () => {
     const { w, r, issue } = await setup();
     const secret = `token ${"sk-ant-api03-"}${"A".repeat(30)}`;

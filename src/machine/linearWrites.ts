@@ -8,8 +8,11 @@ import { newUuid } from "../shared/ids";
 import type { JournalEntry } from "../state/journal";
 import type { WRecord } from "../state/records";
 import type { Ctx } from "./context";
+import { isTickAbort } from "./guard";
 
 const h = (o: unknown) => createHash("sha256").update(JSON.stringify(o)).digest("hex").slice(0, 16);
+const EPOCH = "1970-01-01T00:00:00.000Z";
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const Created = z.object({ id: z.string().min(1) });
 const CreatedIssue = z.object({ id: z.string().min(1), identifier: z.string().min(1) });
 
@@ -24,6 +27,9 @@ export interface JournalOp {
 /**
  * One external write as a journal entry: intent → act → acted → confirmed; a failure stays `intent` with the error and its
  * attempt counted (three make it `poisoned`) and is rethrown. A deduplicated replay returns the confirmed entry's receipt.
+ * REL-3 (Appendix D: confirm = the entity exists by id): with `confirm`, a create keyed by a Wingmate id that failed here may still
+ * have been committed by Linear (a timeout, a 5xx after the commit, a lost response, or Linear refusing the id as taken) — the entity
+ * is looked up by that id before an error is believed, and on a retry before it is sent again; found, the entry is confirmed.
  */
 export async function journaled<T>(
   ctx: Ctx,
@@ -31,11 +37,14 @@ export async function journaled<T>(
   op: JournalOp,
   act: () => Promise<T>,
   receipt: z.ZodType<T>,
+  confirm?: () => Promise<T | null>,
 ): Promise<T> {
+  let retry = false;
   if (op.dedupe) {
-    const prior = (await ctx.journal.all()).find(
-      (e) => e.issue === r.identifier && e.kind === op.kind && e.key === op.key && e.state === "confirmed",
+    const same = (await ctx.journal.all()).filter(
+      (e) => e.issue === r.identifier && e.kind === op.kind && e.key === op.key,
     );
+    const prior = same.find((e) => e.state === "confirmed");
     if (prior) {
       const p = receipt.safeParse(prior.receipt);
       if (!p.success)
@@ -45,12 +54,26 @@ export async function journaled<T>(
         );
       return p.data;
     }
+    retry = same.length > 0;
   }
   const e = await ctx.journal.intent({ issue: r.identifier, kind: op.kind, key: op.key, input: op.input });
+  const found = async (): Promise<T | null> => {
+    const got = confirm ? await confirm() : null;
+    if (got === null) return null;
+    await ctx.journal.acted(e.id, got);
+    await ctx.journal.confirmed(e.id);
+    return got;
+  };
   let out: T;
   try {
+    const earlier = retry ? await found() : null;
+    if (earlier !== null) return earlier;
     out = await act();
   } catch (err) {
+    if (!isTickAbort(err)) {
+      const late = await found().catch(() => null);
+      if (late !== null) return late;
+    }
     await ctx.journal.failed(e.id, errorText(err));
     throw err;
   }
@@ -77,6 +100,19 @@ const sameIds = (a: { id: string }[], b: { id: string }[]) => {
 
 export class LinearWrites {
   constructor(private readonly ctx: Ctx) {}
+
+  /**
+   * REL-3: the Wingmate id a keyed create was sent with before (its newest journal entry of that key), so a retry sends the same id —
+   * Linear then refuses it as taken instead of creating a second entity — or a fresh one for a first attempt or an unkeyed write.
+   */
+  private async keyedId(r: WRecord, kind: JournalOp["kind"], key: string | undefined): Promise<string> {
+    if (!key) return newUuid();
+    const prior = (await this.ctx.journal.all())
+      .filter((e) => e.issue === r.identifier && e.kind === kind && e.key === key)
+      .at(-1);
+    const id = (prior?.input as { id?: unknown } | null | undefined)?.id;
+    return typeof id === "string" && UUID.test(id) ? id : newUuid();
+  }
 
   /**
    * §5.2 "Linear wins" / I5: re-read the issue immediately before a label or state write; when its state or labels differ from the
@@ -170,7 +206,9 @@ export class LinearWrites {
     opts: { parentId?: string; key?: string } = {},
   ): Promise<string> {
     assertNoSecret(r, body);
-    const id = newUuid();
+    const id = await this.keyedId(r, "commentCreate", opts.key);
+    const exists = async () =>
+      (await this.ctx.linear.listComments([issue.id], EPOCH)).some((c) => c.id === id) ? { id } : null;
     const made = await journaled(
       this.ctx,
       r,
@@ -187,6 +225,7 @@ export class LinearWrites {
           opts.parentId ? { id, parentId: opts.parentId } : { id },
         ),
       Created,
+      opts.key ? exists : undefined,
     );
     return made.id;
   }
@@ -221,7 +260,11 @@ export class LinearWrites {
     key?: string,
   ): Promise<{ id: string; identifier: string }> {
     assertNoSecret(r, `${title}\n${description}`);
-    const id = newUuid();
+    const id = await this.keyedId(r, "issueCreate", key);
+    const exists = async () => {
+      const [made] = await this.ctx.linear.getIssues([id]);
+      return made ? { id: made.id, identifier: made.identifier } : null;
+    };
     return journaled(
       this.ctx,
       r,
@@ -237,6 +280,7 @@ export class LinearWrites {
           stateId: this.ctx.meta.stateByType("backlog"),
         }),
       CreatedIssue,
+      key ? exists : undefined,
     );
   }
 }
