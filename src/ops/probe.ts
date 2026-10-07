@@ -95,10 +95,13 @@ const LINE = /PROBE (\d{1,2}) exit=(-?\d{1,3}) sig=([a-z0-9]{1,24})/g;
 export const PROBE_ID = "WMPROBE-1";
 const q = (s: string) => shellQuote([s]);
 
-/** Shared by every script: classify a command's stderr. Auth before the generic permission text ("Permission denied (publickey)"). */
+/**
+ * Shared by every script: classify a command's stderr. Auth before the generic permission text ("Permission denied (publickey)").
+ * R35: Claude Code's shell sets `credential.interactive=false`, so git's "no credential" reads "unable to get password from user".
+ */
 export const CLASSIFY = `classify() {
   case "$1" in
-    *"could not read Username"*|*"Authentication failed"*|*"terminal prompts disabled"*|*"Permission denied (publickey)"*|*"gh auth login"*|*"HTTP 401"*|*"no oauth token"*|*"not logged in"*) echo auth ;;
+    *"could not read Username"*|*"Authentication failed"*|*"terminal prompts disabled"*|*"unable to get password from user"*|*"Permission denied (publickey)"*|*"gh auth login"*|*"HTTP 401"*|*"no oauth token"*|*"not logged in"*) echo auth ;;
     *"CONNECT tunnel failed"*|*"response 403"*|*"Could not resolve host"*|*"Could not resolve hostname"*|*"nodename nor servname"*|*"Name or service not known"*|*"network-outbound"*|*"Failed to connect"*) echo net ;;
     *"Operation not permitted"*|*"Permission denied"*|*"Read-only file system"*) echo eperm ;;
     *"No such file or directory"*) echo enoent ;;

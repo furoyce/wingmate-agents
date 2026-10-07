@@ -396,6 +396,8 @@ describe("probe scripts (real sh, temp files only)", () => {
     expect(await cls("git@github.com: Permission denied (publickey).")).toBe("auth");
     expect(await cls("To get started with GitHub CLI, please run:  gh auth login")).toBe("auth");
     expect(await cls("no oauth token found for github.com")).toBe("auth"); // SEC-2: `gh auth token` with none stored
+    // R35: Claude Code's shell sets credential.interactive=false, so git's "no credential" is this (exit 128; git 2.53 live probe)
+    expect(await cls("fatal: unable to get password from user")).toBe("auth");
     expect(await cls("cat: /h/.config/wingmate/credentials.json: Operation not permitted")).toBe("eperm");
     expect(await cls("sh: /x/hooks/pre-commit: No such file or directory")).toBe("enoent");
     expect(await cls("")).toBe("none");
