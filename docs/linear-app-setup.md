@@ -262,5 +262,6 @@ When these commands fail, their JSON names the cause in `reason`. A failure whil
 | `linear_token_file_mode` | `linear-token` is not a regular file of yours with mode 0600. Fix with `chmod 600`, or recreate it as above. |
 | `linear_token_invalid` | The file or variable does not hold exactly one token: printable ASCII, no spaces, at most 4,096 characters. |
 | `linear_http` | Linear refused the request (for example HTTP 400 or 401). Wingmate sends a personal key bare (`Authorization: <key>`, no `Bearer`), as Linear requires. So the key was revoked, mistyped, or is not a personal API key. Create a new key and store it again. |
+| `linear_rate_limited` | Linear rate-limited the request and asked for a wait longer than 30 s (or than the tick had left). Wingmate does not wait that long: run the command again later. |
 
 After the OAuth app is installed, delete `~/.config/wingmate/linear-token` and revoke the personal key in Linear.

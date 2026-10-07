@@ -35,7 +35,8 @@ export const SummarySchema = z
   .strict();
 
 export interface CommandDeps {
-  build?: (o: { readOnly: boolean }) => Promise<Ctx>;
+  /** `startedAt` (REL-5): `tick` passes its own start, so the context's Linear client is bounded by the tick's deadline. */
+  build?: (o: { readOnly: boolean; startedAt?: number }) => Promise<Ctx>;
   out?: (line: string) => void;
   err?: (line: string) => void;
 }
@@ -74,7 +75,7 @@ export async function tickCommand(argv: Argv, deps: CommandDeps = {}): Promise<n
   }
   let summary: TickSummary;
   try {
-    const ctx = await (deps.build ?? buildRealCtx)({ readOnly: dryRun });
+    const ctx = await (deps.build ?? buildRealCtx)({ readOnly: dryRun, startedAt });
     summary = await tick(ctx, { dryRun, precheck, startedAt });
   } catch (e) {
     out(JSON.stringify({ outcome: "error", reason: errorCode(e) }));

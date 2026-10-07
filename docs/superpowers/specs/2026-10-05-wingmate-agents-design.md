@@ -1044,7 +1044,7 @@ becomes a Linear Agent.
 ### 13.1 Failure handling
 | Failure | Response |
 |---|---|
-| Linear API down / rate-limited | reads first; abort before any write; back off; next tick retries; journaled writes replay |
+| Linear API down / rate-limited | reads first; abort before any write; back off (a `Retry-After` is honored up to 30 s and never past the tick's deadline; a longer one fails the request `linear_rate_limited` at once — amended 2026-10-07, R32); next tick retries; journaled writes replay |
 | App token expired or minting failed | `scan`/`tick` exit 2; `doctor` reports token age; the Console banner turns red |
 | Orca runtime unreachable or partial fleet read | reconcile-only tick (§6.7); `doctor` flags it |
 | Worktree create / terminal create / send failure | record the receipt; run the receipt's recovery argv; retry the same step once next tick; second failure → `blocked` (`launch_failed`), `In-Agent` removed, worktree named |

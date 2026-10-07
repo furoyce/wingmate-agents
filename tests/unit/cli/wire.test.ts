@@ -114,9 +114,14 @@ interface Call {
 
 /**
  * `buildRealCtx` reads the process environment (homeDirs, the token variable) and the global `fetch`: both point at this test's temp
- * home and a fake for `fn`, then are restored. `token` undefined removes the variable.
+ * home and a fake for `fn`, then are restored. `token` undefined removes the variable. `respond` answers the n-th request (0-based;
+ * default: the team metadata, every time).
  */
-async function live<T>(token: string | undefined, fn: (calls: Call[]) => Promise<T>): Promise<T> {
+async function live<T>(
+  token: string | undefined,
+  fn: (calls: Call[]) => Promise<T>,
+  respond: (n: number) => Response = () => new Response(JSON.stringify(TEAM_META), { status: 200 }),
+): Promise<T> {
   const env: Record<string, string | undefined> = {
     WINGMATE_HOME: dirs.state,
     WINGMATE_CONFIG_HOME: dirs.config,
@@ -133,7 +138,7 @@ async function live<T>(token: string | undefined, fn: (calls: Call[]) => Promise
   const calls: Call[] = [];
   globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
     calls.push({ url: String(url), auth: new Headers(init?.headers).get("authorization") });
-    return new Response(JSON.stringify(TEAM_META), { status: 200 });
+    return respond(calls.length - 1);
   }) as unknown as typeof fetch;
   for (const [k, v] of Object.entries(env)) set(k, v);
   try {
@@ -204,5 +209,34 @@ describe("buildRealCtx credential rules (Task 13)", () => {
       expect(ctx.meta.labels).toEqual([]);
       expect(calls).toEqual([]);
     });
+  });
+});
+
+describe("REL-5: a tick's Linear client waits no longer than the tick has left", () => {
+  test("a tick's context (built with its start) fails a Retry-After longer than what is left of the tick at once (linear_rate_limited); `tick` hands the build its start", async () => {
+    const rateLimited = () => new Response("rate", { status: 429, headers: { "Retry-After": "6" } });
+    await live(
+      KEY,
+      async () => {
+        const startedAt = Date.now() - 177_000; // 3 s of the 180 s tick budget left (precheckTimeoutSec 240)
+        const ctx = await buildRealCtx({ readOnly: true, startedAt });
+        const t0 = Date.now();
+        await expect(ctx.graphql.query("q", {})).rejects.toMatchObject({ code: "linear_rate_limited" });
+        expect(Date.now() - t0).toBeLessThan(2_000);
+      },
+      (n) => (n === 0 ? new Response(JSON.stringify(TEAM_META), { status: 200 }) : rateLimited()),
+    );
+    const seen: { readOnly: boolean; startedAt?: number }[] = [];
+    const before = Date.now();
+    await tickCommand(parseArgv(["tick", "--precheck"]), {
+      build: async (o) => {
+        seen.push(o);
+        throw new Error("stop here");
+      },
+      out: () => undefined,
+    });
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.readOnly).toBe(false);
+    expect(seen[0]?.startedAt).toBeGreaterThanOrEqual(before);
   });
 });

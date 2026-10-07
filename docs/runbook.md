@@ -438,7 +438,10 @@ next tick but one. A launch cut short before it began to wait does not count, an
 the operation that made it is retried on a later tick and works out again from Linear what to write. Questions, blocked,
 handoff, release and completion comments, and follow-up issues are keyed: a retry sends the id of the first attempt and
 first looks that id up in Linear, so each is posted once, even when Linear took a write whose answer was lost. A block
-decided while Linear was down shows `blocked_unposted` until its label and comment are posted. There is nothing to do.
+decided while Linear was down shows `blocked_unposted` until its label and comment are posted. A rate-limit answer is
+waited out only when its `Retry-After` is at most 30 s and fits in what is left of the tick; a longer one ends the
+request at once with `linear_rate_limited` (a tick ends `linear_error`, exit 2, with its heartbeat), and the next tick
+retries. There is nothing to do.
 
 ## 12. Incidents: tampering and the journal
 

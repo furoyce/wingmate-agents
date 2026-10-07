@@ -62,6 +62,11 @@ const CADENCE_MS = 5 * 60_000;
 const DEADLINE_MARGIN_SEC = 60;
 export const tickBudgetMs = (cfg: Config): number =>
   Math.max(30, cfg.defaults.dispatcher.precheckTimeoutSec - DEADLINE_MARGIN_SEC) * 1000;
+/** REL-1: a tick's deadline from its start; REL-5: a tick context's Linear client is bounded by the same one (`buildRealCtx`). */
+export const tickDeadline = (cfg: Config, startedAt: number): TickDeadline => ({
+  at: startedAt + tickBudgetMs(cfg),
+  now: Date.now,
+});
 /** §4.3: the precheck exits 1 after acting or when idle, 2 on error or pause (never 0: the automation's agent must never start). */
 const EXIT_2 = new Set<Heartbeat["outcome"]>(["error", "orca_unreachable", "linear_error", "paused"]);
 export const exitCodeFor = (o: Heartbeat["outcome"]): 1 | 2 => (EXIT_2.has(o) ? 2 : 1);
@@ -153,10 +158,7 @@ export async function tick(base: Ctx, opts: TickOptions): Promise<TickSummary> {
         opts.lockHeartbeatMs ? { heartbeatMs: opts.lockHeartbeatMs } : {},
       );
   if (lock?.kind === "held") return finish("lock_held");
-  const deadline: TickDeadline = opts.deadline ?? {
-    at: (opts.startedAt ?? started) + tickBudgetMs(base.cfg),
-    now: Date.now,
-  };
+  const deadline: TickDeadline = opts.deadline ?? tickDeadline(base.cfg, opts.startedAt ?? started);
   // §6.0 + Ruling R16: before every external action, a lost lock or a stop for everything aborts the tick; REL-1: so does the deadline
   const ctx = guardedCtx({ ...base, deadline }, async () => {
     if (lock?.lost()) throw new TickAbort("lock_lost", "lock_lost");

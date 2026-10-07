@@ -57,6 +57,19 @@ export interface GraphQLOptions {
   baseDelayMs?: number;
   maxRetries?: number;
   timeoutMs?: number;
+  /** REL-5: what is left of the tick's time in ms (`tick`'s deadline); absent outside a tick, where only the 30 s cap applies. */
+  remainingMs?: () => number;
+  /** How a retry waits (default `Bun.sleep`; tests record the waits instead). */
+  sleep?: (ms: number) => Promise<void>;
+}
+
+/** REL-5: the longest one retry waits, a Retry-After included; Linear asking for longer fails the request (`linear_rate_limited`). */
+const MAX_RETRY_WAIT_MS = 30_000;
+
+/** A Retry-After in delay-seconds, as ms; null when absent, zero or not a number (the backoff applies, as before REL-5). */
+function retryAfterMs(header: string | null): number | null {
+  const s = Number(header ?? "");
+  return Number.isFinite(s) && s > 0 ? s * 1000 : null;
 }
 
 export class GraphQL {
@@ -66,10 +79,17 @@ export class GraphQL {
     private opts: GraphQLOptions = {},
   ) {}
 
+  /** REL-5: what one retry may wait — 30 s, and never past the tick's deadline when one is known. */
+  private retryCapMs(): number {
+    const left = this.opts.remainingMs?.() ?? Number.POSITIVE_INFINITY;
+    return Math.max(0, Math.min(MAX_RETRY_WAIT_MS, left));
+  }
+
   async query<T>(query: string, variables: Record<string, unknown>): Promise<T> {
     const max = this.opts.maxRetries ?? 4;
     const base = this.opts.baseDelayMs ?? 500;
     const timeoutMs = this.opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    const sleep = this.opts.sleep ?? ((ms: number) => Bun.sleep(ms));
     let refreshed = false;
     for (let attempt = 0; ; attempt++) {
       // F6: the token's source spells the header (`Bearer <token>` for the app, a personal API key bare)
@@ -89,7 +109,7 @@ export class GraphQL {
       } catch (e) {
         // A timeout or a transport failure is retried like a 5xx; the last failure is reported with context.
         if (attempt < max) {
-          await Bun.sleep(base * 2 ** attempt);
+          await sleep(Math.min(base * 2 ** attempt, this.retryCapMs()));
           continue;
         }
         if (e instanceof FetchTimeout)
@@ -105,8 +125,16 @@ export class GraphQL {
         continue;
       }
       if ((res.status === 429 || res.status >= 500) && attempt < max) {
-        const ra = Number(res.headers.get("Retry-After") ?? "0");
-        await Bun.sleep(ra > 0 ? ra * 1000 : base * 2 ** attempt);
+        const asked = retryAfterMs(res.headers.get("Retry-After"));
+        const cap = this.retryCapMs();
+        // REL-5: a longer wait than 30 s or the tick has left is never slept through (Orca would kill the precheck mid-sleep): the
+        // request fails now, the tick ends `linear_error` with its heartbeat, and the next tick retries
+        if (asked !== null && asked > cap)
+          throw new WingmateError(
+            "linear_rate_limited",
+            `Linear HTTP ${res.status} asked for a retry after ${Math.ceil(asked / 1000)} s, more than this request may wait (${Math.floor(cap / 1000)} s); the next tick retries`,
+          );
+        await sleep(asked ?? Math.min(base * 2 ** attempt, cap));
         continue;
       }
       if (!res.ok) throw new WingmateError("linear_http", `Linear HTTP ${res.status}`);

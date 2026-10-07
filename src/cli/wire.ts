@@ -10,6 +10,7 @@ import { EnvToken } from "../linear/envToken";
 import { GraphQL } from "../linear/graphql";
 import { type Ctx, buildCtx } from "../machine/context";
 import { guardedCtx } from "../machine/guard";
+import { tickDeadline } from "../machine/tick";
 import { OrcaClient } from "../orca/client";
 import type { LinearTeamMeta } from "../ports";
 import { WingmateError, errorCode } from "../shared/errors";
@@ -31,6 +32,8 @@ export interface RealCtxOptions {
    * fails with context, and `linearDown` carries the code.
    */
   linearOptional?: boolean;
+  /** REL-5: when the tick began (epoch ms; `tick` passes it): Linear's retries then never wait past the tick's deadline. */
+  startedAt?: number;
 }
 export type RealCtx = Ctx & { tokens: TokenStore | EnvToken; graphql: GraphQL; linearDown: string | null };
 
@@ -74,8 +77,14 @@ export async function buildRealCtx(o: RealCtxOptions = { readOnly: false }): Pro
   const clock = new SystemClock();
   const tokens = await linearTokens(o, dirs, clock);
   const cfg = await loadConfig();
+  // REL-5: the deadline `tick` derives from the same start, so no Retry-After is waited past it
+  const deadline = o.startedAt === undefined ? null : tickDeadline(cfg, o.startedAt);
   // Ruling R17: 20 s per request and two retries keep a hung Linear well inside the 180 s tick budget
-  const graphql = new GraphQL(tokens, fetch, { timeoutMs: 20_000, maxRetries: 2 });
+  const graphql = new GraphQL(tokens, fetch, {
+    timeoutMs: 20_000,
+    maxRetries: 2,
+    ...(deadline ? { remainingMs: () => deadline.at - deadline.now() } : {}),
+  });
   const linear = new LinearClient(graphql);
   let teamMeta: LinearTeamMeta | undefined;
   let linearDown: string | null = null;

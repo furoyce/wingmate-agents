@@ -116,3 +116,71 @@ describe("GraphQL — fix round 1", () => {
     await expect(shape.query("q", {})).rejects.toMatchObject({ code: "linear_shape" });
   });
 });
+
+describe("REL-5: Retry-After is honored only within 30 s and what is left of the tick", () => {
+  /** A fetch that answers `first` once, then data; `n` counts the requests. */
+  function once(first: Response) {
+    const seen = { n: 0 };
+    const f = (async () => {
+      seen.n++;
+      return seen.n === 1 ? first : new Response(JSON.stringify({ data: { ok: true } }));
+    }) as unknown as typeof fetch;
+    return { f, seen };
+  }
+  const rate = (status: number, retryAfter: string | null) =>
+    new Response("rate", { status, headers: retryAfter === null ? {} : { "Retry-After": retryAfter } });
+
+  test("a Retry-After within 30 s and the tick's time is waited, then the request retried", async () => {
+    const slept: number[] = [];
+    const { f, seen } = once(rate(429, "20"));
+    const g = new GraphQL(tokens, f, {
+      maxRetries: 1,
+      remainingMs: () => 60_000,
+      sleep: async (ms) => {
+        slept.push(ms);
+      },
+    });
+    expect(await g.query<{ ok: boolean }>("q", {})).toEqual({ ok: true });
+    expect(slept).toEqual([20_000]);
+    expect(seen.n).toBe(2);
+  });
+
+  test("a Retry-After over 30 s fails the request linear_rate_limited at once, never slept (the next tick retries)", async () => {
+    const slept: number[] = [];
+    const { f, seen } = once(rate(429, "31"));
+    const g = new GraphQL(tokens, f, {
+      maxRetries: 1,
+      sleep: async (ms) => {
+        slept.push(ms);
+      },
+    });
+    const started = Date.now();
+    await expect(g.query("q", {})).rejects.toMatchObject({ code: "linear_rate_limited" });
+    expect(Date.now() - started).toBeLessThan(1_000);
+    expect(slept).toEqual([]);
+    expect(seen.n).toBe(1);
+  });
+
+  test("a Retry-After over what is left of the tick fails linear_rate_limited too, 5xx included; a backoff without one is cut to the tick's time", async () => {
+    const slept: number[] = [];
+    const sleep = async (ms: number) => {
+      slept.push(ms);
+    };
+    const short = once(rate(429, "3"));
+    const g = new GraphQL(tokens, short.f, { maxRetries: 1, remainingMs: () => 2_000, sleep });
+    await expect(g.query("q", {})).rejects.toMatchObject({ code: "linear_rate_limited" });
+    const busy = once(rate(503, "3"));
+    const g5 = new GraphQL(tokens, busy.f, { maxRetries: 1, remainingMs: () => 2_000, sleep });
+    await expect(g5.query("q", {})).rejects.toMatchObject({ code: "linear_rate_limited" });
+    expect(slept).toEqual([]);
+    const plain = once(rate(503, null));
+    const gb = new GraphQL(tokens, plain.f, {
+      maxRetries: 1,
+      baseDelayMs: 500,
+      remainingMs: () => 120,
+      sleep,
+    });
+    expect(await gb.query<{ ok: boolean }>("q", {})).toEqual({ ok: true });
+    expect(slept).toEqual([120]);
+  });
+});
