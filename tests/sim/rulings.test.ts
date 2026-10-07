@@ -200,6 +200,39 @@ describe("F1: the record lock is held only for a read or a write; another writer
   });
 });
 
+describe("INT-2 (§4.4): the coordinator's handle is runtime-scoped and re-resolved each tick", () => {
+  test("an Orca restart that re-issued the coordinator's handle and pane key is followed, never relaunched (handle_rebound, one coordinator)", async () => {
+    const w = await world();
+    const r = await claimed(w);
+    const wt = r.worktree?.id ?? "";
+    // Orca restarted: the same coordinator, re-attached under a new handle and pane
+    const rows = w.orca.terminals.get(wt) ?? [];
+    w.orca.terminals.set(
+      wt,
+      rows.map((t) =>
+        t.handle === r.coordinator.terminalHandle
+          ? { ...t, handle: "term_r", tabId: "tabR", leafId: "leafR" }
+          : t,
+      ),
+    );
+    for (const a of w.orca.rows.get(wt)?.agents ?? [])
+      if (a.paneKey === r.coordinator.paneKey) a.paneKey = "tabR:leafR";
+    const creates = w.orca.calls.filter((c) => c.verb === "terminalCreate").length;
+    advance(w, 5);
+    const s = await runTick(w);
+    expect([...s.relaunches, ...s.handoffs, ...s.blocked]).toEqual([]);
+    expect(w.orca.calls.filter((c) => c.verb === "terminalCreate")).toHaveLength(creates);
+    const after = await rec(w);
+    expect(after.coordinator).toMatchObject({
+      terminalHandle: "term_r",
+      paneKey: "tabR:leafR",
+      relaunches: 0,
+    });
+    const rebound = (await w.ctx.ledger.readIssue("JRF-501")).filter((e) => e.type === "handle_rebound");
+    expect(rebound.map((e) => e.data)).toEqual([{ from: r.coordinator.terminalHandle, to: "term_r" }]);
+  });
+});
+
 describe("R20: attention is a set; the change windows advance", () => {
   test("a persistent unauthorized `human` label never grows attention and releases nothing", async () => {
     const w = await world();

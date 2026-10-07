@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { agentActiveAt, coordinatorLiveness } from "../../../src/machine/liveness";
+import { agentActiveAt, coordinatorLiveness, coordinatorRow } from "../../../src/machine/liveness";
 import type { FleetRow, TerminalRow } from "../../../src/ports";
 import { newRecord } from "../../../src/state/records";
 
@@ -50,6 +50,36 @@ const row = (state: string | null): FleetRow => ({
         },
       ]
     : [],
+});
+
+describe("INT-2: coordinatorRow — the coordinator's terminal re-resolved each tick (§4.4: handles are runtime-scoped)", () => {
+  const agentAt = (paneKey: string, state = "working") =>
+    ({ ...row(null), agents: [{ ...row(state).agents[0], paneKey }] }) as FleetRow;
+  test("by its handle; after Orca re-issued the handle, by its recorded pane key; after both changed, by its title with an agent in its pane", () => {
+    expect(coordinatorRow(rec(), [term], row("working"))?.handle).toBe("term_1");
+    const reissued = { ...term, handle: "term_99" };
+    expect(coordinatorRow(rec(), [reissued], row("working"))?.handle).toBe("term_99");
+    expect(coordinatorLiveness(rec(), [reissued], row("working"))).toBe("working");
+    const moved = { ...term, handle: "term_77", tabId: "tab7", leafId: "leaf7", title: "wingmate JRF-1" };
+    expect(coordinatorRow(rec(), [moved], agentAt("tab7:leaf7"))?.handle).toBe("term_77");
+    expect(coordinatorLiveness(rec(), [moved], agentAt("tab7:leaf7", "done"))).toBe("idle");
+  });
+  test("never a guess: a titled row without an agent, two titled rows, another issue's or a role's title, or a record never launched → none (exited)", () => {
+    const moved = { ...term, handle: "term_77", tabId: "tab7", leafId: "leaf7", title: "wingmate JRF-1" };
+    expect(coordinatorRow(rec(), [moved], row(null))).toBeUndefined(); // a bare shell is no coordinator
+    const twin = { ...moved, handle: "term_78", leafId: "leaf8" };
+    const both = {
+      ...row(null),
+      agents: [agentAt("tab7:leaf7").agents[0], agentAt("tab7:leaf8").agents[0]],
+    } as FleetRow;
+    expect(coordinatorRow(rec(), [moved, twin], both)).toBeUndefined();
+    for (const title of ["wingmate JRF-11", "wingmate JRF-1 code-reviewer"])
+      expect(coordinatorRow(rec(), [{ ...moved, title }], agentAt("tab7:leaf7"))).toBeUndefined();
+    const fresh = rec();
+    fresh.coordinator.terminalHandle = null;
+    expect(coordinatorRow(fresh, [moved], agentAt("tab7:leaf7"))).toBeUndefined();
+    expect(coordinatorLiveness(rec(), [moved], row(null))).toBe("exited");
+  });
 });
 
 describe("coordinatorLiveness", () => {

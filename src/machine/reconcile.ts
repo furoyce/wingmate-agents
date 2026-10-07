@@ -16,7 +16,7 @@ import { readText } from "../state/fs";
 import { type WRecord, listRecords } from "../state/records";
 import { type CommentClass, classifyComment } from "./classify";
 import type { Ctx } from "./context";
-import { type Liveness, agentActiveAt, coordinatorLiveness } from "./liveness";
+import { type Liveness, agentActiveAt, coordinatorLiveness, coordinatorRow } from "./liveness";
 
 export type Event =
   | {
@@ -102,8 +102,10 @@ export async function reconcile(ctx: Ctx): Promise<Reconciled> {
     }
     const row = fleet.worktrees.find((w) => w.worktreeId === wt.id);
     let preview: string | undefined;
-    if (row && r.coordinator.terminalHandle && !row.agents.some((a) => a.paneKey === r.coordinator.paneKey)) {
-      preview = await ctx.orca.terminalShowPreview(r.coordinator.terminalHandle);
+    // INT-2: the coordinator's row as re-resolved this tick (a restart may have re-issued its handle and pane)
+    const own = coordinatorRow(r, t, row);
+    if (row && own && !row.agents.some((a) => a.paneKey === `${own.tabId}:${own.leafId}`)) {
+      preview = await ctx.orca.terminalShowPreview(own.handle);
     }
     liveness.set(r.identifier, partial ? "unverifiable" : coordinatorLiveness(r, t, row, preview));
   }

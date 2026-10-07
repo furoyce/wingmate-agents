@@ -18,9 +18,35 @@ export function worktreeGone(path: string): boolean {
 }
 
 /**
+ * INT-2 (§4.4: handles are runtime-scoped, so the coordinator is re-resolved from `terminal list` each tick): its terminal row — by the
+ * recorded handle; when Orca re-issued handles (a restart re-attaching its terminals), by the recorded pane key `tabId:leafId` (UUIDs);
+ * when both changed, by the title `wingmate <identifier>` with an agent in its pane, and only when exactly one row fits. A record that
+ * never had a terminal has none: nothing is adopted for it here.
+ */
+export function coordinatorRow(
+  r: WRecord,
+  terminals: TerminalRow[],
+  row: FleetRow | undefined,
+): TerminalRow | undefined {
+  const handle = r.coordinator.terminalHandle;
+  if (!handle) return undefined;
+  const byHandle = terminals.find((t) => t.handle === handle);
+  if (byHandle) return byHandle;
+  const pane = r.coordinator.paneKey;
+  const byPane = pane ? terminals.find((t) => `${t.tabId}:${t.leafId}` === pane) : undefined;
+  if (byPane) return byPane;
+  const agents = new Set((row?.agents ?? []).map((a) => a.paneKey));
+  const titled = terminals.filter(
+    (t) => t.title === `wingmate ${r.identifier}` && agents.has(`${t.tabId}:${t.leafId}`),
+  );
+  return titled.length === 1 ? titled[0] : undefined;
+}
+
+/**
  * Inputs: the record's terminal handle and worktree path, the worktree's `terminal list` rows and its `worktree ps` row.
- * `exited` when the worktree (its fleet row, or C12 its path on disk) or the handle is gone; `working`/`idle` from the `agents[]`
- * entry joined on `tabId:leafId`; a bare shell prompt in the preview means the agent process ended; otherwise unverifiable.
+ * `exited` when the worktree (its fleet row, or C12 its path on disk) or the coordinator's terminal is gone (`coordinatorRow`, INT-2);
+ * `working`/`idle` from the `agents[]` entry joined on `tabId:leafId`; a bare shell prompt in the preview means the agent process
+ * ended; otherwise unverifiable.
  */
 export function coordinatorLiveness(
   r: WRecord,
@@ -29,8 +55,7 @@ export function coordinatorLiveness(
   shellPreview?: string,
 ): Liveness {
   if (!row || (r.worktree && worktreeGone(r.worktree.path))) return "exited";
-  const handle = r.coordinator.terminalHandle;
-  const term = handle ? terminals.find((t) => t.handle === handle) : undefined;
+  const term = coordinatorRow(r, terminals, row);
   if (!term) return "exited";
   const paneKey = `${term.tabId}:${term.leafId}`;
   const entry = row.agents.find((a) => a.paneKey === paneKey);

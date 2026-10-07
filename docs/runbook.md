@@ -494,6 +494,12 @@ run inside the issue worktree, shows that worktree's `.wingmate/` mirror and its
 - Re-queue the issue for a new cycle. Its branch is still in the repository.
 - After Done or Canceled, a worktree removed by hand is simply recorded as removed.
 
+**Orca restarted while coordinators were running.** If Orca re-attaches the running terminals under new handles, the
+next tick finds each coordinator by its pane, or by its title `wingmate <ID>` with an agent in it, and follows it (ledger
+`handle_rebound`); a relaunch adopts such a terminal (`terminal_adopted`) instead of starting a second coordinator.
+Whether Orca keeps terminals and pane keys across a restart has not been checked live (section 16). If a coordinator
+did end with the restart, it is relaunched once as for any exit.
+
 **The folder-trust dialog appears.**
 
 - Claude may show "Is this a project you created or one you trust?" for a new worktree path, and the default answer is
@@ -589,6 +595,9 @@ These are the D14 residuals: places where the agent trust boundary is weaker tha
   entries for sibling worktrees created later reach it only at its next launch or relaunch.
 - **Orca may be reachable from the sandbox.** If `doctor` reports `orca_from_sandbox` reachable, an agent can start
   processes outside its sandbox through Orca.
+- **Orca restarts are unverified.** Coordinators are followed across re-issued terminal handles by pane key or title
+  (section 13). Check this on the first Orca restart of the pilot: `ledger/<ID>.jsonl` shows `handle_rebound`, and
+  `wingmate status` shows the issue still working, with one coordinator terminal in its worktree.
 - **Your user-level Claude `env` reaches every agent session unless blanked.** Claude Code applies the `env` block of
   `~/.claude/settings.json` to every session and its commands, the agents' too. The kit's settings set to empty every
   key there whose name says credential (`TOKEN`, `SECRET`, `PASSWORD`, `API_KEY`, `_KEY`, `CREDENTIAL`) and the GitHub

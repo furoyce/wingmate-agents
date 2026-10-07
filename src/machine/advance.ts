@@ -16,6 +16,7 @@ import { isRecordAbort, isTickAbort, recordCtx } from "./guard";
 import { doHandoff, doReroute } from "./handoff";
 import { comments, reviewFeedback } from "./humans";
 import { LinearWrites } from "./linearWrites";
+import { coordinatorRow } from "./liveness";
 import { syncMirror } from "./mirror";
 import { executeOutbox } from "./outbox";
 import type { Event, Reconciled } from "./reconcile";
@@ -268,6 +269,29 @@ async function outbox(a: Advance): Promise<StepOut> {
   return o.parked || o.finished || !WORKING.has(r.stage) ? "stop" : "next";
 }
 
+/**
+ * INT-2 (§4.4): Orca re-issued the coordinator's terminal handle (a restart re-attached its terminals): the record follows the live
+ * terminal `coordinatorRow` found by its pane key or title (ledger `handle_rebound`), so nothing relaunches a running coordinator.
+ */
+async function rebind(a: Advance): Promise<StepOut> {
+  const { ctx, r } = a;
+  const wt = r.worktree;
+  const from = r.coordinator.terminalHandle;
+  if (!wt || !from) return "next";
+  const row = a.rec.fleet.worktrees.find((x) => x.worktreeId === wt.id);
+  const t = coordinatorRow(r, a.rec.terminals.get(wt.id) ?? [], row);
+  if (!t || t.handle === from) return "next";
+  r.coordinator.terminalHandle = t.handle;
+  r.coordinator.paneKey = `${t.tabId}:${t.leafId}`;
+  await ctx.ledger.append({
+    at: ctx.now(),
+    issue: r.identifier,
+    type: "handle_rebound",
+    data: { from, to: t.handle },
+  });
+  return "next";
+}
+
 /** F2: a block whose Linear writes failed is finished first (the record is `blocked` on disk already). */
 async function blockNotice(a: Advance): Promise<StepOut> {
   const ownerChanged = a.evs.some((e) => e.type === "owner_state" || e.type === "owner_labels");
@@ -277,6 +301,7 @@ async function blockNotice(a: Advance): Promise<StepOut> {
 
 // C28: the allow-deps grant reaches launch.json before `comments` delivers an answer, so a resumed agent's `gate security` sees it
 const STEPS = [
+  rebind,
   overrides,
   blockNotice,
   replayClaim,

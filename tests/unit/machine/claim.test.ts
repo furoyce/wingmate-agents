@@ -328,6 +328,26 @@ describe("relaunch", () => {
     expect(commands(w)[1]).toContain("OPENAI_API_KEY='' ");
   });
 
+  test("INT-2: a live coordinator terminal of the issue that the record does not hold (Orca re-issued its handle) is adopted — no second coordinator, the relaunch not counted", async () => {
+    const w = await makeWorld();
+    const r = await claim(w);
+    const live = r.coordinator.terminalHandle;
+    r.coordinator.terminalHandle = "term_before_restart";
+    r.coordinator.paneKey = "tab0:leaf0";
+    expect(await relaunch(w.ctx, r, "exited")).toBe(true); // its pane is working: nothing is sent into the turn
+    expect(r.coordinator.terminalHandle).toBe(live ?? "");
+    expect(r.coordinator.relaunches).toBe(0);
+    expect(verbs(w).filter((x) => x === "terminalCreate")).toHaveLength(1);
+    expect((await w.ctx.ledger.readIssue("JRF-501")).some((e) => e.type === "terminal_adopted")).toBe(true);
+    // an idle adopted coordinator gets the resume pointer, as a successor would
+    w.orca.setAgentState(r.worktree?.id ?? "", r.coordinator.paneKey ?? "", "done", w.ctx.now());
+    r.coordinator.terminalHandle = "term_before_restart";
+    const sends = verbs(w).filter((x) => x === "terminalSend").length;
+    expect(await relaunch(w.ctx, r, "exited")).toBe(true);
+    expect(verbs(w).filter((x) => x === "terminalSend")).toHaveLength(sends + 1);
+    expect(verbs(w).filter((x) => x === "terminalCreate")).toHaveLength(1);
+  });
+
   test("before any turn of the attempt (a handoff's new attempt) the successor starts a fresh session; uncounted keeps relaunches", async () => {
     const w = await makeWorld();
     const r = await claim(w);

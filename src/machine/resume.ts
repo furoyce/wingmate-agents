@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { worktreeDir, writeInWorktree } from "../kit/local";
 import { agentEnv, launchCommand, userClaudeCredentialEnv } from "../kit/settings";
+import type { TerminalRow } from "../ports";
 import { errorCode, errorText } from "../shared/errors";
 import { fence } from "../shared/fence";
 import { newUlid, newUuid } from "../shared/ids";
@@ -221,6 +222,29 @@ export function coordinatorMarker(r: WRecord): string | null {
 }
 
 /**
+ * INT-2: a live coordinator terminal of this issue that the record does not hold — titled `wingmate <identifier>` with an agent in its
+ * pane (Orca re-issued its handle, or a create that reported a failure took effect) — and whether that agent is mid-turn; null unless
+ * exactly one fits (never a guess between two).
+ */
+async function liveTitled(
+  ctx: Ctx,
+  r: WRecord,
+  wtId: string,
+): Promise<{ term: TerminalRow; working: boolean } | null> {
+  const title = `wingmate ${r.identifier}`;
+  const rows = (await ctx.orca.terminalList(wtId)).filter(
+    (t) => t.title === title && t.handle !== r.coordinator.terminalHandle,
+  );
+  if (!rows.length) return null;
+  const agents = (await ctx.orca.worktreePs()).worktrees.find((w) => w.worktreeId === wtId)?.agents ?? [];
+  const live = rows.flatMap((t) => {
+    const a = agents.find((x) => x.paneKey === `${t.tabId}:${t.leafId}`);
+    return a ? [{ term: t, working: a.state === "working" }] : [];
+  });
+  return live.length === 1 ? (live[0] ?? null) : null;
+}
+
+/**
  * Starts a successor session in the same worktree (§6.3 step 4, §7.1 step 4) and points it at `.wingmate/`. `counted` (default)
  * spends the attempt's one relaunch, also when the launch cannot even start; a handoff's first launch of a new attempt passes
  * false. Orca failures are absorbed into `relaunch_failed` (the record is written) so the counter always advances.
@@ -234,6 +258,9 @@ export async function relaunch(
   const wt = r.worktree;
   if (!wt) return false;
   assertWaitBudget(ctx); // REL-1: a relaunch that could not wait for its TUI is not started (nor counted) in this tick
+  // INT-2: a coordinator still running under a handle the record lost is adopted, never joined by a second one (I1); not a relaunch
+  const adopted = existsSync(wt.path) ? await liveTitled(ctx, r, wt.id) : null;
+  if (adopted) return adopt(ctx, r, adopted.term, adopted.working, reason);
   if (opts.counted !== false) r.coordinator.relaunches += 1;
   if (!existsSync(wt.path)) {
     addAttention(r, "worktree_gone");
@@ -260,30 +287,7 @@ export async function relaunch(
       await saveRecord(ctx, r);
       return false;
     }
-    const nonce = (await kitNonce(ctx, r)) ?? "";
-    const message = `You are resuming ${r.identifier} in ${wt.path} (${reason}). Read .wingmate/BRIEF.md, .wingmate/stage.json and .wingmate/inbox/, then continue from the recorded stage. Nonce: ${nonce}.`;
-    const receipt = await ctx.orca.terminalSend(term.handle, message, 10);
-    await ctx.ledger.append({
-      at: ctx.now(),
-      issue: r.identifier,
-      type: "relaunch",
-      data: {
-        reason,
-        stage: receipt.stage,
-        attempt: r.coordinator.attempt,
-        relaunches: r.coordinator.relaunches,
-      },
-    });
-    if (receipt.stage !== "turn_started") {
-      addAttention(r, "launch_unconfirmed");
-      await saveRecord(ctx, r);
-      return false;
-    }
-    if (r.stage === "claimed") await transition(ctx, r, "working", "turn_started");
-    ensureAttempt(ctx, r);
-    dropAttention(r, "launch_not_ready", "launch_unconfirmed", "relaunch_failed", "worktree_gone");
-    await saveRecord(ctx, r);
-    return true;
+    return await resumeIn(ctx, r, term.handle, reason);
   } catch (e) {
     if (isTickAbort(e)) throw e;
     addAttention(r, "relaunch_failed");
@@ -297,4 +301,69 @@ export async function relaunch(
     await saveRecord(ctx, r);
     return false;
   }
+}
+
+/** INT-2: the adopted terminal becomes the record's; a mid-turn agent is left to its turn, an idle one gets the resume pointer. */
+async function adopt(
+  ctx: Ctx,
+  r: WRecord,
+  term: TerminalRow,
+  working: boolean,
+  reason: string,
+): Promise<boolean> {
+  const from = r.coordinator.terminalHandle;
+  r.coordinator.terminalHandle = term.handle;
+  r.coordinator.paneKey = `${term.tabId}:${term.leafId}`;
+  await ctx.ledger.append({
+    at: ctx.now(),
+    issue: r.identifier,
+    type: "terminal_adopted",
+    data: { handle: term.handle, from, reason },
+  });
+  await saveRecord(ctx, r);
+  if (!working) {
+    try {
+      if (!(await waitForTui(ctx, r, term.handle))) return false;
+      return await resumeIn(ctx, r, term.handle, reason);
+    } catch (e) {
+      if (isTickAbort(e)) throw e;
+      ctx.log.warn({ issue: r.identifier, err: errorText(e) }, "adopted coordinator not resumed");
+      return false;
+    }
+  }
+  if (r.stage === "claimed") await transition(ctx, r, "working", "turn_started", "pane_working");
+  ensureAttempt(ctx, r);
+  dropAttention(r, "launch_not_ready", "launch_unconfirmed", "relaunch_failed");
+  await saveRecord(ctx, r);
+  return true;
+}
+
+/** The resume pointer to a coordinator whose TUI is ready (§7.1 step 4): `turn_started` makes the record `working`. */
+async function resumeIn(ctx: Ctx, r: WRecord, handle: string, reason: string): Promise<boolean> {
+  const wt = r.worktree;
+  if (!wt) return false;
+  const nonce = (await kitNonce(ctx, r)) ?? "";
+  const message = `You are resuming ${r.identifier} in ${wt.path} (${reason}). Read .wingmate/BRIEF.md, .wingmate/stage.json and .wingmate/inbox/, then continue from the recorded stage. Nonce: ${nonce}.`;
+  const receipt = await ctx.orca.terminalSend(handle, message, 10);
+  await ctx.ledger.append({
+    at: ctx.now(),
+    issue: r.identifier,
+    type: "relaunch",
+    data: {
+      reason,
+      stage: receipt.stage,
+      attempt: r.coordinator.attempt,
+      relaunches: r.coordinator.relaunches,
+    },
+  });
+  if (receipt.stage !== "turn_started") {
+    addAttention(r, "launch_unconfirmed");
+    await saveRecord(ctx, r);
+    return false;
+  }
+  if (r.stage === "claimed") await transition(ctx, r, "working", "turn_started");
+  ensureAttempt(ctx, r);
+  dropAttention(r, "launch_not_ready", "launch_unconfirmed", "relaunch_failed", "worktree_gone");
+  await saveRecord(ctx, r);
+  return true;
 }
