@@ -13,6 +13,8 @@ is in [runbook.md](runbook.md).
   worktree, which it creates from `origin/main` the first time.
 - Until the first `install`, `wingmate` is not on your PATH. Use `bun bin/wingmate.ts <command>` instead. After it,
   `~/.local/bin/wingmate` exists; add `~/.local/bin` to your PATH if it is not there.
+- If you exported `WINGMATE_LINEAR_TOKEN` for a read-only dry run (last section), run `unset WINGMATE_LINEAR_TOKEN` in
+  this shell first. `install` and `doctor` never use it.
 
 **Secrets rule.** The client secret and any API key travel from Linear's page through your clipboard to a command's
 stdin, or to a file with mode 0600. Never put them on a command line (`ps` and the shell history show it). Never paste
@@ -183,8 +185,10 @@ escape.
    with the old secret.
 3. Copy the new secret, then run
    `pbpaste | wingmate install --client-id <client id> --client-secret -` and `pbcopy </dev/null`.
-4. On GitHub, run `gh auth refresh`. Alternatively, revoke the token at github.com/settings/tokens and run
-   `gh auth login`.
+4. Revoke the gh token on GitHub. `gh auth refresh` does not do it: it issues a new token and the old one stays valid,
+   and `gh auth logout` revokes nothing either. Go to github.com/settings/applications → Authorized OAuth Apps → GitHub
+   CLI → Revoke; that kills every gh token. If gh was logged in with a personal access token instead, delete it at
+   github.com/settings/tokens. Then run `gh auth login`.
 5. Inspect the worktrees named in the blocked comments, run `wingmate doctor`, then `wingmate install --enable`
    (step 3 left the automation disabled). Re-queue issues by moving them back to Todo (see the runbook).
 
@@ -223,7 +227,9 @@ To set it up:
 
 `WINGMATE_LINEAR_TOKEN` takes precedence over the file. To set it without typing the key on a command line, run
 `read -rs WINGMATE_LINEAR_TOKEN && export WINGMATE_LINEAR_TOKEN` and paste the key at the silent prompt. Run
-`unset WINGMATE_LINEAR_TOKEN` when you are done.
+`unset WINGMATE_LINEAR_TOKEN` as soon as the read-only commands are done, and always before `wingmate doctor` or
+`wingmate install`. Wingmate withholds the variable from every process it starts (agents, the doctor's probes, setup
+commands, builds), but any other program you start from that shell inherits it.
 
 When these commands fail, their JSON names the cause in `reason`. A failure while building prints only
 `{"outcome":"error","reason":"<code>"}`; a failed Linear read during the tick prints `"outcome":"linear_error"`.
@@ -233,6 +239,6 @@ When these commands fail, their JSON names the cause in `reason`. A failure whil
 | `linear_credentials_missing` | No `credentials.json`, no variable and no `linear-token` file. |
 | `linear_token_file_mode` | `linear-token` is not a regular file of yours with mode 0600. Fix with `chmod 600`, or recreate it as above. |
 | `linear_token_invalid` | The file or variable does not hold exactly one token: printable ASCII, no spaces, at most 4,096 characters. |
-| `linear_http` | Linear refused the key, for example with a 401: it was revoked or mistyped. Create a new key. |
+| `linear_http` | Linear refused the request (for example HTTP 400 or 401). Wingmate sends a personal key bare (`Authorization: <key>`, no `Bearer`), as Linear requires. So the key was revoked, mistyped, or is not a personal API key. Create a new key and store it again. |
 
 After the OAuth app is installed, delete `~/.config/wingmate/linear-token` and revoke the personal key in Linear.

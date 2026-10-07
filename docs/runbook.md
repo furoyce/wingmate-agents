@@ -233,7 +233,7 @@ first line is just `continue`. The issue then resumes in place.
 | `owner_stop` | `wingmate stop` blocked it. | Re-queue it when you want the work to continue. |
 | `launch_failed` | The coordinator never started: a claim step failed twice, or the brief and one start nudge got no turn. | Look at the coordinator terminal in Orca (a dialog, an error), then re-queue. |
 | `setup_failed` | The repository's `setup` command failed. The comment shows only the exit code. | Fix `setup` in `config/projects.yaml` or in the repository, then re-queue. |
-| `base_mismatch` | The local `origin/<base>` does not name GitHub's base commit. Usually the clone is stale (after a merge on GitHub); otherwise `packed-refs` was rewritten. Nothing ran in the worktree. | Run `git fetch origin` in the repository's main checkout. If the ref still differs, inspect `<common dir>/packed-refs`. Remove a worktree this claim created, then re-queue. |
+| `base_mismatch` | The base did not verify as GitHub's base commit. A new claim checks it in the repository's main checkout before Orca creates the worktree, so nothing was created or run. A re-queue that reuses a worktree checks it there, before anything runs. The comment names both commits and says which case it is: **behind GitHub** (a stale clone, attention `base_mismatch`); **not in the history of GitHub's** base, does not resolve, or a `refs/heads/<commit>` ref exists (possibly rewritten, attention `base_diverged`); or it **cannot be verified** (no such branch on GitHub, no usable main checkout in Orca). | Behind GitHub: run `git fetch origin` in the main checkout, then re-queue. Possibly rewritten: do not fetch first. Section 12 keeps the evidence. Cannot be verified: fix `repos.<name>.base` or the repository's main checkout in Orca, then re-queue. |
 | `kit_tampered` | A kit file changed, the worktree's `.git` file or `commondir` was redirected (`git_dir_tampered`), or a new worktree did not start at the verified commit. | Section 12. Treat it as a possible escape. |
 | `cascade_exhausted` | A handoff was due (the coordinator exited twice, or asked for a handoff) and no untried provider was available. With the Claude-only cascade, every handoff ends here. | Look at the worktree, then re-queue when ready. |
 | `grace_expired_no_cascade` | A stage passed its cap and grace with no activity, and no provider was left to hand off to. | Look at the work, then re-queue. |
@@ -268,7 +268,8 @@ Codes without † clear themselves once the condition passes. Codes marked † s
 | `cap_passed` | A stage ran past its cap (`timers` in config) and got a nudge, or the coordinator idled through two nudges. The grace clock (`graceMin`, default 30) runs, and activity clears the code. If the grace expires with no activity, the issue is handed off or blocked. | Nothing, if the issue is progressing. |
 | `worktree_gone` | The worktree is gone from disk. A parked issue is blocked; a working one counts as exited. | Section 13. |
 | `integrity_unverifiable` | This tick could not run the kit integrity check (git unreadable in the worktree). That is never a block; it is retried every tick. | Run `git -C <worktree> status` if it persists. |
-| `base_mismatch` † | The claim's base check failed and the issue is blocked. | Section 6. |
+| `base_mismatch` † | The claim's base check failed and the issue is blocked: a clone behind GitHub, or a base that could not be verified. | Section 6. |
+| `base_diverged` † | The claim's base check found a local base ref outside GitHub's history, one that names no commit, a `refs/heads/<commit>` ref that Orca would take for the base, or a `commondir` file in the main checkout's `.git`. The issue is blocked `base_mismatch`. | Possible tampering: section 12, before any fetch. |
 | `blocked_unposted` | The issue is blocked on disk, but the `Blocked` label and comment are not posted yet (Linear was unreachable). The next tick posts them. | Nothing, unless Linear stays down (section 11). |
 | `release_unverifiable(…)` † | A release, block, handoff or stop could not prove everything stopped. `terminals`: the bulk terminal close failed; a failed release is retried, and its code clears once a retry closes them. `run`: the Run's workers could not be listed. Dispatch ids: workers fenced with `worker-abandon` without proof they exited. | Check those terminals or workers in Orca and stop them by hand. |
 | `tick_error` (summary only) | Processing this issue threw an unexpected error. It is retried next tick, and the ledger records the code. | If it repeats, read `logs/wingmate.log` and `ledger/<ID>.jsonl`. |
@@ -421,6 +422,20 @@ worktree's `.git` file, or its gitdir's `commondir`, no longer names the recorde
    - run `git -C <worktree> status`, and compare `.wingmate/` with `<state>/kit/<ID>/`.
 3. Remove the worktree in Orca: Wingmate removes worktrees only after Done. Then re-queue the issue (section 6).
 
+**`base_diverged`: a base ref outside GitHub's history.** The issue is blocked `base_mismatch`. Its local
+`origin/<base>` names a commit outside GitHub's history, or no commit, or a ref `refs/heads/<commit>` stands in for
+GitHub's commit. No worktree was created, and nothing ran in a reused one. An agent's sandbox may have rewritten
+`packed-refs`, so keep the evidence before anything fetches over it:
+
+1. Copy `<common dir>/packed-refs` aside. The blocked comment's next step names the file.
+2. Check ancestry before any fetch. `grep '"base_mismatch"' <state>/ledger/<ID>.jsonl` gives both commits in full
+   (`local`, `remote`, `verdict`). Then run `git -C <main checkout> merge-base --is-ancestor <local> <remote>`: exit 0
+   means the clone is only behind GitHub; 1 or an error means the ref left GitHub's history. If the ref does not exist
+   at all (no `show-ref` line, no `packed-refs` line for it), it is only missing: fetch and re-queue.
+3. Run `wingmate stop --all` and follow the rotation steps in [linear-app-setup.md](linear-app-setup.md).
+4. Only then run `git -C <main checkout> fetch origin`. Delete a ref the detail names that git never makes:
+   `git -C <main checkout> update-ref -d refs/heads/<commit>`. Then re-queue (section 6).
+
 **A journal entry is poisoned.** `doctor` reports `journal_clean: poisoned: <ID>/<kind>`, and a publish also shows
 `journal_poisoned`. A poisoned entry is never replayed.
 
@@ -545,6 +560,11 @@ These are the D14 residuals: places where the agent trust boundary is weaker tha
 - **PRs are not opened while paused.** A `finish` waits for a tick that may resume work.
 - **Setup runs only in worktrees the claim created.** The repository's `setup` command never runs in a reused worktree
   (a re-queue or a replay).
+- **Orca resolves the base a moment after the check.** A claim verifies GitHub's commit in the main checkout and gives
+  Orca that commit. A `refs/heads/<commit>` ref that already exists blocks the claim. But Orca looks that ref up before
+  the commit itself, and an agent's sandbox can write `packed-refs`. A ref planted between the check and the create would
+  be checked out as you, outside the sandbox. A hook under a relative `core.hooksPath` (husky) could run then, before the
+  start check blocks the issue `kit_tampered`.
 
 The rest are slice-1 gaps:
 
@@ -558,7 +578,10 @@ The rest are slice-1 gaps:
 - **Deny rules are prefix matches.** An agent can get around them with `sh -c` or absolute paths. The sandbox is the
   hard layer.
 - **A stale clone blocks claims.** After you merge a Wingmate PR on GitHub, the next claim in that repository blocks
-  `base_mismatch` until `git fetch origin` runs in its main checkout.
+  `base_mismatch` until `git fetch origin` runs in its main checkout. Fetch only when the comment says "behind GitHub"
+  (the local commit is an ancestor of GitHub's). Anything else goes to section 12 first: a fetch overwrites the evidence.
+- **The main checkout must be a plain clone.** A new claim checks its base in the repository's main checkout. If that
+  checkout's `.git` is a gitfile or a symlink, every new claim there blocks `base_mismatch` (cannot be verified).
 - **The commit author fields are not secret-scanned.** The author, committer and extra commit headers are a small
   unscanned channel.
 
