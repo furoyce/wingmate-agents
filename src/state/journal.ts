@@ -116,6 +116,13 @@ export class Journal {
     e.confirmedAt = iso(this.clock.now());
     await this.save(e);
   }
+  /** A step's receipt recorded before the step is done (REL-2: what a replay must know about an action that may have taken effect). */
+  async stepReceipt(id: string, name: string, receipt: unknown) {
+    const e = await this.get(id);
+    const s = e.steps.find((x) => x.name === name);
+    if (s && s.state === "pending") s.receipt = receipt;
+    await this.save(e);
+  }
   async stepDone(id: string, name: string, receipt: unknown) {
     const e = await this.get(id);
     const s = e.steps.find((x) => x.name === name);

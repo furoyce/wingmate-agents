@@ -170,6 +170,82 @@ describe("claimIssue (§5.4)", () => {
     expect((await w.ctx.journal.all()).find((e) => e.kind === "claim")?.state).toBe("abandoned");
   });
 
+  test("REL-2: the setup's timeout ends 30 s before the tick's deadline; cut off there it is retried by the replay, never blocked setup_failed", async () => {
+    const w = await makeWorld();
+    const repo = bouncr(w).repos.api;
+    if (!repo) throw new Error("api repo missing");
+    repo.setup = ["sh", "-c", "sleep 20"];
+    addLabeledByOwner(w.linear, todo("i1", "JRF-501"));
+    const at = Date.now() + 35_500; // 5.5 s of setup time before the reserve for the terminal and its first wait
+    const ctx = { ...w.ctx, deadline: { at, now: Date.now } };
+    const started = Date.now();
+    const r = await claimIssue(ctx, {
+      issue: await issueOf(w, "i1"),
+      project: bouncr(w),
+      provider: "claude",
+      repoName: "api",
+      routing: ROUTING,
+    });
+    expect(Date.now() - started).toBeLessThan(15_000); // run() killed the setup's process group at its budget
+    expect(r.stage).toBe("claimed");
+    expect(r.attention).toContain("setup_timed_out");
+    expect(verbs(w)).not.toContain("terminalCreate");
+    const setup = (await w.ctx.ledger.readIssue("JRF-501")).filter((e) => e.type === "setup");
+    expect(setup.map((e) => e.data.timedOut)).toEqual([true]);
+    const [entry] = (await w.ctx.journal.all()).filter((e) => e.kind === "claim");
+    expect(entry).toMatchObject({ state: "intent", attempts: 1 });
+    repo.setup = ["sh", "-c", "exit 0"];
+    if (!entry) throw new Error("entry missing");
+    await provisionAndLaunch(w.ctx, r, await issueOf(w, "i1"), bouncr(w), entry.id, {
+      model: "claude-fable-5-1[1m]",
+      effort: "max",
+    });
+    expect(r.stage).toBe("working");
+    expect(r.attention).not.toContain("setup_timed_out");
+    const ran = (await w.ctx.ledger.readIssue("JRF-501")).filter((e) => e.type === "setup");
+    expect(ran.map((e) => e.data.timedOut)).toEqual([true, false]); // the replay ran the setup again: a worktree this claim created
+  }, 30_000);
+
+  test("REL-2: a crash between worktree create and its journal step — the replay knows this claim created it: the start check reads its HEAD and the setup runs", async () => {
+    const w = await makeWorld();
+    const repo = bouncr(w).repos.api;
+    if (!repo) throw new Error("api repo missing");
+    repo.setup = ["sh", "-c", "touch .setup-ran"];
+    w.orca.failNext = "worktreeShow";
+    await expect(claim(w)).rejects.toThrow(/fake orca failure/);
+    const r = await readRecord(w.dirs, "JRF-501");
+    const [entry] = (await w.ctx.journal.all()).filter((e) => e.kind === "claim");
+    if (!r || !entry) throw new Error("record or entry missing");
+    await provisionAndLaunch(w.ctx, r, await issueOf(w, "i1"), bouncr(w), entry.id, {
+      model: "claude-fable-5-1[1m]",
+      effort: "max",
+    });
+    expect(r.stage).toBe("working");
+    expect(existsSync(join(r.worktree?.path ?? "", ".setup-ran"))).toBe(true);
+    const types = (await w.ctx.ledger.readIssue("JRF-501")).map((e) => e.type);
+    expect(types).toContain("setup");
+    expect(types).not.toContain("setup_skipped");
+    const done = (await w.ctx.journal.get(entry.id)).steps.find((s) => s.name === "worktree");
+    expect(done).toMatchObject({ state: "done", receipt: { reused: false } });
+  });
+
+  test("REL-2: …and a created worktree that did not start at the verified commit is refused on that replay too (kit_tampered), never adopted as reused", async () => {
+    const w = await makeWorld();
+    w.orca.startCommit = "planted0000"; // a ref an agent planted stood in for the base when Orca checked it out
+    w.orca.failNext = "worktreeShow";
+    await expect(claim(w)).rejects.toThrow(/fake orca failure/);
+    const r = await readRecord(w.dirs, "JRF-501");
+    const [entry] = (await w.ctx.journal.all()).filter((e) => e.kind === "claim");
+    if (!r || !entry) throw new Error("record or entry missing");
+    await provisionAndLaunch(w.ctx, r, await issueOf(w, "i1"), bouncr(w), entry.id, {
+      model: "claude-fable-5-1[1m]",
+      effort: "max",
+    });
+    expect(r.stage).toBe("blocked");
+    expect(r.history.at(-1)?.cause).toBe("kit_tampered");
+    expect(verbs(w)).not.toContain("terminalCreate");
+  });
+
   test("R6: the folder-trust dialog is answered with Down then Enter, and the brief is sent only after that", async () => {
     const w = await makeWorld();
     w.orca.nextWaitSatisfied = false;

@@ -238,7 +238,7 @@ first line is just `continue`. The issue then resumes in place.
 |---|---|---|
 | `owner_stop` | `wingmate stop` blocked it. | Re-queue it when you want the work to continue. |
 | `launch_failed` | The coordinator never started: a claim step failed twice (a launch attempt cut off by the tick's deadline counts), or the brief and one start nudge got no turn. | Look at the coordinator terminal in Orca (a dialog, an error), then re-queue. |
-| `setup_failed` | The repository's `setup` command failed. The comment shows only the exit code. | Fix `setup` in `config/projects.yaml` or in the repository, then re-queue. |
+| `setup_failed` | The repository's `setup` command failed. The comment shows only the exit code. A setup cut off by the tick's time is not a failure: it is retried once (attention `setup_timed_out`). | Fix `setup` in `config/projects.yaml` or in the repository, then re-queue. |
 | `base_mismatch` | The base did not verify as GitHub's base commit. A new claim checks it in the repository's main checkout before Orca creates the worktree, so nothing was created or run. A re-queue that reuses a worktree checks it there, before anything runs. The comment names both commits and says which case it is: **behind GitHub** (a stale clone, attention `base_mismatch`); **not in the history of GitHub's** base, does not resolve, or a ref named after that commit or a replace ref (`refs/replace/…`) exists (possibly rewritten, attention `base_diverged`); or it **cannot be verified** (no such branch on GitHub, no usable main checkout in Orca). | Behind GitHub: run `git fetch origin` in the main checkout, then re-queue. Possibly rewritten: do not fetch first. Section 12 keeps the evidence. Cannot be verified: fix `repos.<name>.base` or the repository's main checkout in Orca, then re-queue. |
 | `kit_tampered` | A kit file changed, the worktree's `.git` file or `commondir` was redirected (`git_dir_tampered`), or a new worktree did not start at the verified commit (its HEAD read with Wingmate's own git), its HEAD or the replace refs could not be read, or a replace ref appeared while Orca created it. | Section 12. Treat it as a possible escape. |
 | `cascade_exhausted` | A handoff was due (the coordinator exited twice, or asked for a handoff) and no untried provider was available. With the Claude-only cascade, every handoff ends here. | Look at the worktree, then re-queue when ready. |
@@ -268,6 +268,7 @@ Codes without † clear themselves once the condition passes. Codes marked † s
 | `launch_not_ready` | The coordinator's screen did not become ready within the launch waits: 120 s, then up to 180 s more (120 s more after answering the folder-trust dialog), never past the tick's deadline. The next tick waits again; a second launch attempt that does not start the coordinator blocks `launch_failed`, even when the precheck was cut off during that wait. | Look at the terminal in Orca (section 13, trust dialog). |
 | `launch_unconfirmed` | The brief was accepted, but no turn started. Later ticks accept the agent's own `stage.json` as proof; otherwise they send one start nudge, then block `launch_failed`. | Look at the terminal if it persists. |
 | `relaunch_failed` | Starting a successor session failed in Orca. The relaunch still counts. | Check Orca. A further exit leads to a handoff or a block. |
+| `setup_timed_out` | The repository's `setup` command did not finish before its timeout, which ends 30 s before the tick's deadline. It was stopped, and the next tick runs it again once; a second cut-off blocks `launch_failed`. | Warm the repository's package store in its main checkout, or raise `defaults.dispatcher.precheckTimeoutSec` (section 16). |
 | `launch_argv_missing` † | The record has no launch argv to relaunch from. | Re-queue the issue. |
 | `model_unresolved` † | The tier-best model could not be resolved (the provider CLI's default model). The replay or reroute waits. | Set `model` in `~/.claude/settings.json`; `doctor` checks this under `providers`. |
 | `liveness_unverifiable` | Orca could not tell whether the coordinator is alive. Nothing is done about it while this lasts. | Check Orca (`doctor --quick`, `orca_reachable`). |
@@ -588,8 +589,12 @@ These are the D14 residuals: places where the agent trust boundary is weaker tha
 - **Your git hooks do not run on the dispatcher's push.** For example, Git LFS `pre-push` does not run, so LFS objects
   are not uploaded. Push them yourself, or keep LFS files out of agent work.
 - **PRs are not opened while paused.** A `finish` waits for a tick that may resume work.
-- **Setup runs only in worktrees the claim created.** The repository's `setup` command never runs in a reused worktree
-  (a re-queue or a replay).
+- **Setup runs only in worktrees the claim created, and within one tick.** The repository's `setup` command never runs
+  in a reused worktree (a re-queue). A replay of the claim that created the worktree runs it, even after a crash right
+  after the create. Its timeout ends 30 s before the tick's deadline, so it gets about one to two minutes. A setup cut
+  off there twice blocks the issue `launch_failed` (attention `setup_timed_out`). Before the pilot, warm each
+  repository's package store (for pnpm, run `pnpm install` once in its main checkout), or raise
+  `defaults.dispatcher.precheckTimeoutSec`.
 - **Orca checks out the base a moment after the check (spec D14).** Before Orca creates a worktree, the claim verifies
   GitHub's commit in the main checkout and refuses any ref named after that commit (in any namespace) and any replace
   ref there. `install` sets `core.useReplaceRefs=false` in each pilot repository, so replace refs, packed or loose,

@@ -25,13 +25,13 @@ import {
   newRecord,
   readArchived,
 } from "../state/records";
-import type { Ctx } from "./context";
+import { type Ctx, remainingMs } from "./context";
 import { allowDepsGranted } from "./grants";
-import { isTickAbort } from "./guard";
+import { TickAbort, isTickAbort } from "./guard";
 import { kitNonce, prepareLaunch } from "./launch";
 import { LinearWrites } from "./linearWrites";
 import { block } from "./release";
-import { assertWaitBudget, waitForTui } from "./resume";
+import { MIN_WAIT_MS, assertWaitBudget, waitForTui } from "./resume";
 import { saveRecord, trackRecord } from "./save";
 import { addAttention, dropAttention, ensureAttempt, transition } from "./states";
 import { syncStatus } from "./status";
@@ -399,6 +399,18 @@ async function startRefusal(
 }
 
 /**
+ * REL-2: the `worktree` step's receipt written before Orca's create — this claim is about to create the issue worktree from the verified
+ * commit — so a replay after a create whose own step never finished (a crash, a timeout that took effect, the precheck killed) still
+ * knows the worktree is its own: the start check runs and so does the setup (C27), never the `reused` path.
+ */
+const Creating = z.object({ created: z.literal(true), sha: z.string().min(1) });
+async function creatingReceipt(ctx: Ctx, entryId: string): Promise<string | null> {
+  const step = (await ctx.journal.get(entryId)).steps.find((s) => s.name === "worktree");
+  const p = Creating.safeParse(step?.state === "pending" ? step.receipt : null);
+  return p.success ? p.data.sha : null;
+}
+
+/**
  * §5.4 step 3: the issue worktree — the one already linked to the issue when it exists (a previous cycle, or a crash after
  * `worktree create`), else a new one. F1/F2 (C30): a new one only once its base is verified in the repository's main checkout, with
  * no ref there standing in for that commit (R30: none named after it; F7: no replace ref either), and created from that commit; a ref
@@ -421,7 +433,9 @@ async function provisionWorktree(
   const existing = fleet.worktrees.find(
     (x) => x.linkedLinearIssue === r.identifier && x.displayName === name && x.repoId === repo.orcaRepo,
   );
-  let verified: string | null = null;
+  // REL-2: a worktree this claim's own create made (its receipt says so) is a created one on replay too, from the commit it verified
+  let verified: string | null = existing ? await creatingReceipt(ctx, entryId) : null;
+  const reused = !!existing && verified === null;
   let created: { id: string; path: string };
   if (existing) created = { id: existing.worktreeId, path: existing.path };
   else {
@@ -434,6 +448,7 @@ async function provisionWorktree(
       return false;
     }
     verified = pre.check.sha;
+    await ctx.journal.stepReceipt(entryId, "worktree", { created: true, sha: verified });
     // F1/F2: from the verified commit itself, never the configured base's name (§5.4 step 3, amended)
     created = await ctx.orca.worktreeCreate({
       repoId: repo.orcaRepo,
@@ -446,7 +461,7 @@ async function provisionWorktree(
   const shown = await ctx.orca.worktreeShow(created.id);
   let t: GitTarget;
   try {
-    const recorded = existing ? await recordedGitDirs(ctx, r.identifier, created.id) : null;
+    const recorded = reused ? await recordedGitDirs(ctx, r.identifier, created.id) : null;
     t = await discoverGitLinks(shown.path, recorded);
   } catch (e) {
     if (errorCode(e) !== "git_dir_tampered") throw e;
@@ -473,7 +488,7 @@ async function provisionWorktree(
     await baseMismatch(ctx, r, issue, entryId, repo, check, { commonDir: t.commonDir, reused: true });
     return false;
   }
-  const refused = existing ? null : await startRefusal(ctx, r, repo, t, check.sha);
+  const refused = reused ? null : await startRefusal(ctx, r, repo, t, check.sha);
   if (refused) {
     await block(ctx, r, issue, "kit_tampered", refused.detail, refused.next);
     return false;
@@ -481,13 +496,25 @@ async function provisionWorktree(
   await ctx.journal.stepDone(entryId, "worktree", {
     id: created.id,
     branch: shown.branch,
-    reused: !!existing,
+    reused,
   });
   await saveRecord(ctx, r);
   return true;
 }
 
 const WorktreeStep = z.object({ reused: z.boolean() });
+/** §5.4 step 4's cap on the repo setup. */
+const SETUP_CAP_MS = 10 * 60_000;
+/** REL-2: what a setup leaves of the tick for the coordinator's terminal and its first launch wait. */
+const SETUP_RESERVE_MS = 30_000;
+/**
+ * REL-2 (§4.3): the setup's timeout — its 10-minute cap, ending SETUP_RESERVE_MS before the tick's deadline (run() kills the setup's
+ * process group at it, so nothing outlives the tick); null when that leaves no useful time.
+ */
+function setupTimeoutMs(ctx: Ctx): number | null {
+  const ms = Math.min(SETUP_CAP_MS, remainingMs(ctx) - SETUP_RESERVE_MS);
+  return ms < MIN_WAIT_MS ? null : Math.floor(ms);
+}
 /**
  * C27 (§5.4 step 4, amended): the repo setup runs outside the sandbox, so only in a worktree this claim created — never in one it
  * reused (an earlier cycle's agent may have left a hook or a package script there) and never in a reroute's. The `worktree` step's
@@ -562,13 +589,23 @@ async function installAndSetup(
       data: { reason: skip },
     });
   else if (repo.setup !== "none") {
-    const s = await run(repo.setup, { cwd: wt.path, timeoutMs: 10 * 60_000, env: agentEnv(kitDir) });
+    const timeoutMs = setupTimeoutMs(ctx);
+    if (timeoutMs === null) throw new TickAbort("error", "tick_deadline"); // no time for it in this tick: the next tick replays it
+    const s = await run(repo.setup, { cwd: wt.path, timeoutMs, env: agentEnv(kitDir) });
     await ctx.ledger.append({
       at: ctx.now(),
       issue: r.identifier,
       type: "setup",
-      data: { code: s.code, timedOut: s.timedOut },
+      data: { code: s.code, timedOut: s.timedOut, timeoutMs },
     });
+    if (s.timedOut && timeoutMs < SETUP_CAP_MS) {
+      // REL-2: cut off by the tick's budget, not failed: the claim step fails (journaled) and the next tick replays it once
+      addAttention(r, "setup_timed_out");
+      await saveRecord(ctx, r);
+      await ctx.journal.failed(entryId, "setup_timed_out");
+      return false;
+    }
+    dropAttention(r, "setup_timed_out");
     if (s.code !== 0) {
       // the command's output can carry secrets: the blocked comment names only the exit code
       await block(

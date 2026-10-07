@@ -366,7 +366,9 @@ matters. Every skip reason is recorded in `queue.json` with the next evaluation 
    files (§13.3(e)); take the integrity-set hashes (§6.3 step 6); run `repos.<name>.setup` synchronously with a
    10-minute timeout (journaled; failure → `blocked`, `setup_failed`) — only for a worktree this claim created (the
    setup runs outside the sandbox, so a reused or rerouted worktree that an earlier agent modified is never set up
-   by the dispatcher; amended 2026-10-06).
+   by the dispatcher; amended 2026-10-06). The timeout also ends 30 s before the tick's deadline (§4.3): a setup cut off
+   there is a failed claim step, replayed once, not `setup_failed`; and the claim journals that it is about to create
+   the worktree before Orca's create, so a replay after a crash still treats it as created (amended 2026-10-07).
 5. Launch per §4.4: `terminal create … --command "exec <argv>"` → handle and pane key; `terminal wait --terminal
    <handle> --for tui-idle` with the `satisfied` rule; `terminal send --terminal <handle> …`. `turn_started` →
    stage `working`; record `terminalHandle`, `paneKey`, `sessionId` (Claude: the uuid passed as `--session-id`;
