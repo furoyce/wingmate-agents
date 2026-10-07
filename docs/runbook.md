@@ -275,12 +275,12 @@ Codes without † clear themselves once the condition passes. Codes marked † s
 | `release_unverifiable(…)` † | A release, block, handoff or stop could not prove everything stopped. `terminals`: the bulk terminal close failed; a failed release is retried, and its code clears once a retry closes them. `run`: the Run's workers could not be listed. Dispatch ids: workers fenced with `worker-abandon` without proof they exited. | Check those terminals or workers in Orca and stop them by hand. |
 | `tick_error` (summary only) | Processing this issue threw an unexpected error. It is retried next tick, and the ledger records the code. | If it repeats, read `logs/wingmate.log` and `ledger/<ID>.jsonl`. |
 
-**`quota_stale`** is per provider, not per issue: Orca's quota snapshot for a coordinator provider is older than
-`quota.maxSnapshotAgeMin` (360 min). The provider still counts as available (§9.1), so claims go on. Every tick summary
-and heartbeat carry it as `quota: { <provider>: { attention: ["quota_stale"], ageMin } }` (`{}` when every snapshot is
-fresh), and `status` prints `Quota: <provider> quota_stale (snapshot <n> min old)`. Orca refreshes the snapshot on its
-own schedule (`orca account list` triggers no refresh), so there is nothing to run; meanwhile the 80% and 90% claim caps
-rest on that old reading.
+**`quota_stale`** is per provider, not per issue: Orca's quota snapshot for a provider Wingmate can start (to
+coordinate, review or work) is older than `quota.maxSnapshotAgeMin` (360 min). It still counts as available (§9.1).
+Every tick summary and heartbeat carry it as `quota: { <provider>: { attention: ["quota_stale"], ageMin } }` (`{}`
+when every snapshot is fresh), and `status` prints `Quota: <provider> quota_stale (snapshot <n> min old)`. Orca
+refreshes the snapshot on its own schedule (`orca account list` triggers no refresh), so there is nothing to run;
+meanwhile the 80% and 90% caps rest on that old reading.
 
 ## 8. Attention codes: input, outbox, publish, cleanup
 

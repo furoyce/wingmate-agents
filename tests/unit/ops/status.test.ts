@@ -85,6 +85,23 @@ describe("status — Task 13 F10: quota_stale per provider (§9.1, Review Focus 
     expect(await readHeartbeat(w.dirs)).toMatchObject({ kind: "scan", quota: STALE });
   });
 
+  test("a provider that only reviews or works (spawn's choice, in the agent's sandbox, which writes no tick state) is recorded too: Codex under verifyCross with a Claude-only cascade", async () => {
+    const w = await world();
+    w.cfg.defaults.providers.coordinatorCascade = ["claude"]; // the pilot's providers (config/projects.yaml)
+    w.cfg.defaults.providers.workers = ["claude"];
+    w.cfg.defaults.providers.verifyCross = true;
+    const nowMs = Date.parse(w.ctx.now());
+    const { claude, codex } = w.orca.rateLimits;
+    if (!claude || !codex) throw new Error("rate limits missing");
+    claude.updatedAt = nowMs - 60_000;
+    codex.updatedAt = nowMs - 8 * 3_600_000;
+    const s = await runTick(w);
+    expect(s.quota).toEqual({ codex: { attention: ["quota_stale"], ageMin: 480 } });
+    w.cfg.defaults.providers.verifyCross = false; // Codex can no longer start at all: not recorded
+    w.clock.advance(5 * 60_000);
+    expect((await runTick(w)).quota).toEqual({});
+  });
+
   test("fresh snapshots record nothing: an empty quota object and no Quota line; a heartbeat written before F10 still parses", async () => {
     const w = await world();
     const nowMs = Date.parse(w.ctx.now());

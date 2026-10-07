@@ -2,7 +2,7 @@
 // queue + heartbeat. Bounded per §4.3; the summary carries identifiers, enumerated codes and counts only.
 import { join } from "node:path";
 import { OrcaError } from "../orca/cli";
-import { type QuotaNotices, quotaAttention } from "../policy/quota";
+import { type QuotaNotices, launchableProviders, quotaAttention } from "../policy/quota";
 import { errorCode, errorText } from "../shared/errors";
 import { writeAtomic } from "../state/fs";
 import { type Heartbeat, readLastTick, stopRequested, writeHeartbeat } from "../state/heartbeat";
@@ -31,7 +31,7 @@ export interface TickSummary {
   finished: string[];
   skipped: { identifier: string; reason: string }[];
   attention: { identifier: string; code: string }[];
-  /** F10 (§9.1): availability()'s advisory codes per coordinator provider (`quota_stale`) with the snapshot's age; `{}` when none. */
+  /** F10 (§9.1): availability()'s advisory codes per provider the config can start (`quota_stale`) with the snapshot's age; `{}` when none. */
   quota: QuotaNotices;
   counts: Record<string, number>;
   durationMs: number;
@@ -159,7 +159,7 @@ export async function tick(base: Ctx, opts: TickOptions): Promise<TickSummary> {
     // F10 (§9.1, Review Focus 3): a stale snapshot stays available, and the tick records it per provider for status and the run history
     s.quota = quotaAttention(
       rec.rateLimits,
-      ctx.cfg.defaults.providers.coordinatorCascade,
+      launchableProviders(ctx.cfg.defaults.providers),
       ctx.cfg.defaults.quota,
       Date.parse(ctx.now()),
     );

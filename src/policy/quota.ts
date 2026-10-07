@@ -30,8 +30,24 @@ export function availability(rl: RateLimits, provider: string, q: QuotaCaps, now
 }
 
 /**
- * F10 (§9.1, Review Focus 3): what the tick records — availability()'s codes for each provider it may start a coordinator with, beside
- * the snapshot's age (§9.1's `quota_stale(<provider>, <ageMin>)`). An unavailable provider carries no code: its skip reason says why.
+ * F10: every provider the config can start — coordinators (claims, handoffs), workers, and with `verifyCross` both review providers.
+ * Workers and reviewers are chosen by `spawn`, which runs in the agent's sandbox and writes no tick state, so the tick records them.
+ */
+export const launchableProviders = (p: {
+  coordinatorCascade: readonly QuotaProvider[];
+  workers: readonly QuotaProvider[];
+  verifyCross: boolean;
+}): QuotaProvider[] => [
+  ...new Set<QuotaProvider>([
+    ...p.coordinatorCascade,
+    ...p.workers,
+    ...(p.verifyCross ? (["claude", "codex"] as const) : []),
+  ]),
+];
+
+/**
+ * F10 (§9.1, Review Focus 3): what the tick records — availability()'s codes for each provider it may start, beside the snapshot's
+ * age (§9.1's `quota_stale(<provider>, <ageMin>)`). An unavailable provider carries no code: its skip reason says why.
  */
 export function quotaAttention(
   rl: RateLimits,
