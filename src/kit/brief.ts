@@ -1,4 +1,5 @@
 // src/kit/brief.ts — BRIEF.md (Appendix C) and the one-line pointer brief typed into the coordinator terminal (§4.4).
+import { CLI_DEFAULT } from "../policy/providers";
 import { fence } from "../shared/fence";
 
 export interface BriefTicket {
@@ -16,7 +17,8 @@ export interface BriefInput {
   branch: string;
   baseSha: string;
   provider: string;
-  launch: { model: string; effort: string };
+  /** R31: `model` null is the Claude CLI's own default, shown as `CLI default`. */
+  launch: { model: string | null; effort: string };
   autonomy: string;
   routing: { basis: string; candidates: string[] };
   conventions: string[];
@@ -41,7 +43,7 @@ export function renderBrief(b: BriefInput): string {
 
 ## Identity and scope
 - Project \`${b.project}\`, repo \`${b.repo}\`, worktree \`${b.worktreePath}\`, branch \`${b.branch}\` (never rename), base SHA \`${b.baseSha}\`.
-- Role: coordinator, tier best (${b.provider} · ${b.launch.model} · effort ${b.launch.effort}); verifiers/reviewers also use tier best via \`spawn\` (\`.wingmate/launch.json\`).
+- Role: coordinator, tier best (${b.provider} · ${b.launch.model ?? CLI_DEFAULT} · effort ${b.launch.effort}); verifiers/reviewers also use tier best via \`spawn\` (\`.wingmate/launch.json\`).
 - Autonomy: \`${b.autonomy}\`. ${routing}
 - Repository conventions to follow: ${b.conventions.length ? b.conventions.join(", ") : "none beyond CLAUDE.md/AGENTS.md"}.
 - Pinned gate commands (run by \`wingmate issue ${b.identifier} gate validate\`): ${b.gates.map((g) => `\`${g.join(" ")}\``).join(", ")}.

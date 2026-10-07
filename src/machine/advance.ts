@@ -214,10 +214,10 @@ async function replayClaim(a: Advance): Promise<StepOut> {
     return "stop";
   }
   const l = r.coordinator.launch;
-  const tier =
-    l.model && l.effort
-      ? { model: l.model, effort: l.effort }
-      : await resolveTier(r.provider, { home: ctx.home });
+  // the tier the claim resolved (R31: a null model is the CLI's own default, resolved all the same); re-resolved only if none was
+  const tier = l.effort
+    ? { model: l.model, effort: l.effort }
+    : await resolveTier(r.provider, { home: ctx.home });
   if (!tier) {
     addAttention(r, "model_unresolved");
     return "stop";

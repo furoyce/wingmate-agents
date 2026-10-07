@@ -36,13 +36,14 @@ export interface InstallInput {
   project: ProjectConfig;
   issue: BriefTicket & { identifier: string; url: string };
   nonce: string;
-  launch: { model: string; effort: string };
+  /** The coordinator's tier; R31: `model` null is the Claude CLI's own default (no `--model`). */
+  launch: { model: string | null; effort: string };
   /**
    * Tier `best` per review provider, resolved at claim (`resolveTier`, §9.2); `null` = `model_unresolved`. Written to
    * `launch.json` so `spawn` can pass `--model/--effort` to a cross-provider reviewer (§8.1); the coordinator's own provider
    * always takes `launch`.
    */
-  tiers?: Partial<Record<"claude" | "codex", { model: string; effort: string } | null>>;
+  tiers?: Partial<Record<"claude" | "codex", { model: string | null; effort: string } | null>>;
   toolchainPaths: string[];
   /** C28 (§13.3 e): the allow-deps grant as it stands at claim — `launch.json` `allowDeps`, which the agent-side `gate security` reads. */
   allowDeps?: boolean;

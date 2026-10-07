@@ -22,7 +22,7 @@ import {
   userClaudeCredentialEnv,
 } from "../kit/settings";
 import type { Ctx } from "../machine/context";
-import { resolveTier } from "../policy/providers";
+import { CLI_DEFAULT, resolveTier } from "../policy/providers";
 import type { GitTarget } from "../ports";
 import { errorCode } from "../shared/errors";
 import { type RunOptions, type RunResult, run } from "../shared/exec";
@@ -471,7 +471,12 @@ export interface ClaudeProbeDeps {
 /** §13.3(b) from a real `wm-` worktree under the owner's home, with the issue kit's settings and environment. */
 export async function claudeProbe(ctx: Ctx, d: ClaudeProbeDeps): Promise<ClaudeProbeResult> {
   const tier = await resolveTier("claude", { home: ctx.home });
-  if (!tier) return { ok: false, detail: "no Claude default model to probe with", orcaReachable: null };
+  if (!tier)
+    return {
+      ok: false,
+      detail: "no Claude model to probe with: ~/.claude/settings.json does not parse",
+      orcaReachable: null,
+    };
   const self = await ctx.orca.worktreeCurrent(d.cwd);
   const name = `wm-doctor-${newUlid().toLowerCase()}`;
   const kitDir = join(ctx.dirs.kit, name);
@@ -575,8 +580,7 @@ export async function claudeProbe(ctx: Ctx, d: ClaudeProbeDeps): Promise<ClaudeP
         settingsFile,
         "--permission-mode",
         "bypassPermissions",
-        "--model",
-        tier.model,
+        ...(tier.model ? ["--model", tier.model] : []), // R31: none → the CLI's own default, as the coordinator runs
         "--strict-mcp-config",
         "--no-session-persistence",
         "-p",
@@ -626,7 +630,7 @@ export async function claudeProbe(ctx: Ctx, d: ClaudeProbeDeps): Promise<ClaudeP
     return {
       ok,
       detail: ok
-        ? `${probes.filter((p) => p.expect === "fail").length} blocked, ${probes.filter((p) => p.expect === "succeed").length} allowed as required (${tier.model})${note ? `; ${note}` : ""}`
+        ? `${probes.filter((p) => p.expect === "fail").length} blocked, ${probes.filter((p) => p.expect === "succeed").length} allowed as required (${tier.model ?? `${CLI_DEFAULT} model`})${note ? `; ${note}` : ""}`
         : [...failures, ...notes, ...(note ? [note] : [])].join("; ").slice(0, 900),
       orcaReachable,
     };

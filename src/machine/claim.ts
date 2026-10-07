@@ -11,7 +11,7 @@ import { installKit } from "../kit/install";
 import { staleIntents } from "../kit/intents";
 import { agentEnv, coordinatorArgv, launchCommand, userClaudeCredentialEnv } from "../kit/settings";
 import { MARK } from "../linear/markers";
-import { resolveTier } from "../policy/providers";
+import { type Tier, resolveTier } from "../policy/providers";
 import { capMinFor } from "../policy/timers";
 import type { FleetSnapshot, GitPort, GitTarget, LinearIssue } from "../ports";
 import { WingmateError, errorCode, errorText } from "../shared/errors";
@@ -45,7 +45,6 @@ export interface ClaimInput {
   cycle?: number;
   existingStatusCommentId?: string | null;
 }
-export type Tier = { model: string; effort: string };
 
 export const CLAIM_STEPS = ["linear", "worktree", "kit", "launch", "orcaMeta"];
 const EPOCH = "1970-01-01T00:00:00.000Z";

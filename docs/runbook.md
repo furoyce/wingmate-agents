@@ -270,7 +270,7 @@ Codes without † clear themselves once the condition passes. Codes marked † s
 | `relaunch_failed` | Starting a successor session failed in Orca, or so did the look for a coordinator still running in the worktree that comes first. The relaunch still counts. | Check Orca. A further exit leads to a handoff or a block. |
 | `setup_timed_out` | The repository's `setup` command did not finish before its timeout, which ends 30 s before the tick's deadline. It was stopped, and the next tick runs it again once; a second cut-off blocks `launch_failed`. | Warm the repository's package store in its main checkout, or raise `defaults.dispatcher.precheckTimeoutSec` (section 16). |
 | `launch_argv_missing` † | The record has no launch argv to relaunch from. | Re-queue the issue. |
-| `model_unresolved` † | The tier-best model could not be resolved (the provider CLI's default model). The replay or reroute waits. | Set `model` in `~/.claude/settings.json`; `doctor` checks this under `providers`. |
+| `model_unresolved` † | The tier-best model could not be resolved: `~/.claude/settings.json` does not parse, or `~/.codex/config.toml` sets no `model` for a Codex coordinator. A Claude settings file without a `model` is not this: the coordinator then runs on the CLI's own default model (`CLI default` in the status comment and `wingmate status`). The replay or reroute waits. | Fix `~/.claude/settings.json`, or set `model` in `~/.codex/config.toml`; `doctor` checks this under `providers`. |
 | `liveness_unverifiable` | Orca could not tell whether the coordinator is alive. Nothing is done about it while this lasts. | Check Orca (`doctor --quick`, `orca_reachable`). |
 | `coordinator_ambiguous` | Orca no longer lists the coordinator's terminal or pane (after a restart), and more than one terminal of the issue worktree runs a live Claude or Codex agent that is not a reviewer or worker of the issue. Wingmate does not guess: liveness is unverifiable, and nothing is relaunched or created. | Close the terminals in that worktree that are not the coordinator (section 13). |
 | `cap_passed` | A stage ran past its cap (`timers` in config) and got a nudge, or the coordinator idled through two nudges. The grace clock (`graceMin`, default 30) runs, and activity clears the code. If the grace expires with no activity, the issue is handed off or blocked. | Nothing, if the issue is progressing. |
@@ -371,7 +371,7 @@ the pilot projects either `eligible` or one of these reasons. Most reasons carry
 | `live_owner` | A working agent in an Orca worktree linked to the issue, or an active Wingmate record. |
 | `label_by_unlisted_actor` | The Agent label was added by someone not in `workspace.approvers`, or by a bot. |
 | `provider_unavailable`, `quota` | The provider is outside `coordinatorCascade` (`codex` in the pilot), its quota is unreadable, or its quota is over the 80% weekly or 90% session cap. |
-| `model_unresolved` | The provider CLI has no default model. |
+| `model_unresolved` | The provider's tier-best model cannot be resolved: Claude's `~/.claude/settings.json` does not parse, or Codex's `~/.codex/config.toml` sets no `model`. |
 | `cap_worktrees`, `cap_inflight`, `cap_global`, `cap_project`, `cap_provider` | A concurrency cap (§9.5): 8 live `wm-` worktrees, 6 in flight, 3 working (1 per project, 2 per provider). The detail names what holds the slot. |
 
 The tick summary's `skipped` list adds five more reasons that never reach the queue file:
@@ -720,3 +720,7 @@ Notes:
     the pilot;
   - warnings only: `claude_trust`, `heartbeat_fresh`, `journal_clean`, `orca_from_sandbox` and `d14_extension`, plus
     `sandbox_probe` when skipped by `--quick`.
+- `providers` passes with `claude … → CLI default model` when `~/.claude/settings.json` has no top-level `model` (Claude
+  Code keeps per-model settings under `modelSettings`). Coordinators and reviewers then start without `--model`, still
+  at `--effort max`, on whatever model Claude Code defaults to; the sandbox probe runs the same way. To pin a model,
+  set `model` there. A settings file that does not parse fails the check.

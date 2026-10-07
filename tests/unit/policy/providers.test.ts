@@ -23,9 +23,9 @@ describe("providers", () => {
     writeFileSync(join(home, ".codex", "config.toml"), '# comment\nmodel = "gpt-6.1-sol"\n');
     expect(await resolveTier("codex", { home })).toEqual({ model: "gpt-6.1-sol", effort: "xhigh" });
   });
-  test("missing default → null (model_unresolved); tiers.yaml override wins", async () => {
+  test("R31: Claude without a configured model runs on the CLI's own default (model null, effort max); Codex without one is model_unresolved; tiers.yaml override wins", async () => {
     const home = mkdtempSync(join(tmpdir(), "wm-home2-"));
-    expect(await resolveTier("claude", { home })).toBeNull();
+    expect(await resolveTier("claude", { home })).toEqual({ model: null, effort: "max" }); // no settings.json at all
     expect(await resolveTier("codex", { home })).toBeNull();
     expect(
       await resolveTier("claude", { home, override: { best: { claude: { model: "x", effort: "max" } } } }),
@@ -34,11 +34,33 @@ describe("providers", () => {
       effort: "max",
     });
   });
-  test("a settings file without a model string resolves to null", async () => {
+  test("R31: the settings shape Claude Code writes now — per-model settings under modelSettings, no top-level model — is the CLI default; a model that is no non-empty string too", async () => {
     const home = mkdtempSync(join(tmpdir(), "wm-home4-"));
     mkdirSync(join(home, ".claude"));
-    writeFileSync(join(home, ".claude", "settings.json"), JSON.stringify({ model: 42 }));
-    expect(await resolveTier("claude", { home })).toBeNull();
+    const settings = join(home, ".claude", "settings.json");
+    writeFileSync(
+      settings,
+      JSON.stringify({
+        modelSettings: { "claude-fable-5-1": { effort: "high" } },
+        effortLevel: "high",
+        env: {},
+      }),
+    );
+    expect(await resolveTier("claude", { home })).toEqual({ model: null, effort: "max" });
+    for (const model of [42, "", null]) {
+      writeFileSync(settings, JSON.stringify({ model }));
+      expect(await resolveTier("claude", { home })).toEqual({ model: null, effort: "max" });
+    }
+    writeFileSync(settings, JSON.stringify({ model: "claude-fable-5-1[1m]", modelSettings: {} }));
+    expect(await resolveTier("claude", { home })).toEqual({ model: "claude-fable-5-1[1m]", effort: "max" });
+  });
+  test("R31: a settings.json that does not parse (or is no object) says nothing about the model the owner set: model_unresolved", async () => {
+    const home = mkdtempSync(join(tmpdir(), "wm-home5-"));
+    mkdirSync(join(home, ".claude"));
+    for (const text of ["{ not json", "[]", "null", '"x"']) {
+      writeFileSync(join(home, ".claude", "settings.json"), text);
+      expect(await resolveTier("claude", { home })).toBeNull();
+    }
   });
   test("cascade skips tried and unavailable providers", () => {
     expect(nextInCascade(["claude", "codex"], ["claude"], () => true)).toBe("codex");

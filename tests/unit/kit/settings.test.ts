@@ -687,6 +687,39 @@ describe("settings", () => {
       else process.env[TOKEN_ENV] = saved;
     }
   });
+  test("R31: with the Claude CLI's own default model (model null) the coordinator and role argv carry no --model, still --effort max", () => {
+    expect(
+      coordinatorArgv({
+        provider: "claude",
+        model: null,
+        effort: "max",
+        sessionId: "u1",
+        kitDir: input.kitDir,
+      }),
+    ).toEqual([
+      "claude",
+      "--effort",
+      "max",
+      "--session-id",
+      "u1",
+      "--permission-mode",
+      "bypassPermissions",
+      "--settings",
+      "/home/.local/share/wingmate/kit/JRF-404/claude-settings.json",
+      "--strict-mcp-config",
+    ]);
+    const argv = roleArgv({
+      sessionId: "u1",
+      worktreePath: "/wt",
+      provider: "claude",
+      role: "code-reviewer",
+      tier: { model: null, effort: "max" },
+      settingsFile: roleSettingsFile(input.kitDir, "code-reviewer"),
+    });
+    expect(argv.slice(0, 3)).toEqual(["claude", "--effort", "max"]);
+    expect(argv).not.toContain("--model");
+  });
+
   test("F1: roleArgv — Claude runs with its role's kit settings file; tier standard has no --model/--effort; Codex via codexArgv", () => {
     const base = { sessionId: "u1", worktreePath: "/wt" };
     expect(roleSettingsFile(input.kitDir, "code-reviewer")).toBe(

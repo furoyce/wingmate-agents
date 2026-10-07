@@ -222,8 +222,21 @@ describe("doctor — every check", () => {
         "providers",
       )?.ok,
     ).toBe(false);
+    // R31: no top-level model (Claude Code keeps per-model settings under modelSettings) is the CLI's own default: a pass, noted
+    writeFileSync(
+      join(w.root, ".claude", "settings.json"),
+      JSON.stringify({ modelSettings: { "claude-fable-5-1": { effort: "high" } }, effortLevel: "high" }),
+    );
+    w.cfg.defaults.providers.coordinatorCascade = ["claude"];
+    const cliDefault = check(await doctor(w.ctx, opts()), "providers");
+    expect(cliDefault).toMatchObject({ ok: true });
+    expect(cliDefault?.detail).toContain("claude 2.1.291 (Claude Code) → CLI default model");
     rmSync(join(w.root, ".claude", "settings.json"));
-    expect(check(await doctor(w.ctx, opts()), "providers")?.detail).toContain("no default model");
+    expect(check(await doctor(w.ctx, opts()), "providers")).toMatchObject({ ok: true });
+    writeFileSync(join(w.root, ".claude", "settings.json"), "{ not json");
+    const unreadable = check(await doctor(w.ctx, opts()), "providers");
+    expect(unreadable?.ok).toBe(false);
+    expect(unreadable?.detail).toContain("no default model");
   });
 
   test("claude_trust (non-blocking) reads ~/.claude.json for each pilot repo's main checkout and prints no other field", async () => {

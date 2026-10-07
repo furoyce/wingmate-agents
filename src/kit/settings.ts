@@ -523,9 +523,10 @@ export function claudeSettings(i: SettingsInput): object {
   };
 }
 
+/** §4.4 / §13.3(b): the coordinator's argv. R31: a null model (the Claude CLI's own default) puts no `--model` on it; effort stays. */
 export const coordinatorArgv = (a: {
   provider: "claude" | "codex";
-  model: string;
+  model: string | null;
   effort: string;
   sessionId: string;
   kitDir: string;
@@ -534,8 +535,7 @@ export const coordinatorArgv = (a: {
   a.provider === "claude"
     ? [
         "claude",
-        "--model",
-        a.model,
+        ...(a.model ? ["--model", a.model] : []),
         "--effort",
         a.effort,
         "--session-id",
@@ -600,12 +600,13 @@ export const roleSettingsFiles = (kitDir: string): Record<SpawnRole, string> => 
 /**
  * The argv `spawn` launches a role agent with (§8.1 amended 2026-10-06), so the §13.3(b)/(c) controls apply: Claude with the role's
  * dispatcher-written settings file, Codex through `codexArgv` (`--sandbox read-only` for verifier and reviewer roles). `tier` null is
- * tier standard (§9.2, workers): no `--model`/`--effort`, the provider's default.
+ * tier standard (§9.2, workers): no `--model`/`--effort`, the provider's default. R31: a tier whose model is null (the Claude CLI's own
+ * default) gives `--effort` without `--model`.
  */
 export const roleArgv = (a: {
   provider: "claude" | "codex";
   role: SpawnRole;
-  tier: { model: string; effort: string } | null;
+  tier: { model: string | null; effort: string } | null;
   sessionId: string;
   settingsFile: string;
   worktreePath: string;
@@ -613,7 +614,7 @@ export const roleArgv = (a: {
   a.provider === "claude"
     ? [
         "claude",
-        ...(a.tier ? ["--model", a.tier.model, "--effort", a.tier.effort] : []),
+        ...(a.tier ? [...(a.tier.model ? ["--model", a.tier.model] : []), "--effort", a.tier.effort] : []),
         "--session-id",
         a.sessionId,
         "--permission-mode",

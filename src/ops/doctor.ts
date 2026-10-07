@@ -5,7 +5,7 @@ import { readlink, realpath } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 import type { Ctx } from "../machine/context";
-import { resolveTier } from "../policy/providers";
+import { CLI_DEFAULT, resolveTier } from "../policy/providers";
 import { scanText } from "../policy/secrets";
 import type { FleetSnapshot } from "../ports";
 import { errorCode } from "../shared/errors";
@@ -285,9 +285,13 @@ export async function doctor(ctx: Ctx, o: DoctorOptions): Promise<DoctorReport> 
     const p = ctx.cfg.defaults.providers;
     const needCodex = p.coordinatorCascade.includes("codex") || p.workers.includes("codex");
     const ok = !!tiers.claude && !!versions.claude && (!needCodex || (!!tiers.codex && !!versions.codex));
+    // R31: no model in ~/.claude/settings.json is the Claude CLI's own default — a pass, noted; only a file that does not parse fails
+    const claudeModel = tiers.claude
+      ? (tiers.claude.model ?? `${CLI_DEFAULT} model`)
+      : "no default model (~/.claude/settings.json does not parse)";
     return {
       ok,
-      detail: `claude ${versions.claude ?? "missing"} → ${tiers.claude?.model ?? "no default model"}; codex ${versions.codex ?? "missing"} → ${tiers.codex?.model ?? "no default model"}${needCodex ? "" : " (reviewer only)"}`,
+      detail: `claude ${versions.claude ?? "missing"} → ${claudeModel}; codex ${versions.codex ?? "missing"} → ${tiers.codex?.model ?? "no default model"}${needCodex ? "" : " (reviewer only)"}`,
     };
   });
   await attempt("claude_trust", () => claudeTrust(ctx, fleet), false);

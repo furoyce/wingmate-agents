@@ -741,7 +741,7 @@ worktree.
 ### 9.2 Tiers (D10)
 | Tier | Roles | Model (resolved at claim, written to `launch.json`) | Effort |
 |---|---|---|---|
-| `best` | coordinator, plan verifier, code / security / UI reviewers | `config/tiers.yaml` override → the provider CLI's configured default (`~/.claude/settings.json#model`, `~/.codex/config.toml#model`, passed verbatim incl. any `[1m]` suffix) → else the provider is unavailable for tier best (`model_unresolved`; `doctor` fails) | Claude `--effort max`; Codex `-c model_reasoning_effort=<~/.codex/config.toml#model_reasoning_effort or "xhigh">` |
+| `best` | coordinator, plan verifier, code / security / UI reviewers | `config/tiers.yaml` override → the provider CLI's configured default (`~/.claude/settings.json#model`, `~/.codex/config.toml#model`, passed verbatim incl. any `[1m]` suffix) → for Claude without a configured `model` (Claude Code keeps per-model settings under `modelSettings`), the CLI's own default: no `--model` on the argv, recorded as model null and shown as `CLI default` (amended 2026-10-07, R31) → else (Codex without a `model`, or a Claude settings file that does not parse) the provider is unavailable for tier best (`model_unresolved`; `doctor` fails) | Claude `--effort max`; Codex `-c model_reasoning_effort=<~/.codex/config.toml#model_reasoning_effort or "xhigh">` |
 | `standard` | implementation workers, mechanical tasks | provider default (no `--model`); optional cheaper alias per project | provider default |
 Wingmate's configuration stores no model ids; the resolved id is recorded per launch in the record, ledger and
 status comment (from the receipt's `launch.effective` for `worker-start`, from argv for terminal launches).
@@ -1087,7 +1087,8 @@ are advisory; the controls below are enforced in code and verified by `wingmate 
   of the named Dispatch; `security` recomputed and `validate` verified at the pushed HEAD at publish; `nothing_to_publish` from git).
 - **(b) Claude sessions in `wm-` worktrees** run with explicit argv `claude --model <id> --effort max --session-id
   <uuid> --permission-mode bypassPermissions --settings ~/.local/share/wingmate/kit/<identifier>/claude-settings.json
-  --strict-mcp-config`, with the environment `GH_TOKEN=`, `GITHUB_TOKEN=`, `GH_ENTERPRISE_TOKEN=`, `GITHUB_ENTERPRISE_TOKEN=` (all
+  --strict-mcp-config` (without `--model <id>` when tier best is the CLI's own default, §9.2; amended 2026-10-07, R31),
+  with the environment `GH_TOKEN=`, `GITHUB_TOKEN=`, `GH_ENTERPRISE_TOKEN=`, `GITHUB_ENTERPRISE_TOKEN=` (all
   empty), `GH_CONFIG_DIR=<kit>/gh-empty`,
   `GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL=<kit>/gitconfig` (sets `credential.helper=` and
   `core.hooksPath=<kit>/no-hooks`), `GIT_TERMINAL_PROMPT=0`. Claude Code applies the owner's user-level settings

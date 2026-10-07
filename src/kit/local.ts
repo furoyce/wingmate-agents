@@ -35,12 +35,14 @@ export const LocalSchema = z.object({
 });
 export type Local = z.infer<typeof LocalSchema>;
 
-const Tier = z.object({ model: z.string().min(1), effort: z.string().min(1) });
+/** R31: a null model is the Claude CLI's own default (the argv carries no `--model`). */
+const Model = z.string().min(1).nullable();
+const Tier = z.object({ model: Model, effort: z.string().min(1) });
 const Path = z.string().min(1);
 /** `.wingmate/launch.json`, written by `installKit` (integrity-protected) and read by `gate` and `spawn`; every field is required. */
 export const LaunchSchema = z.object({
   provider: z.enum(["claude", "codex"]),
-  model: z.string().min(1),
+  model: Model,
   effort: z.string().min(1),
   kitDir: Path,
   /** The Orca worktree id `spawn` creates role terminals in (`terminal create --worktree id:<worktreeId>`, §8.1). */

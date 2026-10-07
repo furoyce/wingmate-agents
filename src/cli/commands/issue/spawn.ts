@@ -56,7 +56,8 @@ const CurrentWorktree = z.object({ worktree: z.object({ id: z.string().min(1) })
 type Check =
   | Availability
   | { available: false; reason: "model_unresolved" | "launch_unsupported"; detail: string };
-type Tier = { model: string; effort: string };
+/** §9.2 tier `best` from `launch.json`; R31: `model` null is the Claude CLI's own default (no `--model`). */
+type Tier = { model: string | null; effort: string };
 /** Orca's argv builders, shared with the dispatcher's own launch path (constructing the client calls nothing). */
 const ARGV = new OrcaClient().argvFor;
 const TRUST_DIALOG = "agent-trust-workspace";

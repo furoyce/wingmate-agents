@@ -737,3 +737,26 @@ describe("scan (plan only)", () => {
     expect((await scan(w.ctx)).exitCode).toBe(1);
   });
 });
+
+describe("R31: the Claude CLI's own default model", () => {
+  test("a claim replay launches with the recorded CLI default (model null, effort max), never re-resolving it: a settings.json broken since the claim does not make it model_unresolved", async () => {
+    const w = await world();
+    const settings = join(w.root, ".claude", "settings.json");
+    writeFileSync(
+      settings,
+      JSON.stringify({ modelSettings: { "claude-fable-5-1": {} }, effortLevel: "high" }),
+    );
+    labeledByOwner(w, todo("i1", "JRF-501"));
+    w.orca.nextWaitSatisfied = false;
+    expect((await runTick(w)).claims).toEqual(["JRF-501"]); // launch_not_ready: replayed next tick
+    expect((await rec(w)).coordinator.launch).toEqual({ model: null, effort: "max" });
+    writeFileSync(settings, "{ not json");
+    w.orca.nextWaitSatisfied = true;
+    advance(w, 5);
+    const s = await runTick(w);
+    expect(s.resumes).toEqual(["JRF-501"]);
+    const r = await rec(w);
+    expect(r.stage).toBe("working");
+    expect(r.attention).not.toContain("model_unresolved");
+  });
+});

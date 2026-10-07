@@ -1,6 +1,7 @@
 // src/machine/status.ts — one status comment per issue, edited in place (§11.2), with the last five activity notes.
 import { MARK } from "../linear/markers";
 import { renderStatus } from "../linear/templates";
+import { modelLabel } from "../policy/providers";
 import type { LinearIssue } from "../ports";
 import { errorText } from "../shared/errors";
 import { PIPELINE, type WRecord } from "../state/records";
@@ -98,7 +99,7 @@ export async function syncStatus(
     waitingOn: waitingOn === undefined ? line.waitingOn : waitingOn,
     nextAction: nextAction ?? line.nextAction,
     provider: r.provider,
-    model: r.coordinator.launch.model,
+    model: modelLabel(r.coordinator.launch), // R31: "CLI default" when the launch has no model of its own
     effort: r.coordinator.launch.effort,
     worktree: r.worktree?.path ?? null,
     branch: r.worktree?.branch ?? null,

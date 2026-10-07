@@ -4,6 +4,7 @@
 // problem code instead of failing the whole report.
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
+import { modelLabel } from "../policy/providers";
 import type { Dirs } from "../shared/paths";
 import { readText } from "../state/fs";
 import { type Heartbeat, readHeartbeat, stopRequested } from "../state/heartbeat";
@@ -158,7 +159,7 @@ export async function statusReport(
       stage: r.stage,
       pipelineStage: r.pipelineStage,
       provider: r.provider,
-      model: r.coordinator.launch.model,
+      model: modelLabel(r.coordinator.launch), // R31: "CLI default" when the launch has no model of its own
       ageMin: Math.max(0, Math.round((Date.parse(now) - Date.parse(r.claimedAt)) / 60_000)),
       waitingOn: waitingOn(r),
       paused: r.paused,

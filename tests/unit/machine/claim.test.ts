@@ -290,12 +290,35 @@ describe("claimIssue (§5.4)", () => {
     );
   });
 
-  test("model_unresolved: without the provider's configured model there is no claim at all", async () => {
+  test("model_unresolved: a provider whose configured model cannot be read (Claude's settings.json does not parse) gets no claim at all", async () => {
     const w = await makeWorld();
-    rmSync(join(w.root, ".claude", "settings.json"));
+    writeFileSync(join(w.root, ".claude", "settings.json"), "{ not json");
     const err = await claim(w).catch((e: unknown) => e);
     expect(err instanceof WingmateError && err.code).toBe("model_unresolved");
     expect(await readRecord(w.dirs, "JRF-501")).toBeNull();
+  });
+
+  test("R31: with no top-level model in ~/.claude/settings.json (Claude Code keeps per-model settings under modelSettings) the coordinator runs on the CLI default — launch.model null, no --model but --effort max, shown as CLI default in launch.json, the brief and the status comment", async () => {
+    const w = await makeWorld();
+    writeFileSync(
+      join(w.root, ".claude", "settings.json"),
+      JSON.stringify({ modelSettings: { "claude-fable-5-1": { effort: "high" } }, effortLevel: "high" }),
+    );
+    const r = await claim(w);
+    expect(r.stage).toBe("working");
+    expect(r.coordinator.launch).toEqual({ model: null, effort: "max" });
+    expect(r.coordinator.argv).not.toContain("--model");
+    expect(r.coordinator.argv.slice(0, 3)).toEqual(["claude", "--effort", "max"]);
+    expect(commands(w)[0]).not.toContain("--model");
+    const wt = r.worktree?.path ?? "";
+    const launch = LaunchSchema.parse(JSON.parse(readFileSync(join(wt, ".wingmate", "launch.json"), "utf8")));
+    expect(launch).toMatchObject({ model: null, effort: "max" });
+    expect(launch.tiers.claude).toEqual({ model: null, effort: "max" });
+    expect(readFileSync(join(wt, ".wingmate", "BRIEF.md"), "utf8")).toContain(
+      "claude · CLI default · effort max",
+    );
+    const status = w.linear.comments.find((c) => c.body.startsWith("<!-- wingmate:status -->"));
+    expect(status?.body).toContain("| Provider | claude · CLI default · effort max |");
   });
 });
 

@@ -213,4 +213,16 @@ describe("status — Task 12 coverage", () => {
     await writeRecord(w.dirs, r);
     expect((await statusReport(w.ctx)).issues[0]?.waitingOn).toBe("owner (paused)");
   });
+  test("R31: a coordinator launched on the Claude CLI's own default model (launch.model null) shows as CLI default", async () => {
+    const w = await world();
+    labeledByOwner(w, todo("i1", "JRF-916"));
+    await runTick(w);
+    const r = await readRecord(w.dirs, "JRF-916");
+    if (!r) throw new Error("not claimed");
+    r.coordinator.launch = { model: null, effort: "max" };
+    await writeRecord(w.dirs, r);
+    const rep = await statusReport(w.ctx);
+    expect(rep.issues[0]?.model).toBe("CLI default");
+    expect(renderStatusMd(rep)).toContain("| claude · CLI default |");
+  });
 });

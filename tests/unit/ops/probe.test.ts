@@ -655,6 +655,30 @@ describe("claudeProbe (a real wm-doctor worktree; the agent simulated)", () => {
     );
   });
 
+  test("R31: with no model in ~/.claude/settings.json the probe runs on the Claude CLI's own default — no --model — and says so", async () => {
+    const w = await world();
+    writeFileSync(
+      join(w.root, ".claude", "settings.json"),
+      JSON.stringify({ modelSettings: { "claude-fable-5-1": { effort: "high" } }, effortLevel: "high" }),
+    );
+    const seen: Seen[] = [];
+    const exec = fakeClaude(async (cwd, kit) => {
+      await commit(cwd);
+      return stream(lines(), { kit });
+    }, seen);
+    const r = await claudeProbe(w.ctx, { exec: exec.exec, cwd: "/wt/self" });
+    expect(r.ok).toBe(true);
+    expect(r.detail).toContain("(CLI default model)");
+    expect(seen[0]?.argv).not.toContain("--model");
+    expect(seen[0]?.argv.slice(0, 5)).toEqual([
+      "claude",
+      "--settings",
+      expect.stringContaining("claude-settings.json"),
+      "--permission-mode",
+      "bypassPermissions",
+    ]);
+  });
+
   test("a broken sandbox fails on the lines and on disk, and the files its writes created are removed", async () => {
     const w = await world();
     const seen: Seen[] = [];
