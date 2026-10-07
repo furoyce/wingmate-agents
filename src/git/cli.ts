@@ -1,5 +1,5 @@
 // src/git/cli.ts — GitPort over the git binary; never prompts, never writes outside the given cwd.
-import type { GitPort } from "../ports";
+import type { BranchHistory, GitPort } from "../ports";
 import { WingmateError } from "../shared/errors";
 import { type RunOptions, type RunResult, run } from "../shared/exec";
 import { parseAddedLines } from "./diff";
@@ -9,6 +9,21 @@ export type Runner = (argv: string[], opts?: RunOptions) => Promise<RunResult>;
 
 /** A full SHA-1 or SHA-256 object name: nothing else may stand on the source side of a pushed refspec. */
 const OBJECT_NAME = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+
+/**
+ * D14: the environment of every git process the dispatcher starts in a worktree, directly or through gh. Its config has command scope,
+ * above the repository's own, so no hook and no fsmonitor command runs with the owner's credentials: a relative `core.hooksPath`
+ * (husky's `.husky/_`) resolves inside the agent-writable worktree, where an ignored hook is seen by neither git status, the path
+ * guard nor the secret scan. Never prompts.
+ */
+export const DISPATCHER_GIT_ENV: Readonly<Record<string, string>> = {
+  GIT_TERMINAL_PROMPT: "0",
+  GIT_CONFIG_COUNT: "2",
+  GIT_CONFIG_KEY_0: "core.hooksPath",
+  GIT_CONFIG_VALUE_0: "/dev/null",
+  GIT_CONFIG_KEY_1: "core.fsmonitor",
+  GIT_CONFIG_VALUE_1: "false",
+};
 
 /** Not `git_…`: an invalid branch is no infrastructure trouble, so a finish that keeps hitting it is counted (and quarantined). */
 function assertBranch(branch: string): void {
@@ -24,7 +39,7 @@ export class GitCli implements GitPort {
   constructor(private readonly exec: Runner = run) {}
 
   private async g(cwd: string, args: string[], timeoutMs = 60_000): Promise<string> {
-    const r = await this.exec(["git", "-C", cwd, ...args], { timeoutMs, env: { GIT_TERMINAL_PROMPT: "0" } });
+    const r = await this.exec(["git", "-C", cwd, ...args], { timeoutMs, env: { ...DISPATCHER_GIT_ENV } });
     if (r.code !== 0)
       throw new WingmateError(
         "git_failed",
@@ -77,6 +92,27 @@ export class GitCli implements GitPort {
     if (!Number.isInteger(n))
       throw new WingmateError("git_failed", "git rev-list --count returned no number");
     return n;
+  }
+  /**
+   * The push sends every commit of `baseSha..head`, not the net diff: a file or line that one commit added and a later one removed is
+   * gone from `baseSha...head` yet still in the pushed pack. Each commit is read against its first parent (a merge too), with the
+   * same rename and filter rules as the net diff, and the messages with it.
+   */
+  async historyChanges(cwd: string, baseSha: string, head: string): Promise<BranchHistory> {
+    const range = `${baseSha}..${head}`;
+    const log = ["log", "--no-color", "--no-renames", "--diff-merges=first-parent", "--format="];
+    const names = await this.g(cwd, [...log, "--name-only", "-z", "--diff-filter=ACMRD", range]);
+    const patch = await this.g(
+      cwd,
+      [...log, "-p", "--no-ext-diff", "--unified=0", "--diff-filter=ACMR", range],
+      120_000,
+    );
+    const messages = await this.g(cwd, ["log", "--format=%B", range]);
+    return {
+      paths: [...new Set(names.split("\0").filter(Boolean))],
+      added: parseAddedLines(patch),
+      messages,
+    };
   }
   /**
    * §13.3(d, h): the commit the guards cleared, by its object name, to the record's own branch — never `HEAD` (it could move

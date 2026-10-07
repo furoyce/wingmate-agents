@@ -5,6 +5,7 @@ import { lstat, mkdir, readFile, readdir, readlink } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { z } from "zod";
 import type { Config, ProjectConfig } from "../config/schema";
+import { DISPATCHER_GIT_ENV } from "../git/cli";
 import { WingmateError } from "../shared/errors";
 import { run } from "../shared/exec";
 import { readText, writeAtomic } from "../state/fs";
@@ -169,7 +170,7 @@ export async function verifyIntegrity(
   const globs = INTEGRITY_GLOBS.filter((g) => !g.startsWith(".wingmate"));
   const st = await run(
     ["git", "-C", worktreePath, "status", "--porcelain=v1", "-z", "--untracked-files=all", "--", ...globs],
-    { timeoutMs: 60_000 },
+    { timeoutMs: 60_000, env: { ...DISPATCHER_GIT_ENV } }, // the index refresh runs no hook and no fsmonitor (D14)
   );
   if (st.code !== 0)
     throw new WingmateError(
@@ -199,7 +200,10 @@ const COURTESY_FILE = ".claude/settings.local.json";
 
 /** Whether git tracks `rel` in the worktree; a failing `git ls-files` is an error, never "untracked". */
 async function isTracked(wt: string, rel: string): Promise<boolean> {
-  const r = await run(["git", "-C", wt, "ls-files", "-z", "--", rel], { timeoutMs: 30_000 });
+  const r = await run(["git", "-C", wt, "ls-files", "-z", "--", rel], {
+    timeoutMs: 30_000,
+    env: { ...DISPATCHER_GIT_ENV },
+  });
   if (r.code !== 0)
     throw new WingmateError(
       "kit_install_failed",

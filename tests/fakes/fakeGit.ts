@@ -6,6 +6,8 @@ export class FakeGit implements GitPort {
   commits = new Map<string, number>();
   changed = new Map<string, string[]>();
   added = new Map<string, { path: string; line: string }[]>();
+  /** What a push of the worktree's branch sends as history (each commit's paths and added lines, and the messages): none by default. */
+  history = new Map<string, { paths: string[]; added: { path: string; line: string }[]; messages: string }>();
   pushed: string[] = [];
   remoteSha = new Map<string, string>();
   /** Real git dirs of worktrees the fake Orca created on disk (makeWorld wires them); other paths get made-up ones. */
@@ -29,6 +31,9 @@ export class FakeGit implements GitPort {
   }
   async commitsAhead(cwd: string, _baseSha: string, _head?: string) {
     return this.commits.get(cwd) ?? 0;
+  }
+  async historyChanges(cwd: string, _baseSha: string, _head: string) {
+    return this.history.get(cwd) ?? { paths: [], added: [], messages: "" };
   }
   /** As `git push <sha>:refs/heads/<branch>`: origin's branch then points at exactly the commit pushed. */
   async push(cwd: string, branch: string, sha: string) {

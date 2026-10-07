@@ -3,7 +3,7 @@ import { unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
-import type { Runner } from "../git/cli";
+import { DISPATCHER_GIT_ENV, type Runner } from "../git/cli";
 import type { GhPort } from "../ports";
 import { WingmateError } from "../shared/errors";
 import { run } from "../shared/exec";
@@ -41,7 +41,7 @@ export class GhCli implements GhPort {
   ): Promise<{ number: number; url: string }> {
     const existing = await this.exec(
       ["gh", "pr", "list", "--head", a.head, "--state", "open", "--json", "number,url", "--limit", "1"],
-      { cwd, timeoutMs: 60_000 },
+      { cwd, timeoutMs: 60_000, env: { ...DISPATCHER_GIT_ENV } },
     );
     if (existing.code === 0) {
       const rows = parsed("pr list", z.array(PrRow), existing.stdout || "[]");
@@ -65,7 +65,7 @@ export class GhCli implements GhPort {
           bodyFile,
           ...(a.draft ? ["--draft"] : []),
         ],
-        { cwd, timeoutMs: 120_000 },
+        { cwd, timeoutMs: 120_000, env: { ...DISPATCHER_GIT_ENV } },
       );
       if (r.code !== 0)
         throw new WingmateError(
@@ -88,6 +88,7 @@ export class GhCli implements GhPort {
     const r = await this.exec(["gh", "pr", "view", String(number), "--json", "state,headRefName,url"], {
       cwd,
       timeoutMs: 60_000,
+      env: { ...DISPATCHER_GIT_ENV },
     });
     if (r.code !== 0)
       throw new WingmateError("gh_failed", `gh pr view failed (${r.code}): ${r.stderr.trim().slice(0, 200)}`);

@@ -69,8 +69,9 @@ function keyedSecret(tok: string, before: string): boolean {
 /**
  * Findings carry a six-character prefix only — a finding is itself written to Linear and logs (§11.2).
  * One secret yields one finding: a match whose span overlaps an earlier finding is not reported again.
+ * `entropy: false` skips the keyed high-entropy heuristic; the patterns always run.
  */
-export function scanText(text: string, path?: string): Finding[] {
+export function scanText(text: string, path?: string, opts: { entropy?: boolean } = {}): Finding[] {
   const out: Finding[] = [];
   const spans: [number, number][] = [];
   const overlaps = (s: number, e: number) => spans.some(([a, b]) => s < b && e > a);
@@ -84,6 +85,7 @@ export function scanText(text: string, path?: string): Finding[] {
     const m = re.exec(text);
     if (m) add(name, m[0], m.index);
   }
+  if (opts.entropy === false) return out;
   let offset = 0;
   for (const line of text.split("\n")) {
     const lineStart = offset;
@@ -97,10 +99,10 @@ export function scanText(text: string, path?: string): Finding[] {
   return out;
 }
 
-// Examples and docs are skipped (they hold placeholders by design) unless a private-key block appears.
+/**
+ * Every added line is scanned (§13.3 d): examples and docs skip only the entropy heuristic (they hold long keyed placeholders by
+ * design), never a pattern — a connection string or provider token in a Markdown file is pushed like any other line.
+ */
+const DOC_OR_EXAMPLE = /\.env\.example$|\.md$/i;
 export const scanAddedLines = (lines: { path: string; line: string }[]): Finding[] =>
-  lines.flatMap((l) =>
-    /\.env\.example$|\.md$/i.test(l.path) && !/BEGIN [A-Z ]*PRIVATE KEY/.test(l.line)
-      ? []
-      : scanText(l.line, l.path),
-  );
+  lines.flatMap((l) => scanText(l.line, l.path, { entropy: !DOC_OR_EXAMPLE.test(l.path) }));

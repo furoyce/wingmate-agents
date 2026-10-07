@@ -122,6 +122,74 @@ describe("GitCli", () => {
     expect(await g.commitsAhead(dir, base, head)).toBe(1);
     expect(await g.changedPaths(dir, base)).toEqual([]);
   });
+  test("F3: historyChanges reads every commit the push sends — a file added then removed is absent from the net diff only", async () => {
+    const { dir, base } = await repo();
+    const neon = "DATABASE_URL=postgresql://app:S3cret@ep-cool-sound-123456.us-east-2.aws.neon.tech/neondb";
+    writeFileSync(join(dir, ".env"), `${neon}\n`);
+    await git(["-C", dir, "add", ".env"]);
+    await git(["-C", dir, ...ID, "commit", "-q", "-m", "add env\n\nGH_TOKEN in the message"]);
+    await git(["-C", dir, "rm", "-q", ".env"]);
+    await git(["-C", dir, ...ID, "commit", "-q", "-m", "remove env"]);
+    await git(["-C", dir, "switch", "-q", "main"]); // a merge brings main's later change in against its first parent
+    writeFileSync(join(dir, "m.txt"), "from main\n");
+    await git(["-C", dir, "add", "m.txt"]);
+    await git(["-C", dir, ...ID, "commit", "-q", "-m", "main change"]);
+    await git(["-C", dir, "switch", "-q", "feature"]);
+    await git(["-C", dir, ...ID, "merge", "-q", "--no-edit", "-m", "merge main", "main"]);
+    const g = new GitCli();
+    const head = await g.revParse(dir, "HEAD");
+    expect((await g.changedPaths(dir, base, head)).sort()).toEqual(["m.txt", "src.ts"]); // .env is gone from the net diff
+    const h = await g.historyChanges(dir, base, head);
+    expect([...h.paths].sort()).toEqual([".env", "m.txt", "src.ts"]);
+    expect(h.added).toContainEqual({ path: ".env", line: neon });
+    expect(h.added).toContainEqual({ path: "src.ts", line: 'token = "sk-ant-api03-xxxx"' });
+    expect(h.added).toContainEqual({ path: "m.txt", line: "from main" });
+    for (const m of [
+      "feature",
+      "add env",
+      "GH_TOKEN in the message",
+      "remove env",
+      "main change",
+      "merge main",
+    ])
+      expect(h.messages).toContain(m);
+    await git(["-C", dir, "switch", "-q", "main"]); // HEAD moves; the explicit head does not
+    expect((await g.historyChanges(dir, base, head)).paths).toContain(".env");
+  });
+  test("F2 (D14): every git process GitCli starts runs no repository hook and no fsmonitor, without prompting", async () => {
+    const seen: { argv: string[]; env: Record<string, string> }[] = [];
+    const runner: Runner = async (argv, opts) => {
+      seen.push({ argv, env: opts?.env ?? {} });
+      const out = argv.includes("rev-list") ? "1\n" : argv.includes("rev-parse") ? `${"a".repeat(40)}\n` : "";
+      return { code: 0, stdout: out, stderr: "", timedOut: false };
+    };
+    const g = new GitCli(runner);
+    const sha = "a".repeat(40);
+    await g.revParse("/w", "HEAD");
+    await g.commonDir("/w");
+    await g.gitDir("/w");
+    await g.changedPaths("/w", sha, sha);
+    await g.addedLines("/w", sha, sha);
+    await g.commitsAhead("/w", sha, sha);
+    await g.historyChanges("/w", sha, sha);
+    await g.push("/w", "furoyce/wm-jrf-1", sha);
+    await g.lsRemoteSha("/w", "furoyce/wm-jrf-1");
+    expect(seen.length).toBeGreaterThanOrEqual(9);
+    expect(seen.some((s) => s.argv.includes("push"))).toBe(true);
+    for (const { argv, env } of seen) {
+      const config = Object.fromEntries(
+        Array.from({ length: Number(env.GIT_CONFIG_COUNT ?? 0) }, (_, i) => [
+          env[`GIT_CONFIG_KEY_${i}`],
+          env[`GIT_CONFIG_VALUE_${i}`],
+        ]),
+      );
+      expect([argv[3], config]).toEqual([
+        argv[3],
+        { "core.hooksPath": "/dev/null", "core.fsmonitor": "false" },
+      ]);
+      expect(env.GIT_TERMINAL_PROMPT).toBe("0");
+    }
+  });
   test("lsRemoteSha reads the exact refs/heads/<branch> line (a prefix match of another branch is ignored)", async () => {
     const out =
       "1111111111111111111111111111111111111111\trefs/heads/team/wm-jrf-1\n2222222222222222222222222222222222222222\trefs/heads/wm-jrf-1\n";
@@ -170,6 +238,30 @@ describe("GhCli", () => {
   test("a create without a PR URL in its output is an error", async () => {
     const runner: Runner = async (argv) => ok(argv[2] === "list" ? "[]" : "done\n");
     await expect(new GhCli(runner).prCreate("/w", args)).rejects.toThrow(/no PR url/);
+  });
+  test("F2 (D14): gh runs in the worktree with hooks and fsmonitor off for the git processes it starts there", async () => {
+    const envs: Record<string, string>[] = [];
+    const runner: Runner = async (argv, opts) => {
+      envs.push(opts?.env ?? {});
+      if (argv[2] === "list") return ok("[]");
+      if (argv[2] === "view")
+        return ok(
+          JSON.stringify({ state: "OPEN", headRefName: "wm-jrf-1", url: "https://github.com/a/b/pull/3" }),
+        );
+      return ok("https://github.com/furoyce/bouncr.lol/pull/12\n");
+    };
+    const gh = new GhCli(runner);
+    await gh.prCreate("/w", args);
+    await gh.prView("/w", 3);
+    expect(envs).toHaveLength(3);
+    for (const env of envs)
+      expect(env).toMatchObject({
+        GIT_CONFIG_COUNT: "2",
+        GIT_CONFIG_KEY_0: "core.hooksPath",
+        GIT_CONFIG_VALUE_0: "/dev/null",
+        GIT_CONFIG_KEY_1: "core.fsmonitor",
+        GIT_CONFIG_VALUE_1: "false",
+      });
   });
   test("prView is Zod-parsed", async () => {
     const runner: Runner = async () =>

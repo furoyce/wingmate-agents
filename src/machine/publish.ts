@@ -10,8 +10,8 @@ import { MARK } from "../linear/markers";
 import { REQUEST_CHANGES, renderCompletion } from "../linear/templates";
 import { depsChanged, depsPolicy } from "../policy/deps";
 import { violations } from "../policy/pathguard";
-import { scanAddedLines, scanText } from "../policy/secrets";
-import type { LinearIssue } from "../ports";
+import { type Finding, scanAddedLines, scanText } from "../policy/secrets";
+import type { BranchHistory, LinearIssue } from "../ports";
 import { WingmateError, errorCode, errorText } from "../shared/errors";
 import { isIdentifier } from "../shared/ids";
 import type { JournalEntry } from "../state/journal";
@@ -130,11 +130,36 @@ async function validateFailure(r: WRecord, wt: Worktree, repo: RepoConfig, head:
 }
 const stale = (line: string): GuardFailure => ({ code: "validate_stale", lines: [line] });
 
+/** Marks what only the pushed history shows (F3): HEAD no longer has it, but the push would still send the commit that does. */
+const IN_HISTORY = "in the branch history";
+const IN_MESSAGE = "in a commit message";
+const OUTBOUND = "the PR or completion text";
+
+/**
+ * Secret findings over all that the push and the publish writes send: the net diff's added lines and the outbound text, then (F3) the
+ * lines the branch's commits added — each one the net diff already shows is not repeated — and the commit messages. A finding names a
+ * pattern and a place, never a value.
+ */
+function secretFindings(added: { path: string; line: string }[], history: BranchHistory, outbound: string) {
+  const place = (f: Finding) => `${f.pattern} in ${f.path ?? OUTBOUND}`;
+  const net = [...scanAddedLines(added), ...scanText(outbound, OUTBOUND)].map(place);
+  const shown = new Set(net);
+  const earlier = [...new Set(scanAddedLines(history.added).map(place))].filter((p) => !shown.has(p));
+  const messages = [...new Set(scanText(history.messages).map((f) => `${f.pattern} ${IN_MESSAGE}`))];
+  return [
+    ...net.map((p) => `${p} (value withheld)`),
+    ...earlier.map((p) => `${p} (${IN_HISTORY}; value withheld)`),
+    ...messages.map((p) => `${p} (value withheld)`),
+  ];
+}
+
 /**
  * §13.3(d), in its order, at the commit `head` (default: HEAD now): commits beyond the base, the path guard over every changed path
  * (renames from both sides, deletions included) against the merged `forbiddenPaths`, the secret scan over the added lines and the
  * outbound text (`title`, and `body`: the PR body, to which `publish` adds the completion comment's summary), the dependency policy,
- * and `validate` verified at that commit. Findings name patterns and paths, never values.
+ * and `validate` verified at that commit. The path guard and the secret scan also read every commit the push sends (F3): a path or
+ * line one commit added and a later one removed is absent from the net diff, never from the pushed pack. Findings name patterns and
+ * paths, never values.
  */
 export async function runGuards(
   ctx: Ctx,
@@ -152,21 +177,21 @@ export async function runGuards(
   if ((await ctx.git.commitsAhead(wt.path, wt.baseSha, at)) === 0)
     return { code: "nothing_to_publish", lines: ["the branch has no commits beyond its base SHA"] };
   const changed = await ctx.git.changedPaths(wt.path, wt.baseSha, at);
-  const vio = violations(changed, [...project.forbiddenPaths, ...repo.forbiddenPaths]);
+  const history = await ctx.git.historyChanges(wt.path, wt.baseSha, at);
+  const net = new Set(changed);
+  const forbidden = [...project.forbiddenPaths, ...repo.forbiddenPaths];
+  const vio = violations([...new Set([...changed, ...history.paths])], forbidden);
   if (vio.length)
     return {
       code: "path_guard",
-      lines: vio.map((v) => `${v.path} matches the forbidden pattern ${v.pattern}`),
+      lines: vio.map(
+        (v) =>
+          `${v.path} matches the forbidden pattern ${v.pattern}${net.has(v.path) ? "" : ` (${IN_HISTORY})`}`,
+      ),
     };
-  const findings = [
-    ...scanAddedLines(await ctx.git.addedLines(wt.path, wt.baseSha, at)),
-    ...scanText(`${title}\n${body}`, "the PR or completion text"),
-  ];
-  if (findings.length)
-    return {
-      code: "secret_detected",
-      lines: findings.map((f) => `${f.pattern} in ${f.path ?? "the PR or completion text"} (value withheld)`),
-    };
+  const added = await ctx.git.addedLines(wt.path, wt.baseSha, at);
+  const secrets = secretFindings(added, history, `${title}\n${body}`);
+  if (secrets.length) return { code: "secret_detected", lines: secrets };
   const manifests = depsChanged(changed);
   if (manifests.length && !depsPolicy(changed, await allowDepsGranted(ctx, r, issue)).ok)
     return {
@@ -416,11 +441,18 @@ async function pushAndComplete(ctx: Ctx, r: WRecord, issue: LinearIssue, c: Clea
 function findingText(r: WRecord, f: GuardFailure): string {
   const shown = f.lines.slice(0, FINDINGS_SHOWN);
   const more = f.lines.length - shown.length;
+  const inHistory = f.lines.some((l) => l.includes(IN_HISTORY) || l.includes(IN_MESSAGE));
   return [
     `publish refused: ${f.code}`,
     ...shown.map((l) => `- ${l}`),
     ...(more > 0 ? [`- and ${more} more`] : []),
     "",
+    ...(inHistory
+      ? [
+          "The push sends every commit of the branch, so a finding in the branch history or in a commit message would be published although HEAD no longer has it: rewrite the unpushed commits until none of them contains it.",
+          "",
+        ]
+      : []),
     `Fix the findings and commit, re-run \`wingmate issue ${r.identifier} gate security\` (and \`gate validate\` when HEAD moved), then \`wingmate issue ${r.identifier} finish\` again.`,
   ].join("\n");
 }

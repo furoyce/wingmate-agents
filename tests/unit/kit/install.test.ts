@@ -7,6 +7,7 @@ import {
   readFileSync,
   readdirSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -592,5 +593,31 @@ describe("installKit", () => {
     await expect(install(repo)).rejects.toThrow(/settings\.local\.json is not valid JSON/);
     const plain = mkdtempSync(join(tmpdir(), "wm-plain-"));
     await expect(verifyIntegrity(plain, join(plain, ".git"), {})).rejects.toThrow(/git status .* failed/);
+  });
+
+  test("F2 (D14): the per-tick git status runs no repository hook and no fsmonitor (husky's relative hooksPath lands in the worktree)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "wm-hooks-"));
+    const main = join(root, "main");
+    await run(["git", "init", "-q", "-b", "main", main]);
+    writeFileSync(join(main, "a.txt"), "one\n");
+    await run(["git", "-C", main, "add", "a.txt"]);
+    await run(["git", "-C", main, ...GIT_ID, "commit", "-q", "-m", "init"]);
+    // the owner's repo config, shared by every worktree: a relative path resolves inside the agent-writable worktree
+    await run(["git", "-C", main, "config", "core.hooksPath", ".husky/_"]);
+    await run(["git", "-C", main, "config", "core.fsmonitor", ".husky/_/fsmonitor"]);
+    const wt = join(root, "wm-jrf-404");
+    expect(
+      (await run(["git", "-C", main, "worktree", "add", "-q", "-b", "furoyce/wm-jrf-404", wt])).code,
+    ).toBe(0);
+    const hooks = join(wt, ".husky", "_");
+    mkdirSync(hooks, { recursive: true });
+    writeFileSync(join(hooks, ".gitignore"), "*\n"); // ignored: neither git status, the path guard nor the scan sees it
+    const marker = join(root, "ran");
+    for (const name of ["post-index-change", "reference-transaction", "fsmonitor"])
+      writeFileSync(join(hooks, name), `#!/bin/sh\necho ${name} >> "${marker}"\nexit 1\n`, { mode: 0o755 });
+    const later = new Date(Date.now() + 60_000);
+    utimesSync(join(wt, "a.txt"), later, later); // a stale index entry: status refreshes and rewrites the index
+    await verifyIntegrity(wt, join(main, ".git"), {});
+    expect(existsSync(marker) ? readFileSync(marker, "utf8") : "nothing ran").toBe("nothing ran");
   });
 });

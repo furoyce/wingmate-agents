@@ -119,6 +119,35 @@ describe("publish guards (§13.3 d)", () => {
     ).toBe(true);
   });
 
+  test("F1: a secret in an added Markdown line refuses with secret_detected and nothing is pushed (docs skip only entropy)", async () => {
+    const { w, identifier, path } = await setup();
+    w.git.changed.set(path, ["docs/setup.md"]);
+    // a long keyed placeholder in a doc is no finding: only the entropy heuristic is skipped for docs
+    w.git.added.set(path, [
+      {
+        path: "docs/setup.md",
+        line: "token: 9f8e7d6c5b4a39281706f5e4d3c2b1a0ffeeddccbbaa99887766554433221100",
+      },
+    ]);
+    expect(await runGuards(w.ctx, await rec(w, identifier), issueOf(w), "t", "b")).toBeNull();
+    w.git.added.set(path, [
+      {
+        path: "docs/setup.md",
+        line: "DATABASE_URL=postgresql://app:S3cretPassw0rd@ep-cool-sound-123456.us-east-2.aws.neon.tech/neondb",
+      },
+      { path: "docs/setup.md", line: "GH_TOKEN=ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij12" },
+    ]);
+    expect(await call(w, identifier)).toBe(false);
+    expect(w.git.pushed).toEqual([]);
+    expect(w.gh.prs).toEqual([]);
+    expect((await rec(w, identifier)).gates.security.note).toBe("publish_guard:secret_detected");
+    const finding = readFileSync(join(path, ".wingmate", "inbox", inboxFiles(path)[0] ?? ""), "utf8");
+    expect(finding).toContain("postgres_url in docs/setup.md");
+    expect(finding).toContain("github in docs/setup.md");
+    expect(finding).not.toContain("S3cretPassw0rd");
+    expect(finding).not.toContain("ghij12");
+  });
+
   test("a connection string in the PR body is refused too", async () => {
     const { w, identifier, path } = await setup();
     writeFileSync(join(path, ".wingmate", "s.md"), "Uses postgres://u:p@db.example.com/x for tests");
@@ -155,6 +184,71 @@ describe("publish guards (§13.3 d)", () => {
     expect(await call(w, identifier)).toBe(false);
     expect(w.git.pushed).toEqual([]);
     expect((await rec(w, identifier)).gates.security.note).toBe("publish_guard:path_guard");
+  });
+
+  test("F3: a forbidden file added and removed again inside the branch is refused (path_guard): the push sends that commit too", async () => {
+    const { w, identifier, path } = await setup();
+    w.git.changed.set(path, ["src/a.ts"]); // the net diff no longer shows it
+    w.git.history.set(path, { paths: ["src/a.ts", ".env", ".env"], added: [], messages: "add\n\nremove\n" });
+    expect(await call(w, identifier)).toBe(false);
+    expect(w.git.pushed).toEqual([]);
+    expect(w.gh.prs).toEqual([]);
+    expect((await rec(w, identifier)).gates.security.note).toBe("publish_guard:path_guard");
+    const finding = readFileSync(join(path, ".wingmate", "inbox", inboxFiles(path)[0] ?? ""), "utf8");
+    expect(finding).toContain("- .env matches the forbidden pattern **/.env* (in the branch history)\n");
+    expect(finding.match(/\.env matches/g)).toHaveLength(1);
+    expect(finding).toContain("rewrite the unpushed commits");
+  });
+
+  test("F3: a secret added by an earlier commit and removed by a later one refuses (secret_detected), value withheld", async () => {
+    const { w, identifier, path } = await setup();
+    const clean = { path: "src/db.ts", line: "const url = process.env.DATABASE_URL;" };
+    w.git.changed.set(path, ["src/db.ts"]);
+    w.git.added.set(path, [clean]);
+    w.git.history.set(path, {
+      paths: ["src/db.ts"],
+      added: [
+        {
+          path: "src/db.ts",
+          line: 'const url = "postgresql://app:S3cretPassw0rd@ep-cool-sound-123456.us-east-2.aws.neon.tech/neondb";',
+        },
+        clean,
+      ],
+      messages: "read the url from the environment\n\nconnect to the database\n",
+    });
+    expect(await call(w, identifier)).toBe(false);
+    expect(w.git.pushed).toEqual([]);
+    expect(w.gh.prs).toEqual([]);
+    expect((await rec(w, identifier)).gates.security.note).toBe("publish_guard:secret_detected");
+    const finding = readFileSync(join(path, ".wingmate", "inbox", inboxFiles(path)[0] ?? ""), "utf8");
+    expect(finding).toContain("- postgres_url in src/db.ts (in the branch history; value withheld)\n");
+    expect(finding).not.toContain("S3cretPassw0rd");
+  });
+
+  test("F3: a token in a commit message refuses too (the push sends the messages)", async () => {
+    const { w, identifier, path } = await setup();
+    w.git.history.set(path, {
+      paths: [],
+      added: [],
+      messages: "Rotate GH_TOKEN=ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij12\n",
+    });
+    expect(await call(w, identifier)).toBe(false);
+    expect(w.git.pushed).toEqual([]);
+    const finding = readFileSync(join(path, ".wingmate", "inbox", inboxFiles(path)[0] ?? ""), "utf8");
+    expect(finding).toContain("- github in a commit message (value withheld)\n");
+    expect(finding).not.toContain("ghij12");
+  });
+
+  test("F3: a secret both at HEAD and in its commit is reported once, as at HEAD", async () => {
+    const { w, identifier, path } = await setup();
+    const line = { path: "src/db.ts", line: "const k = 'AKIAIOSFODNN7EXAMPLE';" };
+    w.git.added.set(path, [line]);
+    w.git.history.set(path, { paths: ["src/db.ts"], added: [line], messages: "add the key\n" });
+    expect(await call(w, identifier)).toBe(false);
+    const finding = readFileSync(join(path, ".wingmate", "inbox", inboxFiles(path)[0] ?? ""), "utf8");
+    expect(finding.match(/aws in src\/db\.ts/g)).toEqual(["aws in src/db.ts"]);
+    expect(finding).toContain("- aws in src/db.ts (value withheld)\n");
+    expect(finding).not.toContain("rewrite the unpushed commits");
   });
 
   test("manifest change without allow-deps → dependency_policy; granted before claim by the owner → passes", async () => {
@@ -394,8 +488,13 @@ describe("publish success and replay (§6.6, I4, I9)", () => {
       read.push(head);
       return ahead(cwd, base, head);
     };
+    const history = w.git.historyChanges.bind(w.git);
+    w.git.historyChanges = async (cwd, base, head) => {
+      read.push(`history:${head}`);
+      return history(cwd, base, head);
+    };
     expect(await call(w, identifier)).toBe(true);
-    expect(read).toEqual(["headsha", "headsha", "headsha"]);
+    expect(read).toEqual(["headsha", "headsha", "history:headsha", "headsha"]); // the pushed history too (F3)
     expect(w.git.remoteSha.get(worktreeOf(await rec(w, identifier)).branch)).toBe("headsha");
   });
 

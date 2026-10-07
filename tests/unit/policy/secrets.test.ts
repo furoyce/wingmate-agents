@@ -97,14 +97,28 @@ describe("secrets", () => {
     const f = scanText("A=AKIAIOSFODNN7EXAMPLE\nB=xoxb-123456789012-123456789012-AbCdEfGhIjKlMnOpQrStUvWx");
     expect(f.map((x) => x.pattern).sort()).toEqual(["aws", "slack"]);
   });
-  test("added lines carry the path and skip examples and docs", () => {
+  test("F1: added lines carry the path; docs and examples skip only the entropy heuristic, never a pattern", () => {
+    const keyed = "token: 9f8e7d6c5b4a39281706f5e4d3c2b1a0ffeeddccbbaa99887766554433221100";
     const f = scanAddedLines([
       { path: "api/.env.example", line: "AWS_KEY=AKIAIOSFODNN7EXAMPLE" },
       { path: "README.md", line: "GH_TOKEN=ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij12" },
+      {
+        path: "docs/setup.md",
+        line: "DATABASE_URL=postgresql://app:S3cretPassw0rd@ep-cool-sound-123456.us-east-2.aws.neon.tech/neondb",
+      },
       { path: "src/a.ts", line: "const k='AKIAIOSFODNN7EXAMPLE'" },
+      { path: "docs/api.md", line: keyed }, // a long keyed placeholder in a doc: the entropy heuristic is skipped there
+      { path: "api/.env.example", line: "SECRET_KEY=ABCDEF0123456789ABCDEF0123456789ABCD" },
+      { path: "src/b.ts", line: keyed }, // the same line in code is judged in full
     ]);
-    expect(f).toHaveLength(1);
-    expect(f[0]).toMatchObject({ path: "src/a.ts", pattern: "aws" });
+    expect(f.map((x) => [x.path, x.pattern])).toEqual([
+      ["api/.env.example", "aws"],
+      ["README.md", "github"],
+      ["docs/setup.md", "postgres_url"],
+      ["src/a.ts", "aws"],
+      ["src/b.ts", "high_entropy"],
+    ]);
+    expect(JSON.stringify(f)).not.toContain("S3cretPassw0rd");
   });
   test("a private key block in a markdown file is still reported", () => {
     expect(

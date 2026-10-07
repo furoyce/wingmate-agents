@@ -192,6 +192,11 @@ export interface OrcaPort {
   automationsCreate(args: string[]): Promise<{ id: string }>;
   automationsEdit(id: string, args: string[]): Promise<void>;
 }
+export interface BranchHistory {
+  paths: string[];
+  added: { path: string; line: string }[];
+  messages: string;
+}
 export interface GitPort {
   revParse(cwd: string, ref: string): Promise<string>;
   commonDir(cwd: string): Promise<string>;
@@ -201,6 +206,11 @@ export interface GitPort {
   changedPaths(cwd: string, baseSha: string, head?: string): Promise<string[]>;
   addedLines(cwd: string, baseSha: string, head?: string): Promise<{ path: string; line: string }[]>;
   commitsAhead(cwd: string, baseSha: string, head?: string): Promise<number>;
+  /**
+   * What a push of `head` sends beyond the net diff: every commit of `baseSha..head` (a merge against its first parent) — the paths
+   * each touched (both sides of a rename, deletions included), the lines each added, and the commit messages.
+   */
+  historyChanges(cwd: string, baseSha: string, head: string): Promise<BranchHistory>;
   /** `git push -u origin <sha>:refs/heads/<branch>`: exactly the commit the publish guards cleared, never forced. */
   push(cwd: string, branch: string, sha: string): Promise<void>;
   lsRemoteSha(cwd: string, branch: string): Promise<string | null>;
