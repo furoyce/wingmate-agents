@@ -64,6 +64,7 @@ export function printSummary(summary: TickSummary, out: (line: string) => void, 
 }
 
 export async function tickCommand(argv: Argv, deps: CommandDeps = {}): Promise<number> {
+  const startedAt = Date.now(); // REL-1: the tick's deadline counts from here, the context build (token mint, team read) included
   const out = deps.out ?? stdout;
   const dryRun = boolFlag(argv, "dry-run");
   const precheck = boolFlag(argv, "precheck");
@@ -74,7 +75,7 @@ export async function tickCommand(argv: Argv, deps: CommandDeps = {}): Promise<n
   let summary: TickSummary;
   try {
     const ctx = await (deps.build ?? buildRealCtx)({ readOnly: dryRun });
-    summary = await tick(ctx, { dryRun, precheck });
+    summary = await tick(ctx, { dryRun, precheck, startedAt });
   } catch (e) {
     out(JSON.stringify({ outcome: "error", reason: errorCode(e) }));
     return 2;

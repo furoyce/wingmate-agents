@@ -91,6 +91,8 @@ export class FakeOrca implements OrcaPort {
    * repository with the first worktree of the repo. A main row a test puts in `rows` for the repo is listed instead.
    */
   mains = new Set<string>();
+  /** Panes whose agent has taken a turn (a send with a `turn_started` receipt): before its first turn an agent pane is idle (`done`). */
+  private turned = new Set<string>();
   private seq = 0;
 
   private mainRows(): FleetRow[] {
@@ -231,9 +233,10 @@ export class FakeOrca implements OrcaPort {
     const row = this.rows.get(wt);
     if (row) {
       row.liveTerminalCount++;
+      // REL-1: a new agent's TUI runs no turn until its first prompt starts one (spike row 2: `working` is a turn in progress)
       row.agents.push({
         paneKey: `tab${n}:leaf${n}`,
-        state: "working",
+        state: "done",
         agentType: command.includes("codex") ? "codex" : "claude",
         stateStartedAt: this.now(),
         updatedAt: null,
@@ -258,6 +261,14 @@ export class FakeOrca implements OrcaPort {
   }
   async terminalSend(h: string, text: string, w: number, retry?: string): Promise<SendReceipt> {
     await this.rec("terminalSend", { h, text, w, retry });
+    if (this.nextSendStage === "turn_started" && !this.turned.has(h)) {
+      // the pane's first turn: its agent is working from now on (later turns are each test's to set)
+      this.turned.add(h);
+      for (const [wt, rows] of this.terminals) {
+        const t = rows.find((x) => x.handle === h);
+        if (t) this.setAgentState(wt, `${t.tabId}:${t.leafId}`, "working", this.now());
+      }
+    }
     return { stage: this.nextSendStage, requestId: `req_${++this.seq}` };
   }
   async terminalClose(wt: string) {

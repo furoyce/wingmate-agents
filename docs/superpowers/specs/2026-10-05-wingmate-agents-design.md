@@ -204,7 +204,10 @@ Linear (control plane)                            Orca (execution plane)
   `precheckResult.stdout` holds the tick summary (identifiers, enumerated reason codes, counts and durations only —
   never titles, descriptions, comment text or raw error strings, which go to the pino log).
 - Work per tick is bounded so the tick finishes in ≤ 180 s: at most 2 claims, 3 resumes/relaunches, 1 handoff,
-  and the outbox items of all issues; anything left waits for the next tick. `doctor` re-hashes the binary and
+  and the outbox items of all issues; anything left waits for the next tick. The bound is enforced (amended
+  2026-10-07): the tick's deadline is the precheck timeout less 60 s, counted from the process start; no wait runs past
+  it, no claim starts with less than 90 s left (`tick_budget`), and an external action after it ends the tick with
+  outcome `error`, reason `tick_deadline` (exit 2, heartbeat written). `doctor` re-hashes the binary and
   diffs the live automation (prompt, precheck, workspace mode) against `install.json` on every run.
 - Why not a tiny agent session: it would put an LLM in bypass mode in the dispatcher every five minutes and make
   its stdout an injection surface; the run record already gives the visibility the agent session would have added.
@@ -215,7 +218,8 @@ Linear (control plane)                            Orca (execution plane)
   `${tabId}:${leafId}` as `paneKey`; then `orca terminal wait --terminal <handle> --for tui-idle --timeout-ms
   120000 --json` — send **only** when `result.wait.satisfied === true` (on `false`, wait once more with
   `--timeout-ms 180000`; still unsatisfied → the step fails with `launch_not_ready` and the next tick retries the
-  send against the same handle after a fresh wait, never a second `terminal create` while the handle is live);
+  send against the same handle after a fresh wait, never a second `terminal create` while the handle is live; each
+  wait is clamped to what is left of the tick's deadline, §4.3, amended 2026-10-07);
   then `orca terminal send --terminal <handle> --text "<pointer brief>" --enter --wait-submit 10 --json` (success
   = receipt stage `turn_started`). `--command` is a line typed into the login shell Orca spawns, not argv: the
   dispatcher shell-quotes the argv and prefixes `exec` so the PTY and its handle end with the agent process. The
@@ -375,7 +379,9 @@ matters. Every skip reason is recorded in `queue.json` with the next evaluation 
    show` proves it is an unused shell.
 6. `orca worktree set --worktree id:<wt> --workspace-status in-progress --comment "<pipelineStage>"`.
 A step that fails is recorded with Orca's receipt; `coordinator.launchRetries` increments and the same step is
-retried next tick at most once; a second failure → `blocked` (`launch_failed`), with `In-Agent` removed so the
+retried next tick at most once (the retry is counted when it starts, so one cut off mid-wait by the precheck timeout
+counts too; a coordinator whose pane already shows it working, or whose own `stage.json` exists, is `working` without a
+retry; amended 2026-10-07); a second failure → `blocked` (`launch_failed`), with `In-Agent` removed so the
 issue is visibly stuck, and the retained worktree named in the blocked comment.
 
 ### 5.5 Coordinator liveness (one function in `machine/liveness.ts`, evaluated each tick)

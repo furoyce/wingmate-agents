@@ -7,8 +7,8 @@ import { errorCode, errorText } from "../shared/errors";
 import { fence } from "../shared/fence";
 import { newUlid, newUuid } from "../shared/ids";
 import type { WRecord } from "../state/records";
-import type { Ctx } from "./context";
-import { isTickAbort } from "./guard";
+import { type Ctx, remainingMs } from "./context";
+import { TickAbort, isTickAbort } from "./guard";
 import { kitNonce, prepareLaunch } from "./launch";
 import { type Liveness, worktreeGone } from "./liveness";
 import { saveRecord } from "./save";
@@ -16,15 +16,34 @@ import { addAttention, dropAttention, ensureAttempt, transition } from "./states
 
 const TRUST_DIALOG = "agent-trust-workspace";
 const DOWN = "\x1b[B";
+/** REL-1: a wait shorter than this is not started (it could not tell a slow TUI from a stuck one). */
+export const MIN_WAIT_MS = 5_000;
+
+/** REL-1 (§4.3): the time a wait may take — `cap`, clamped to what is left of the tick; null with less than MIN_WAIT_MS left. */
+export function waitBudget(ctx: Ctx, cap: number): number | null {
+  const left = remainingMs(ctx);
+  return left < MIN_WAIT_MS ? null : Math.floor(Math.min(cap, left));
+}
+
+/** REL-1: a step that starts with a wait ends the tick instead (`tick_deadline`, as the guard would) when no wait fits any more. */
+export function assertWaitBudget(ctx: Ctx): void {
+  if (waitBudget(ctx, MIN_WAIT_MS) === null) throw new TickAbort("error", "tick_deadline");
+}
 
 /**
  * §4.4 wait with Claude's folder-trust dialog handled (spike 2026-10-06 §3.2, Ruling R6): Orca reports `blockedReason:
  * "agent-trust-workspace"`; the dialog's default is "No, exit", so answer Down then Enter once — never the brief — and wait again;
- * still not ready → one more wait with the longer timeout.
+ * still not ready → one more wait with the longer timeout. REL-1: every wait is clamped to the tick's deadline, and one that no longer
+ * fits is not started — the launch is not ready this tick, and the next tick waits again (§4.4).
  */
 export async function waitForTui(ctx: Ctx, r: WRecord, handle: string): Promise<boolean> {
-  let wait = await ctx.orca.terminalWait(handle, "tui-idle", 120_000);
-  if (!wait.satisfied && wait.blockedReason === TRUST_DIALOG) {
+  const wait = async (cap: number) => {
+    const ms = waitBudget(ctx, cap);
+    return ms === null ? null : ctx.orca.terminalWait(handle, "tui-idle", ms);
+  };
+  let w = await wait(120_000);
+  if (!w) return false;
+  if (!w.satisfied && w.blockedReason === TRUST_DIALOG) {
     await ctx.orca.terminalKeys(handle, { text: DOWN });
     await ctx.orca.terminalKeys(handle, { enter: true });
     await ctx.ledger.append({
@@ -33,10 +52,11 @@ export async function waitForTui(ctx: Ctx, r: WRecord, handle: string): Promise<
       type: "trust_dialog_answered",
       data: { handle },
     });
-    wait = await ctx.orca.terminalWait(handle, "tui-idle", 120_000);
+    w = await wait(120_000);
+    if (!w) return false;
   }
-  if (!wait.satisfied) wait = await ctx.orca.terminalWait(handle, "tui-idle", 180_000);
-  return wait.satisfied;
+  if (!w.satisfied) w = (await wait(180_000)) ?? w;
+  return w.satisfied;
 }
 
 export type Delivery = "turn_started" | "input_accepted" | "exited";
@@ -145,7 +165,10 @@ export async function sendPointer(
     await ctx.ledger.append({ at: ctx.now(), issue: r.identifier, type, data: { kind, via: "run" } });
     return "input_accepted";
   }
-  const wait = await ctx.orca.terminalWait(handle, "tui-idle", 30_000);
+  // REL-1: clamped to the tick's deadline; with no wait left the tick ends before sending (nothing delivered, nothing counted)
+  const ms = waitBudget(ctx, 30_000);
+  if (ms === null) throw new TickAbort("error", "tick_deadline");
+  const wait = await ctx.orca.terminalWait(handle, "tui-idle", ms);
   if (!wait.satisfied) {
     await ctx.ledger.append({
       at: ctx.now(),
@@ -210,6 +233,7 @@ export async function relaunch(
 ): Promise<boolean> {
   const wt = r.worktree;
   if (!wt) return false;
+  assertWaitBudget(ctx); // REL-1: a relaunch that could not wait for its TUI is not started (nor counted) in this tick
   if (opts.counted !== false) r.coordinator.relaunches += 1;
   if (!existsSync(wt.path)) {
     addAttention(r, "worktree_gone");

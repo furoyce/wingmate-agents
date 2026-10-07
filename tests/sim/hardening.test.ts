@@ -4,8 +4,10 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { writeIntent } from "../../src/kit/intents";
+import { TickAbort } from "../../src/machine/guard";
 import { block } from "../../src/machine/release";
 import { scan } from "../../src/machine/scan";
+import { readHeartbeat } from "../../src/state/heartbeat";
 import { type WRecord, readRecord, writeRecord } from "../../src/state/records";
 import { OWNER, type World, advance, labeledByOwner, runTick, todo, world } from "./harness";
 
@@ -317,5 +319,130 @@ describe("C20: re-claims and an owner's Blocked label on a parked issue", () => 
     expect((await runTick(w)).resumes).toEqual(["JRF-501"]);
     expect((await rec(w)).stage).toBe("working");
     expect(labels(w)).toEqual(["agent-ready", "In-Agent"]);
+  });
+});
+
+describe("REL-1: a tick never outlives its precheck timeout, and a launch killed mid-wait still counts (§4.3, §5.4, §13.1)", () => {
+  /** A wall clock the tick's deadline is read with; a test moves it as Orca's waits would take time. */
+  const wallClock = () => {
+    let at = Date.parse("2026-10-06T12:00:00Z");
+    return {
+      now: () => at,
+      advance: (ms: number) => {
+        at += ms;
+      },
+    };
+  };
+  const waitsOf = (w: World) =>
+    w.orca.calls.filter((c) => c.verb === "terminalWait").map((c) => (c.args as { ms: number }).ms);
+
+  test("launch waits are clamped to the deadline; a claim that no longer fits waits a tick (tick_budget); the heartbeat is written", async () => {
+    const w = await world();
+    labeledByOwner(w, todo("i1", "JRF-501"));
+    labeledByOwner(w, todo("i2", "JRF-601", { projectId: "a0d17ec1-b237-4481-9efb-1eff9fe69efe" })); // smart-dispatcher: its own slot
+    const wall = wallClock();
+    const deadline = { at: wall.now() + 180_000, now: wall.now };
+    w.orca.nextWaitSatisfied = false;
+    w.orca.onCall = (verb, args) => {
+      if (verb === "terminalWait") wall.advance((args as { ms: number }).ms); // each wait runs to its timeout, unsatisfied
+    };
+    const s = await runTick(w, { deadline });
+    w.orca.onCall = null;
+    expect(waitsOf(w)).toEqual([120_000, 60_000]); // the second wait gets only what is left: never past the deadline
+    expect(wall.now()).toBe(deadline.at);
+    expect(s.claims).toEqual(["JRF-501"]);
+    expect(s.skipped).toContainEqual({ identifier: "JRF-601", reason: "tick_budget" });
+    const r = await rec(w);
+    expect(r).toMatchObject({ stage: "claimed" });
+    expect(r.attention).toContain("launch_not_ready");
+    expect((await readHeartbeat(w.dirs))?.outcome).toBe("work");
+  });
+
+  test("past the deadline the next external action ends the tick tick_deadline (exit 2) with its heartbeat; nothing is sent, and the next tick delivers", async () => {
+    const w = await world();
+    const r = await claimed(w);
+    advance(w, 5);
+    w.linear.humanComment("i1", "use the v2 scoring API", OWNER, w.ctx.now());
+    advance(w, 5);
+    const wall = wallClock();
+    const n = sends(w);
+    const s = await runTick(w, { deadline: { at: wall.now() - 1, now: wall.now }, allowErrors: true });
+    expect(s).toMatchObject({ outcome: "error", reason: "tick_deadline" });
+    expect(sends(w)).toBe(n);
+    expect(await readHeartbeat(w.dirs)).toMatchObject({
+      outcome: "error",
+      reason: "tick_deadline",
+      exitCode: 2,
+    });
+    expect((await rec(w)).linear.lastSeenCommentAt).toBe(r.linear.lastSeenCommentAt); // the note stays unseen
+    advance(w, 5);
+    await runTick(w);
+    expect(sends(w)).toBe(n + 1);
+    expect(inboxNotes(r).some((t) => t.includes("use the v2 scoring API"))).toBe(true);
+  });
+
+  test("the claim and its one retry, each killed mid-wait, block launch_failed on the next tick without a third wait; a heartbeat every tick", async () => {
+    const w = await world();
+    labeledByOwner(w, todo("i1", "JRF-501"));
+    // the precheck killed during the wait: nothing after it runs (a TickAbort keeps only what the record already holds)
+    w.orca.onCall = (verb) => {
+      if (verb === "terminalWait") throw new TickAbort("error", "tick_deadline");
+    };
+    const first = await runTick(w, { allowErrors: true });
+    expect(first).toMatchObject({ outcome: "error", reason: "tick_deadline" });
+    expect((await rec(w)).coordinator.launchRetries).toBe(0);
+    advance(w, 5);
+    expect(await runTick(w, { allowErrors: true })).toMatchObject({ reason: "tick_deadline" });
+    const retried = await rec(w);
+    expect(retried).toMatchObject({ stage: "claimed" });
+    expect(retried.coordinator.launchRetries).toBe(1); // counted before the retry began, so the kill did not erase it
+    const waits = waitsOf(w).length;
+    expect(waits).toBe(2);
+    expect((await readHeartbeat(w.dirs))?.reason).toBe("tick_deadline");
+    advance(w, 5);
+    const s = await runTick(w);
+    w.orca.onCall = null;
+    expect(s.blocked).toEqual(["JRF-501"]);
+    expect(waitsOf(w)).toHaveLength(waits); // no third wait
+    expect((await rec(w)).history.at(-1)?.cause).toBe("launch_failed");
+    expect((await readHeartbeat(w.dirs))?.outcome).toBe("work");
+  });
+
+  test("a coordinator already working when its claim replays (the brief went out before the record was written) is started from its pane, never waited on or blocked", async () => {
+    const w = await world();
+    labeledByOwner(w, todo("i1", "JRF-501"));
+    w.orca.nextWaitSatisfied = false;
+    await runTick(w); // launch_not_ready: the claim entry stays open
+    const half = await rec(w);
+    half.coordinator.launchRetries = 1; // a retry ran already: a replay would otherwise block now
+    await writeRecord(w.dirs, half);
+    w.orca.setAgentState(wtOf(half).id, half.coordinator.paneKey ?? "", "working", w.ctx.now());
+    const waits = waitsOf(w).length;
+    const n = sends(w);
+    advance(w, 5);
+    const s = await runTick(w);
+    expect(s.blocked).toEqual([]);
+    expect(waitsOf(w)).toHaveLength(waits);
+    expect(sends(w)).toBe(n);
+    const r = await rec(w);
+    expect(r.stage).toBe("working");
+    expect(r.history.at(-1)).toMatchObject({ cause: "turn_started", evidence: "pane_working" });
+    const claims = (await w.ctx.journal.all()).filter((e) => e.kind === "claim");
+    expect(claims.map((e) => e.state)).toEqual(["confirmed"]);
+  });
+
+  test("…or from its own stage.json when its pane cannot tell", async () => {
+    const w = await world();
+    labeledByOwner(w, todo("i1", "JRF-501"));
+    w.orca.nextWaitSatisfied = false;
+    await runTick(w);
+    const half = await rec(w);
+    writeFileSync(
+      join(wtOf(half).path, ".wingmate", "stage.json"),
+      JSON.stringify({ pipelineStage: "plan", via: "gate", at: w.ctx.now() }),
+    );
+    advance(w, 5);
+    await runTick(w);
+    expect((await rec(w)).history.at(-1)).toMatchObject({ cause: "turn_started", evidence: "stage_json" });
   });
 });

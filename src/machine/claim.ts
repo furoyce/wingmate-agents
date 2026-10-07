@@ -31,7 +31,7 @@ import { isTickAbort } from "./guard";
 import { kitNonce, prepareLaunch } from "./launch";
 import { LinearWrites } from "./linearWrites";
 import { block } from "./release";
-import { waitForTui } from "./resume";
+import { assertWaitBudget, waitForTui } from "./resume";
 import { saveRecord, trackRecord } from "./save";
 import { addAttention, dropAttention, ensureAttempt, transition } from "./states";
 import { syncStatus } from "./status";
@@ -112,7 +112,6 @@ export async function claimIssue(ctx: Ctx, c: ClaimInput): Promise<WRecord> {
       throw err;
     }
     await ctx.journal.failed(entry.id, errorText(err));
-    r.coordinator.launchRetries += 1;
     addAttention(r, "claim_step_failed");
     await saveRecord(ctx, r);
     throw err;
@@ -641,9 +640,24 @@ async function staleOutbox(ctx: Ctx, r: WRecord): Promise<void> {
 }
 
 /**
+ * REL-1 (§5.4 step 5): a claim whose coordinator proved it started by itself — its pane working, or its own `stage.json` — while the
+ * claim entry was still open (the brief went out in a tick that ended before the record was written): `working`, the entry closed.
+ */
+export async function launchProven(ctx: Ctx, r: WRecord, entryId: string, how: string): Promise<void> {
+  await transition(ctx, r, "working", "turn_started", how);
+  ensureAttempt(ctx, r);
+  dropAttention(r, "launch_not_ready", "launch_unconfirmed", "claim_step_failed");
+  await ctx.journal.stepDone(entryId, "launch", { stage: how });
+  await ctx.journal.stepDone(entryId, "orcaMeta", null);
+  await ctx.journal.confirmed(entryId);
+  await saveRecord(ctx, r);
+}
+
+/**
  * Steps worktree → kit → launch → orcaMeta of §5.4. Each step is skipped when the record already proves it happened, so a crashed
  * claim replays without a second worktree or terminal (S7). A launch that never reaches tui-idle leaves the record `claimed` with
- * the failure journaled; the next tick waits on the same handle again.
+ * the failure journaled; the next tick waits on the same handle again. REL-1: its waits never run past the tick's deadline, and a
+ * replay counts itself (`launchRetries`) before it starts, so one the precheck killed mid-wait counts all the same.
  */
 export async function provisionAndLaunch(
   ctx: Ctx,
@@ -664,9 +678,9 @@ export async function provisionAndLaunch(
   const handle = r.coordinator.terminalHandle;
   if (!wt || !handle)
     throw new WingmateError("launch_failed", `${r.identifier}: no worktree or terminal after provisioning`);
+  assertWaitBudget(ctx);
   if (!(await waitForTui(ctx, r, handle))) {
     addAttention(r, "launch_not_ready");
-    r.coordinator.launchRetries += 1;
     await saveRecord(ctx, r);
     await ctx.journal.failed(entryId, "launch_not_ready");
     return;

@@ -56,6 +56,10 @@ long-lived `wingmate-dispatcher` worktree:
 5. It claims at most `claimsPerTick` (default 2) eligible issues, within the concurrency caps.
 6. It writes the queue and the heartbeat.
 
+A tick has `defaults.dispatcher.precheckTimeoutSec` less 60 s (180 s by default), counted from the precheck's start. No
+Orca wait runs past that deadline, no claim starts with less than 90 s left, and an external action after it ends the
+tick with `tick_deadline` (section 11), so Orca never has to kill the precheck.
+
 **Agents.** Each claimed issue gets one Claude coordinator in an Orca terminal of its own `wm-<id>` worktree. The
 coordinator is sandboxed by settings the dispatcher writes under `<state>/kit/<ID>/`. Agents hold no credentials:
 publishing, Linear writes and pushes are the dispatcher's.
@@ -233,7 +237,7 @@ first line is just `continue`. The issue then resumes in place.
 | Reason | Meaning | What to do |
 |---|---|---|
 | `owner_stop` | `wingmate stop` blocked it. | Re-queue it when you want the work to continue. |
-| `launch_failed` | The coordinator never started: a claim step failed twice, or the brief and one start nudge got no turn. | Look at the coordinator terminal in Orca (a dialog, an error), then re-queue. |
+| `launch_failed` | The coordinator never started: a claim step failed twice (a launch attempt cut off by the tick's deadline counts), or the brief and one start nudge got no turn. | Look at the coordinator terminal in Orca (a dialog, an error), then re-queue. |
 | `setup_failed` | The repository's `setup` command failed. The comment shows only the exit code. | Fix `setup` in `config/projects.yaml` or in the repository, then re-queue. |
 | `base_mismatch` | The base did not verify as GitHub's base commit. A new claim checks it in the repository's main checkout before Orca creates the worktree, so nothing was created or run. A re-queue that reuses a worktree checks it there, before anything runs. The comment names both commits and says which case it is: **behind GitHub** (a stale clone, attention `base_mismatch`); **not in the history of GitHub's** base, does not resolve, or a ref named after that commit or a replace ref (`refs/replace/…`) exists (possibly rewritten, attention `base_diverged`); or it **cannot be verified** (no such branch on GitHub, no usable main checkout in Orca). | Behind GitHub: run `git fetch origin` in the main checkout, then re-queue. Possibly rewritten: do not fetch first. Section 12 keeps the evidence. Cannot be verified: fix `repos.<name>.base` or the repository's main checkout in Orca, then re-queue. |
 | `kit_tampered` | A kit file changed, the worktree's `.git` file or `commondir` was redirected (`git_dir_tampered`), or a new worktree did not start at the verified commit (its HEAD read with Wingmate's own git), its HEAD or the replace refs could not be read, or a replace ref appeared while Orca created it. | Section 12. Treat it as a possible escape. |
@@ -261,7 +265,7 @@ Codes without † clear themselves once the condition passes. Codes marked † s
 |---|---|---|
 | `claim_step_failed` | A claim, replay or reroute step failed. The next tick replays it once, and a second failure blocks `launch_failed`. | Usually nothing. If it persists, run `doctor --quick` (`orca_reachable`) and read `ledger/<ID>.jsonl`. |
 | `claim_failed` (summary only) | The claim threw. The half-made claim keeps its slot and is replayed next tick. | As for `claim_step_failed`. |
-| `launch_not_ready` | The coordinator's screen did not become ready within the launch waits: 5 minutes, or 7 when the folder-trust dialog had to be answered. The next tick waits again, and a second failure blocks. | Look at the terminal in Orca (section 13, trust dialog). |
+| `launch_not_ready` | The coordinator's screen did not become ready within the launch waits: 120 s, then up to 180 s more (120 s more after answering the folder-trust dialog), never past the tick's deadline. The next tick waits again; a second launch attempt that does not start the coordinator blocks `launch_failed`, even when the precheck was cut off during that wait. | Look at the terminal in Orca (section 13, trust dialog). |
 | `launch_unconfirmed` | The brief was accepted, but no turn started. Later ticks accept the agent's own `stage.json` as proof; otherwise they send one start nudge, then block `launch_failed`. | Look at the terminal if it persists. |
 | `relaunch_failed` | Starting a successor session failed in Orca. The relaunch still counts. | Check Orca. A further exit leads to a handoff or a block. |
 | `launch_argv_missing` † | The record has no launch argv to relaunch from. | Re-queue the issue. |
@@ -368,9 +372,10 @@ the pilot projects either `eligible` or one of these reasons. Most reasons carry
 | `model_unresolved` | The provider CLI has no default model. |
 | `cap_worktrees`, `cap_inflight`, `cap_global`, `cap_project`, `cap_provider` | A concurrency cap (§9.5): 8 live `wm-` worktrees, 6 in flight, 3 working (1 per project, 2 per provider). The detail names what holds the slot. |
 
-The tick summary's `skipped` list adds four more reasons that never reach the queue file:
+The tick summary's `skipped` list adds five more reasons that never reach the queue file:
 
 - `claims_per_tick`: an eligible issue waits for the next tick;
+- `tick_budget`: an eligible issue waits for the next tick because less than 90 s of this tick were left;
 - `reconcile_only`: a reconcile-only tick claims nothing;
 - `stop_requested`: a stop covers the issue;
 - `record_changed`: another writer, such as `wingmate stop`, changed the record during the tick.
@@ -411,6 +416,18 @@ To fix it:
 - Coordinators in Orca terminals keep running while the dispatcher cannot see them.
 - `wingmate stop` still blocks every issue on disk while Orca is unreachable. It reports `could not verify stopped: …`
   and exits 1. Close those terminals once Orca is back.
+
+**A tick ran out of time (`tick_deadline`).** `status` shows `tick error (tick_deadline)` and the precheck exited 2.
+The tick passed its deadline (the precheck timeout less 60 s) and stopped before its next external action, after
+writing its heartbeat. What it was doing resumes next tick: a launch cut short counts as one of its two attempts, so a
+launch that never gets its screen ready blocks `launch_failed` on the next tick but one.
+
+- Once, after a slow tick (a cold `pnpm install` in a repository setup, a slow Linear or Orca): nothing to do.
+- Every tick: look at the issue in `claimed` with the oldest timers (`wingmate status`) and its `ledger/<ID>.jsonl`.
+  Warming the package store of a repository with a long setup helps; so does a longer
+  `defaults.dispatcher.precheckTimeoutSec` (`wingmate install` writes it into the automation).
+- If `heartbeat_fresh` warns while Orca's run history shows the precheck timing out, a tick was killed in a call that
+  hung past the 60 s margin. Read `logs/wingmate.log` for the last call it started.
 
 **Linear is down or rate-limited.** Ticks read first and abort before writing. Journaled writes replay later. A block
 decided while Linear was down shows `blocked_unposted` until its label and comment are posted. There is nothing to do.

@@ -12,7 +12,7 @@ import { stopRequested } from "../state/heartbeat";
 import type { Queue, SkipReason } from "../state/queue";
 import { type WRecord, archiveRecord, listRecords, newRecord, readRecord } from "../state/records";
 import { claimIssue } from "./claim";
-import type { Ctx } from "./context";
+import { type Ctx, remainingMs } from "./context";
 import { isRecordAbort, isTickAbort, recordCtx } from "./guard";
 import { refreshRepoSiblings } from "./launch";
 import type { Candidate, Reconciled } from "./reconcile";
@@ -23,6 +23,11 @@ import { syncStatus } from "./status";
 import type { TickOptions, TickSummary } from "./tick";
 
 type Pick = { provider: Coordinator } | { reason: SkipReason; detail: string };
+/**
+ * REL-1 (§4.3): a claim starts only while this much of the tick is left — its steps and one launch wait; an eligible issue that does not
+ * fit waits for the next tick (`tick_budget`, like `claims_per_tick`).
+ */
+const CLAIM_RESERVE_MS = 90_000;
 const isCoordinator = (p: string): p is Coordinator => p === "claude" || p === "codex";
 
 const unavailable = (a: Exclude<Availability, { available: true }>, p: string): Pick =>
@@ -209,6 +214,10 @@ export async function claimCandidates(
     item(c, project.key, null, null);
     if (claimsLeft <= 0) {
       s.skipped.push({ identifier: id, reason: s.reconcileOnly ? "reconcile_only" : "claims_per_tick" });
+      continue;
+    }
+    if (!opts.dryRun && remainingMs(ctx) < CLAIM_RESERVE_MS) {
+      s.skipped.push({ identifier: id, reason: "tick_budget" });
       continue;
     }
     if (await stopRequested(ctx.dirs, project.key, id)) {

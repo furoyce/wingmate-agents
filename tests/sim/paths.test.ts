@@ -206,11 +206,15 @@ describe("§5.4 step 5: an unconfirmed launch", () => {
     const first = await rec(w);
     expect(first.stage).toBe("claimed");
     expect(first.attention).toContain("launch_unconfirmed");
-    w.orca.nextSendStage = "turn_started";
+    // the brief's turn started after all: the pane shows the coordinator working
+    w.orca.setAgentState(first.worktree?.id ?? "", first.coordinator.paneKey ?? "", "working", w.ctx.now());
+    const n = sends(w);
     advance(w, 5);
     await runTick(w);
     const r = await rec(w);
     expect(r.stage).toBe("working");
+    expect(r.history.at(-1)).toMatchObject({ cause: "turn_started", evidence: "pane_working" });
+    expect(sends(w)).toBe(n); // no start nudge: the pane proved the start
     expect(r.attempts).toHaveLength(1);
     expect(r.attention).not.toContain("launch_unconfirmed");
   });

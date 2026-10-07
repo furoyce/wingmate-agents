@@ -92,6 +92,7 @@ export async function doHandoff(
   r.provider = next;
   r.coordinator.attempt += 1;
   r.coordinator.relaunches = 0;
+  r.coordinator.launchRetries = 0; // REL-1: launch retries are counted per claim entry; a handoff opens none
   r.coordinator.launch = { model: tier.model, effort: tier.effort };
   r.handoffs.total += 1;
   r.handoffs.thisCycle += 1;
@@ -160,6 +161,7 @@ export async function doReroute(
     argv: [],
     attempt: r.coordinator.attempt + 1,
     relaunches: 0,
+    launchRetries: 0, // REL-1: the reroute's own claim entry starts its retries afresh
   });
   for (const g of PIPELINE)
     r.gates[g] = {

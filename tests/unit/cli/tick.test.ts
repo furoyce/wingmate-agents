@@ -7,6 +7,7 @@ import { scanCommand } from "../../../src/cli/commands/scan";
 import { SummarySchema, tickCommand } from "../../../src/cli/commands/tick";
 import { main, parseArgv, reportError } from "../../../src/cli/index";
 import type { Ctx } from "../../../src/machine/context";
+import { tickBudgetMs } from "../../../src/machine/tick";
 import { OrcaError } from "../../../src/orca/cli";
 import { WingmateError } from "../../../src/shared/errors";
 import { listRecords } from "../../../src/state/records";
@@ -45,6 +46,35 @@ describe("wingmate tick", () => {
     expect(printed).toMatchObject({ outcome: "work", claims: ["JRF-501"] });
     expect(lines[0]).not.toContain("SECRET");
     expect(lines[0]).not.toContain("ticket text");
+  });
+
+  test("REL-1: the tick's deadline counts from the command's start, so a slow context build leaves no time to claim (tick_budget)", async () => {
+    const w = await makeWorld();
+    addLabeledByOwner(w.linear, todo("i1", "JRF-501"));
+    const real = Date.now;
+    let wall = real();
+    Date.now = () => wall;
+    try {
+      const { d, lines } = deps(w);
+      const build = d.build;
+      d.build = async (o) => {
+        wall += 150_000; // the token mint and team read took 150 s of the 180 s budget
+        return build(o);
+      };
+      expect(await tickCommand(parseArgv(["tick", "--precheck"]), d)).toBe(1);
+      const printed = SummarySchema.parse(JSON.parse(lines[0] ?? ""));
+      expect(printed.claims).toEqual([]);
+      expect(printed.skipped).toContainEqual({ identifier: "JRF-501", reason: "tick_budget" });
+    } finally {
+      Date.now = real;
+    }
+    expect(await listRecords(w.dirs)).toEqual([]);
+  });
+
+  test("REL-1: the tick's budget is the precheck timeout less 60 s (§4.3's 180 s by default), never under 30 s", () => {
+    const cfg = (precheckTimeoutSec: number) =>
+      ({ defaults: { dispatcher: { precheckTimeoutSec } } }) as Parameters<typeof tickBudgetMs>[0];
+    expect([240, 300, 60].map((t) => tickBudgetMs(cfg(t)))).toEqual([180_000, 240_000, 30_000]);
   });
 
   test("--dry-run builds a read-only context and changes nothing", async () => {

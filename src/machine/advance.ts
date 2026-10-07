@@ -9,7 +9,7 @@ import { resolveTier } from "../policy/providers";
 import { errorCode, errorText } from "../shared/errors";
 import { stopRequested } from "../state/heartbeat";
 import type { WRecord } from "../state/records";
-import { claimLinear, openClaimEntry, provisionAndLaunch } from "./claim";
+import { claimLinear, launchProven, openClaimEntry, provisionAndLaunch } from "./claim";
 import type { Ctx } from "./context";
 import { allowDepsGrant } from "./grants";
 import { isRecordAbort, isTickAbort, recordCtx } from "./guard";
@@ -25,7 +25,7 @@ import { addAttention, dropAttention, stageOf } from "./states";
 import { addNote, flushNotes, syncStatus } from "./status";
 import { type Advance, type StepOut, WORKING } from "./step";
 import type { Budget, TickSummary } from "./tick";
-import { timers, budgets, integrity, liveness } from "./watch";
+import { timers, agentProgressed, budgets, integrity, liveness } from "./watch";
 
 const ACTIVE = new Set(["claimed", "working", "awaiting-human", "review", "blocked"]);
 /** §7.4: the active records an owner's Blocked (or Needs-Human) label pauses. */
@@ -164,18 +164,42 @@ async function overrides(a: Advance): Promise<StepOut> {
   return "stop";
 }
 
+/** REL-1 (4): how a claimed coordinator proved it started by itself — its pane working, or its own `stage.json` — or null. */
+async function startedByItself(a: Advance): Promise<string | null> {
+  if (!a.r.coordinator.terminalHandle || !a.r.worktree) return null;
+  if (a.live === "working") return "pane_working";
+  return (await agentProgressed(a.r.worktree.path)) ? "stage_json" : null;
+}
+
 /**
  * §6.6 replay of the record's own unfinished claim (or reroute) entry — F4: keyed to its current cycle and attempt, never a stale
- * one — the same steps again; a second failure blocks (`launch_failed`; `block` closes the entry once the record is `blocked`).
+ * one — the same steps again, at most once; a second failure blocks (`launch_failed`; `block` closes the entry once the record is
+ * `blocked`). REL-1: a coordinator already working is started, never waited on or blocked (its brief went out in a tick that ended
+ * before the record was written). The retry counts itself (`launchRetries`) before it starts, so an open entry after a retry is the
+ * second failure however that retry ended — a journaled step failure, a throw, or the precheck killing it mid-wait.
  */
 async function replayClaim(a: Advance): Promise<StepOut> {
   const { ctx, r } = a;
   if (r.stage !== "claimed" || a.ro) return "next";
   const open = await openClaimEntry(ctx, r);
   if (!open) return "next";
-  if (open.attempts >= 2) {
+  const how = await startedByItself(a);
+  if (how) {
+    await launchProven(ctx, r, open.id, how);
+    a.dirty = true;
+    return "next";
+  }
+  const tries = Math.max(open.attempts, r.coordinator.launchRetries + 1);
+  if (tries >= 2) {
     const next = "check Orca, then move the issue back to Todo to re-queue it";
-    await block(ctx, r, a.issue, "launch_failed", `a claim step failed ${open.attempts} times`, next);
+    await block(
+      ctx,
+      r,
+      a.issue,
+      "launch_failed",
+      `the launch was attempted ${tries} times without a start`,
+      next,
+    );
     a.s.blocked.push(r.identifier);
     a.dirty = true;
     return "stop";
@@ -191,6 +215,8 @@ async function replayClaim(a: Advance): Promise<StepOut> {
     return "stop";
   }
   a.budget.resumes -= 1;
+  r.coordinator.launchRetries += 1; // REL-1: the retry counts before anything can fail or the precheck kill it
+  await saveRecord(ctx, r);
   try {
     if (open.steps.find((x) => x.name === "linear")?.state === "pending")
       await claimLinear(ctx, r, a.issue, open.id);
@@ -199,7 +225,6 @@ async function replayClaim(a: Advance): Promise<StepOut> {
   } catch (e) {
     if (isTickAbort(e)) throw e;
     await ctx.journal.failed(open.id, errorText(e));
-    r.coordinator.launchRetries += 1;
     addAttention(r, "claim_step_failed");
     ctx.log.warn({ issue: r.identifier, code: errorCode(e), err: errorText(e) }, "claim replay failed");
   }

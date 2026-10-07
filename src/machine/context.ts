@@ -42,6 +42,15 @@ export interface SweepResult {
 /** §13.3(i) process sweep; `spare` keeps the process whose command line carries it (the parked coordinator) and its ancestors. */
 export type SweepFn = (paths: string[], opts?: { spare?: string }) => Promise<SweepResult>;
 
+/**
+ * REL-1 (§4.3): the tick's wall-clock bound. After `at` every external action ends the tick (`tick_deadline`, through the guard), and no
+ * wait runs past it; `now` is the clock it is read with (tests inject one).
+ */
+export interface TickDeadline {
+  at: number;
+  now(): number;
+}
+
 export interface Ctx {
   cfg: Config;
   dirs: Dirs;
@@ -62,7 +71,13 @@ export interface Ctx {
   toolchainPaths: string[];
   sweep: SweepFn;
   publishImpl(): Promise<{ publish: PublishFn }>;
+  /** REL-1: set by `tick` for its own run; absent outside a tick (no bound). */
+  deadline?: TickDeadline;
 }
+
+/** REL-1: what is left of the tick's time in ms (unbounded outside a tick). */
+export const remainingMs = (ctx: Ctx): number =>
+  ctx.deadline ? ctx.deadline.at - ctx.deadline.now() : Number.POSITIVE_INFINITY;
 
 export interface BuildCtxInput {
   cfg: Config;

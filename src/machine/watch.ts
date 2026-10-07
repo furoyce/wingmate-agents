@@ -26,7 +26,7 @@ async function started(a: Advance, how: string): Promise<void> {
 }
 
 /** Whether the agent itself wrote `.wingmate/stage.json` (a verb did; the dispatcher's own deliveries say `via: dispatcher`). */
-async function agentProgressed(wt: string): Promise<boolean> {
+export async function agentProgressed(wt: string): Promise<boolean> {
   const t = await readText(join(wt, ".wingmate", "stage.json"));
   if (!t) return false;
   try {

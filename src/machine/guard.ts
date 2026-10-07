@@ -3,10 +3,13 @@
 import { stopRequested } from "../state/heartbeat";
 import type { Ctx } from "./context";
 
-/** Raised by the tick's guard; the tick turns it into its outcome instead of an error. */
+/**
+ * Raised by the tick's guard; the tick turns it into its outcome instead of an error. REL-1: a tick past its deadline ends with outcome
+ * `error`, reason `tick_deadline` (exit 2), its heartbeat written — never killed mid-step by the precheck timeout.
+ */
 export class TickAbort extends Error {
   constructor(
-    readonly outcome: "lock_lost" | "stopped",
+    readonly outcome: "lock_lost" | "stopped" | "error",
     readonly reason: string,
   ) {
     super(`tick aborted: ${reason}`);
