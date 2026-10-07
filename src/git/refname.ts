@@ -13,3 +13,14 @@ export function isBranchName(name: string): boolean {
   }
   return name.split("/").every((part) => !part.startsWith(".") && !part.endsWith(".lock"));
 }
+
+/**
+ * F7: the configured base (`repos.<name>.base`) as the one ref it names — `origin/<b>` is `refs/remotes/origin/<b>`, a full `refs/…`
+ * name stays as it is, a bare name is a local branch. A short name is never handed to `rev-parse`: git disambiguates it across
+ * `$GIT_DIR/<name>`, `refs/`, `refs/tags/`, `refs/heads/` and `refs/remotes/` (gitrevisions(7)), and an agent may create refs in the
+ * shared git dir (only `refs/heads/<base>*` and `refs/remotes/**` are denied to it), so a shadowing ref would move the base.
+ */
+export function qualifiedBase(base: string): string {
+  if (base.startsWith("refs/")) return base;
+  return base.includes("/") ? `refs/remotes/${base}` : `refs/heads/${base}`;
+}

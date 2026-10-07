@@ -3,6 +3,7 @@
 import { basename } from "node:path";
 import { z } from "zod";
 import { type ProjectConfig, type RepoConfig, repoFor } from "../config/schema";
+import { qualifiedBase } from "../git/refname";
 import { discoverGitLinks } from "../git/trust";
 import { pointerBrief } from "../kit/brief";
 import { installKit } from "../kit/install";
@@ -151,7 +152,9 @@ async function recordedGitDirs(
  * §5.4 step 3: the issue worktree — the one already linked to the issue when it exists (a previous cycle, or a crash after
  * `worktree create`), else a new one. C22: its git dirs come from its own gitfile and commondir, accepted only in a linked
  * worktree's layout and, for a reused worktree, only as an earlier cycle recorded them; the agent's sandbox grants and denies are
- * spelled from them, so a mismatch blocks the issue (`kit_tampered`) before any git runs there. False when it blocked.
+ * spelled from them, so a mismatch blocks the issue (`kit_tampered`) before any git runs there. F7: `baseSha` is read from the base's
+ * full ref, and a worktree this claim created must start at it (Orca's `head`), else `kit_tampered` before kit, setup or launch.
+ * False when it blocked.
  */
 async function provisionWorktree(
   ctx: Ctx,
@@ -186,19 +189,31 @@ async function provisionWorktree(
     await block(ctx, r, issue, "kit_tampered", detail, next);
     return false;
   }
-  const baseSha = await ctx.git.revParse(t, repo.base).catch(async (e: unknown) => {
+  // F7: the full ref, never the short name git would disambiguate across the shared git dir's ref namespaces
+  const base = qualifiedBase(repo.base);
+  const resolved = await ctx.git.revParse(t, base).catch((e: unknown) => {
     if (errorCode(e) === "git_dir_tampered") throw e; // moved since they were read: the claim step fails and replays
-    ctx.log.warn({ issue: r.identifier, err: errorText(e) }, "base ref unresolved; using the worktree head");
-    return shown.head;
+    ctx.log.warn({ issue: r.identifier, base, err: errorText(e) }, "base ref unresolved");
+    return null;
   });
   r.worktree = {
     id: created.id,
     path: shown.path,
     branch: shown.branch.replace(/^refs\/heads\//, ""),
-    baseSha,
+    baseSha: resolved ?? shown.head,
     gitCommonDir: t.commonDir,
     gitdirName: basename(t.gitDir),
   };
+  if (!existing && (resolved === null || shown.head !== resolved)) {
+    // F7: a worktree this claim created must start at the base commit — its setup runs outside the sandbox on the premise that it
+    // holds nothing an agent made (C27). Short commit names only: the detail is the blocked comment's.
+    const short = (sha: string | null) => (sha ? sha.slice(0, 12) : "unresolved");
+    const detail = `the new worktree starts at ${short(shown.head)}, not at ${base} (${short(resolved)}): a ref in the repository's shared git dir may stand in for the base`;
+    const next =
+      "inspect the refs under the repository's .git named like the base (tags, heads, refs/), remove this worktree, then move the issue back to Todo to re-queue it";
+    await block(ctx, r, issue, "kit_tampered", detail, next);
+    return false;
+  }
   await ctx.journal.stepDone(entryId, "worktree", {
     id: created.id,
     branch: shown.branch,

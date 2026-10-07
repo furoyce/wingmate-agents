@@ -102,8 +102,9 @@ export class GitCli implements GitPort {
   private async hasCommit(at: GitAt, sha: string): Promise<boolean> {
     return (await this.run(at, ["rev-parse", "--verify", "--quiet", `${sha}^{commit}`], 30_000)).code === 0;
   }
+  /** F7: the ref is never read as an option; callers pass a full ref (`qualifiedBase`) or HEAD, never a short name to disambiguate. */
   async revParse(at: GitAt, ref: string): Promise<string> {
-    return (await this.g(at, ["rev-parse", "--verify", `${ref}^{commit}`])).trim();
+    return (await this.g(at, ["rev-parse", "--verify", "--end-of-options", `${ref}^{commit}`])).trim();
   }
   async commonDir(at: GitAt): Promise<string> {
     return (await this.g(at, ["rev-parse", "--path-format=absolute", "--git-common-dir"])).trim();

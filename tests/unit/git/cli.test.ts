@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { GhCli } from "../../../src/gh/cli";
 import { GitCli, type Runner } from "../../../src/git/cli";
+import { qualifiedBase } from "../../../src/git/refname";
 import type { GitTarget } from "../../../src/ports";
 import { type RunResult, run } from "../../../src/shared/exec";
 
@@ -215,6 +216,36 @@ describe("GitCli", () => {
     writeFileSync(join(t.path, ".git"), `gitdir: ${join(fake, "worktrees", "wm-jrf-9")}\n`);
     await expect(g.addedLines(t, sha, sha)).rejects.toMatchObject(tampered);
     expect(calls).toBe(0);
+  });
+  test("F7: a ref made in another namespace of the shared git dir shadows origin/main for a short-name rev-parse; the qualified base never follows it", async () => {
+    const { dir, t } = await linkedTarget();
+    const remote = (await git(["-C", dir, "rev-parse", "main"])).trim();
+    const agent = (await git(["-C", dir, "rev-parse", "feature"])).trim(); // a commit an agent made
+    await git(["-C", dir, "update-ref", "refs/remotes/origin/main", remote]);
+    const g = new GitCli();
+    expect(await g.revParse(t, "origin/main")).toBe(remote);
+    // none of these is denied to an agent's sandbox (only refs/heads/<base>* and refs/remotes/** are)
+    for (const shadow of ["refs/tags/origin/main", "refs/heads/origin/main", "refs/origin/main"]) {
+      await git(["-C", dir, "update-ref", shadow, agent]);
+      expect({ shadow, sha: await g.revParse(t, "origin/main") }).toEqual({ shadow, sha: agent }); // git's disambiguation
+      expect({ shadow, sha: await g.revParse(t, qualifiedBase("origin/main")) }).toEqual({
+        shadow,
+        sha: remote,
+      });
+      await git(["-C", dir, "update-ref", "-d", shadow]);
+    }
+    const seen: string[][] = [];
+    const runner: Runner = async (argv) => {
+      seen.push(argv);
+      return ok(`${remote}\n`);
+    };
+    await new GitCli(runner).revParse(t, "refs/remotes/origin/main");
+    expect(seen[0]?.slice(5)).toEqual([
+      "rev-parse",
+      "--verify",
+      "--end-of-options",
+      "refs/remotes/origin/main^{commit}",
+    ]);
   });
   test("C22: pinned reads in a linked worktree give real git's answers", async () => {
     const { base, t } = await linkedTarget();

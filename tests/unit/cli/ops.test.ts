@@ -16,6 +16,7 @@ import type { InstallOptions, InstallResult } from "../../../src/ops/install";
 import { readPause } from "../../../src/ops/pause";
 import { WingmateError } from "../../../src/shared/errors";
 import { VERSION } from "../../../src/shared/version";
+import { stopRequested } from "../../../src/state/heartbeat";
 import { readRecord } from "../../../src/state/records";
 import { fakeExec } from "../../fakes/fakeExec";
 import { type World, labeledByOwner, runTick, todo, world } from "../../sim/harness";
@@ -190,6 +191,53 @@ describe("wingmate stop (CLI)", () => {
     expect(t.builds).toEqual([]);
     expect(await stopCommand(parseArgv(["stop", "--project", "nope"]), t.deps)).toBe(2);
     expect(t.err.at(-1)).toContain("unknown project nope");
+    expect(t.builds).toEqual([]); // refused from the config alone: nothing built, no flag written
+    expect(await stopRequested(w.dirs)).toBe(false);
+  });
+  test("F2: the stop flag is on disk before the live context (Linear, Orca) is built — every scope, and doctor --rotate", async () => {
+    const w = await world();
+    labeledByOwner(w, todo("i1", "JRF-564"));
+    await runTick(w);
+    const t = io(w);
+    const flagAtBuild: boolean[] = [];
+    const deps = {
+      ...t.deps,
+      build: async (o: RealCtxOptions) => {
+        // what a running tick checks for this issue: a slow Linear read here never delays the kill switch
+        flagAtBuild.push(await stopRequested(w.dirs, "bouncr", "JRF-564"));
+        return t.deps.build(o);
+      },
+    };
+    expect(await stopCommand(parseArgv(["stop", "--issue", "JRF-564"]), deps)).toBe(0);
+    expect(await stopCommand(parseArgv(["stop", "--project", "bouncr"]), deps)).toBe(0);
+    expect(await stopCommand(parseArgv(["stop", "--all"]), deps)).toBe(0);
+    expect(await doctorCommand(parseArgv(["doctor", "--rotate"]), deps)).toBe(0);
+    expect(flagAtBuild).toEqual([true, true, true, true]);
+    expect(await stopRequested(w.dirs, "bouncr", "JRF-564")).toBe(false); // each run released its own entry
+    expect((await readRecord(w.dirs, "JRF-564"))?.history.at(-1)).toMatchObject({
+      to: "blocked",
+      cause: "owner_stop",
+    });
+    // the ledgered stop names the entry the CLI wrote (one entry per run, never a second one)
+    const stops = readFileSync(join(w.dirs.ledger, "global.jsonl"), "utf8")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l) as { type: string; data: { flagCleared: boolean } })
+      .filter((e) => e.type === "stop");
+    expect(stops.map((e) => e.data.flagCleared)).toEqual([true, true, true, true]);
+  });
+  test("F2: when the live context cannot be built the flag stays set (ticks stay stopped) and the owner is told", async () => {
+    const w = await world();
+    const t = io(w);
+    const deps = {
+      ...t.deps,
+      build: async () => {
+        throw new WingmateError("config_invalid", "broken");
+      },
+    };
+    await expect(stopCommand(parseArgv(["stop", "--all"]), deps)).rejects.toThrow(/broken/);
+    expect(await stopRequested(w.dirs)).toBe(true);
+    expect(t.err.join("\n")).toContain("stop flag KEPT");
   });
   test("--issue blocks that record (exit 0) and prints identifiers only; --json prints the report", async () => {
     const w = await world();

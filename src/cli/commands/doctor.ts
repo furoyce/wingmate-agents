@@ -1,10 +1,12 @@
 // src/cli/commands/doctor.ts — `wingmate doctor [--quick] [--notify-test <issue>] [--confirm-notify] [--rotate] [--json]` (§13.3, §7.5).
 import { type DoctorOptions, type DoctorReport, doctor } from "../../ops/doctor";
-import { stop } from "../../ops/stop";
+import { type StopReport, requestScopedStop, stop } from "../../ops/stop";
 import { errorCode } from "../../shared/errors";
 import { IDENTIFIER_RE } from "../../shared/ids";
+import { homeDirs } from "../../shared/paths";
 import type { Argv } from "../index";
-import { type OpsDeps, UsageError, buildOps, liveDoctorOptions, readFlags } from "../ops";
+import { type OpsCtx, UsageError, buildOps, liveDoctorOptions, readFlags } from "../ops";
+import { FLAG_KEPT, type StopCommandDeps } from "./stop";
 import { stderr, stdout } from "./tick";
 
 const USAGE =
@@ -28,9 +30,46 @@ export function renderChecks(r: DoctorReport): string[] {
   return lines;
 }
 
-export interface DoctorCommandDeps extends OpsDeps {
+export type DoctorCommandDeps = StopCommandDeps & {
   /** Merged over the live options (tests inject the command runner and the probes). */
   doctorOverrides?: Partial<DoctorOptions>;
+};
+
+const ROTATE_REASON = "credential rotation (wingmate doctor --rotate)";
+
+/** `--rotate`: `stop --all` (F2: its flag written before the live context is built), the cached token dropped, the steps printed. */
+async function rotate(
+  deps: DoctorCommandDeps,
+  json: boolean,
+  out: (l: string) => void,
+  err: (l: string) => void,
+) {
+  const at = (deps.now ?? (() => new Date().toISOString()))();
+  const requested = await requestScopedStop(deps.dirs ?? homeDirs(), { kind: "all" }, ROTATE_REASON, at);
+  let ctx: OpsCtx;
+  let report: StopReport;
+  try {
+    ctx = await buildOps(deps, { readOnly: false, linearOptional: true });
+    report = await stop(ctx, { kind: "all" }, ROTATE_REASON, { requested });
+  } catch (e) {
+    err(FLAG_KEPT);
+    throw e;
+  }
+  const dropped = ctx.tokens
+    ? await ctx.tokens.invalidate().then(
+        () => "dropped",
+        (e: unknown) => `not dropped (${errorCode(e)})`,
+      )
+    : "no token store";
+  if (json) out(JSON.stringify({ stop: report, token: dropped }, null, 2));
+  else {
+    out(
+      `stopped: ${report.stopped.join(", ") || "none"}; flag ${report.flagCleared ? "cleared" : "KEPT (re-run stop)"}`,
+    );
+    out(`cached Linear token: ${dropped}`);
+    for (const s of ROTATION_STEPS) out(s);
+  }
+  return report.flagCleared && report.failed.length === 0 ? 0 : 1;
 }
 
 export async function doctorCommand(argv: Argv, deps: DoctorCommandDeps = {}): Promise<number> {
@@ -54,25 +93,8 @@ export async function doctorCommand(argv: Argv, deps: DoctorCommandDeps = {}): P
     err(e.usage);
     return 2;
   }
+  if (flags.bool.has("rotate")) return rotate(deps, flags.bool.has("json"), out, err);
   const ctx = await buildOps(deps, { readOnly: false, linearOptional: true });
-  if (flags.bool.has("rotate")) {
-    const report = await stop(ctx, { kind: "all" }, "credential rotation (wingmate doctor --rotate)");
-    const dropped = ctx.tokens
-      ? await ctx.tokens.invalidate().then(
-          () => "dropped",
-          (e: unknown) => `not dropped (${errorCode(e)})`,
-        )
-      : "no token store";
-    if (flags.bool.has("json")) out(JSON.stringify({ stop: report, token: dropped }, null, 2));
-    else {
-      out(
-        `stopped: ${report.stopped.join(", ") || "none"}; flag ${report.flagCleared ? "cleared" : "KEPT (re-run stop)"}`,
-      );
-      out(`cached Linear token: ${dropped}`);
-      for (const s of ROTATION_STEPS) out(s);
-    }
-    return report.flagCleared && report.failed.length === 0 ? 0 : 1;
-  }
   const nt = flags.value.get("notify-test");
   const report = await doctor(
     ctx,

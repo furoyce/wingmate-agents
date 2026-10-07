@@ -77,6 +77,11 @@ export class FakeOrca implements OrcaPort {
   automations: AutomationRow[] = [];
   /** What `worktree current` reports for any cwd (the checkout `install` and `doctor` run from). */
   current = { repoId: "repo-self", worktreeId: "wt-self", path: "/wt/self" };
+  /**
+   * What `worktree show` reports as a worktree's `head`. FakeGit resolves every base ref to `basesha`, so an honest create starts
+   * there; F7 tests set another commit (a ref an agent made shadowing the base name).
+   */
+  startCommit = "basesha";
   private seq = 0;
 
   private tookEffect(verb: string) {
@@ -159,7 +164,7 @@ export class FakeOrca implements OrcaPort {
     await this.rec("worktreeShow", id);
     const r = this.rows.get(id);
     if (!r) throw new Error("no worktree");
-    return { id, path: r.path, branch: r.branch, head: "deadbeef" };
+    return { id, path: r.path, branch: r.branch, head: this.startCommit };
   }
   async worktreeSet(id: string, a: unknown) {
     await this.rec("worktreeSet", { id, a });

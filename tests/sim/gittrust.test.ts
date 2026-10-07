@@ -99,6 +99,79 @@ describe("C22: the worktree's git links (§13.3 d)", () => {
   });
 });
 
+describe("F7: the claim's base is the fully qualified ref, and a worktree this claim created must start at it", () => {
+  /** The api repo's setup leaves a trace on disk when it runs (it runs outside the sandbox). */
+  function tracedSetup(w: World): string {
+    const runs = join(w.root, "setup-runs.txt");
+    const api = w.cfg.projects.bouncr?.repos.api;
+    if (!api) throw new Error("api repo missing");
+    api.setup = ["sh", "-c", `echo ran >> ${runs}`];
+    return runs;
+  }
+  async function blockedAtClaim(w: World): Promise<WRecord> {
+    labeledByOwner(w, todo("i1", "JRF-501"));
+    expect((await runTick(w)).claims).toEqual(["JRF-501"]);
+    const r = await rec(w);
+    expect(r.stage).toBe("blocked");
+    expect(r.history.at(-1)?.cause).toBe("kit_tampered");
+    return r;
+  }
+
+  test("the base is resolved as refs/remotes/origin/main, never by the short name git disambiguates across ref namespaces", async () => {
+    const w = await world();
+    const asked: string[] = [];
+    const revParse = w.git.revParse.bind(w.git);
+    w.git.revParse = async (at, ref) => {
+      asked.push(ref);
+      return revParse(at, ref);
+    };
+    const r = await claimed(w);
+    expect(asked).toContain("refs/remotes/origin/main");
+    expect(asked).not.toContain("origin/main");
+    expect(wtOf(r).baseSha).toBe("basesha");
+  });
+
+  test("a new worktree that does not start at the base commit is blocked kit_tampered before the kit, the setup or a terminal", async () => {
+    const w = await world();
+    const runs = tracedSetup(w);
+    w.orca.startCommit = "0123456789abcdef0123456789abcdef01234567"; // Orca started it elsewhere (a shadowing ref, a stale branch)
+    const r = await blockedAtClaim(w);
+    expect(r.history.at(-1)?.evidence).toContain("refs/remotes/origin/main");
+    expect(r.worktree?.id).toBeTruthy(); // recorded, so the blocked comment names it and stop/release cover it
+    expect(await ledgerOf(w, "kit_installed")).toEqual([]);
+    expect(() => readFileSync(runs, "utf8")).toThrow();
+    expect(terminalCreates(w)).toBe(0);
+    expect(labels(w)).toContain("Blocked");
+    const comment = w.linear.comments.find((c) => c.body.startsWith("<!-- wingmate:blocked -->"))?.body ?? "";
+    expect(comment).toContain("refs/remotes/origin/main");
+    expect(comment).not.toContain("0123456789abcdef0123456789abcdef01234567"); // short commit names only
+  });
+
+  test("a base that does not resolve on a new worktree blocks the same way: its start cannot be verified", async () => {
+    const w = await world();
+    const runs = tracedSetup(w);
+    const revParse = w.git.revParse.bind(w.git);
+    w.git.revParse = async (at, ref) => {
+      if (ref !== "HEAD") throw new Error("git rev-parse failed (128): fatal: Needed a single revision");
+      return revParse(at, ref);
+    };
+    await blockedAtClaim(w);
+    expect(await ledgerOf(w, "kit_installed")).toEqual([]);
+    expect(() => readFileSync(runs, "utf8")).toThrow();
+    expect(terminalCreates(w)).toBe(0);
+  });
+
+  test("a reused worktree is never compared with its start commit: its head carries the earlier cycle's commits", async () => {
+    const w = await world();
+    const r = await claimed(w);
+    await released(w, r);
+    w.orca.startCommit = "moved-by-the-first-cycle";
+    advance(w, 5);
+    expect((await runTick(w)).claims).toEqual(["JRF-501"]);
+    expect(await rec(w)).toMatchObject({ cycle: 2, stage: "working" });
+  });
+});
+
 describe("C27: the repo setup runs only in a worktree this claim created (§5.4 step 4, amended)", () => {
   test("a fresh claim runs it once; a re-claim that reuses the worktree never runs it again (the setup runs outside the sandbox)", async () => {
     const w = await world();
@@ -214,5 +287,80 @@ describe("C28: launch.json allowDeps follows the allow-deps grant (§13.3 e)", (
     expect((await runTick(w)).blocked).toEqual(["JRF-501"]);
     expect((await rec(w)).history.at(-1)?.cause).toBe("kit_tampered");
     expect(await ledgerOf(w, "kit_rehashed")).toEqual([]);
+  });
+
+  /** The record parked on a question (the window in which an approver's allow-deps grant counts); returns the parked record. */
+  async function parkedOnQuestion(w: World): Promise<WRecord> {
+    const r = await claimed(w);
+    idleNow(w, r);
+    const wt = wtOf(r);
+    writeFileSync(join(wt.path, ".wingmate", "q.md"), "May I add the zod dependency?");
+    await writeIntent(wt.path, {
+      issue: "JRF-501",
+      kind: "ask",
+      payload: {
+        questionFile: ".wingmate/q.md",
+        options: ["yes", "no"],
+        recommend: 1,
+        append: null,
+        reask: null,
+      },
+    });
+    advance(w, 5);
+    expect((await runTick(w)).parked).toEqual(["JRF-501"]);
+    advance(w, 5);
+    return rec(w);
+  }
+  /** The approver grants allow-deps and answers the question (the next tick delivers both). */
+  function grantAndAnswer(w: World, parked: WRecord): void {
+    w.linear.setLabels("i1", [...labels(w), "allow-deps"], OWNER, w.ctx.now());
+    w.linear.humanComment("i1", "1", OWNER, w.ctx.now(), parked.questions[0]?.commentId ?? null);
+    advance(w, 5);
+  }
+  const launchFile = (r: WRecord) => join(wtOf(r).path, ".wingmate", "launch.json");
+  /** launch.json rewritten as the tick writes it (two-space JSON, keys in place) with `edit` applied. */
+  function rewriteLaunch(r: WRecord, edit: (raw: Record<string, unknown>) => Record<string, unknown>): void {
+    const raw = JSON.parse(readFileSync(launchFile(r), "utf8")) as Record<string, unknown>;
+    writeFileSync(launchFile(r), JSON.stringify(edit(raw), null, 2));
+  }
+
+  test("F6: an agent's edit of another launch.json field, written exactly as the tick writes it with allowDeps unchanged, is never re-pinned: blocked kit_tampered, no kit_rehashed", async () => {
+    const w = await world();
+    const r = await claimed(w);
+    rewriteLaunch(r, (raw) => ({
+      ...raw,
+      quota: { ...(raw.quota as object), weeklyMax: 100, sessionMax: 100 },
+      verifyCross: false,
+    }));
+    advance(w, 5);
+    expect((await runTick(w)).blocked).toEqual(["JRF-501"]);
+    expect((await rec(w)).history.at(-1)).toMatchObject({
+      cause: "kit_tampered",
+      evidence: ".wingmate/launch.json",
+    });
+    expect(await ledgerOf(w, "kit_rehashed")).toEqual([]);
+  });
+
+  test("F6: an agent that edits another field and pre-sets allowDeps to a grant made meanwhile is blocked too: the grant never launders the edit", async () => {
+    const w = await world();
+    const parked = await parkedOnQuestion(w);
+    rewriteLaunch(parked, (raw) => ({ ...raw, allowDeps: true, forbiddenPaths: [] }));
+    grantAndAnswer(w, parked);
+    expect((await runTick(w)).blocked).toEqual(["JRF-501"]);
+    expect((await rec(w)).history.at(-1)?.cause).toBe("kit_tampered");
+    expect(await ledgerOf(w, "kit_rehashed")).toEqual([]);
+  });
+
+  test("F6: crash repair still works — launch.json written for a new grant but never pinned (the tick died) is pinned by the next tick, as the pinned content with only allowDeps changed", async () => {
+    const w = await world();
+    const parked = await parkedOnQuestion(w);
+    rewriteLaunch(parked, (raw) => ({ ...raw, allowDeps: true })); // what the crashed tick wrote
+    grantAndAnswer(w, parked);
+    expect((await runTick(w)).resumes).toEqual(["JRF-501"]);
+    expect((await ledgerOf(w, "kit_rehashed")).map((e) => e.data.allowDeps)).toEqual([true]);
+    advance(w, 5);
+    await runTick(w);
+    expect((await rec(w)).stage).toBe("working");
+    expect(launchOf(await rec(w)).allowDeps).toBe(true);
   });
 });

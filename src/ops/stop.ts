@@ -1,5 +1,6 @@
 // src/ops/stop.ts — §13.3(i) the kill switch: a direct action that needs neither the automation nor a tick and never waits on
-// tick.lock. (1) stop-requested.json first, so a running tick aborts before its next external action; (2) without any lock, each
+// tick.lock. (1) stop-requested.json first, so a running tick aborts before its next external action — the CLI writes it before it
+// even builds the live context, whose Linear read can take a minute (F2: `requestScopedStop`); (2) without any lock, each
 // record's agents are stopped (worker-stop, then worker-abandon when not proven exited; terminal close for the issue and child
 // worktrees) and (3) its processes swept; with `--all` also every `wm-` worktree with a working agent no record covers; (4) each record
 // is blocked `owner_stop` with one blocked comment, every write under the record lock (compare-and-write, retried when a tick wrote
@@ -14,11 +15,18 @@ import { readTracked } from "../machine/save";
 import { scanText } from "../policy/secrets";
 import type { FleetSnapshot, LinearIssue } from "../ports";
 import { errorCode, errorText } from "../shared/errors";
+import type { Dirs } from "../shared/paths";
 import { readText } from "../state/fs";
 import { releaseStop, requestStop } from "../state/heartbeat";
 import { RecordSchema, type WRecord, readRecord } from "../state/records";
 
 export type StopScope = { kind: "all" } | { kind: "project"; key: string } | { kind: "issue"; key: string };
+/** One stop's entry in stop-requested.json: its scope, key and time identify it, so the stop releases only its own. */
+export interface StopEntry {
+  scope: StopScope["kind"];
+  key?: string;
+  at: string;
+}
 export interface StopReport {
   scope: StopScope;
   /** Records now `blocked` (`owner_stop`). */
@@ -166,10 +174,30 @@ async function sweepUnrecorded(
   }
 }
 
-export async function stop(ctx: Ctx, scope: StopScope, reason: string): Promise<StopReport> {
+/**
+ * (1) This stop's flag entry. `wingmate stop` and `doctor --rotate` write it before they build the live context (F2), whose eager
+ * Linear read may retry for a minute or more, and hand the entry to `stop`.
+ */
+export async function requestScopedStop(
+  dirs: Dirs,
+  scope: StopScope,
+  reason: string,
+  at: string,
+): Promise<StopEntry> {
+  const entry: StopEntry = { scope: scope.kind, ...(scope.kind === "all" ? {} : { key: scope.key }), at };
+  await requestStop(dirs, { ...entry, reason: stopReason(reason) });
+  return entry;
+}
+
+/** `o.requested`: the entry the caller already wrote with `requestScopedStop` (no second one is written). */
+export async function stop(
+  ctx: Ctx,
+  scope: StopScope,
+  reason: string,
+  o: { requested?: StopEntry } = {},
+): Promise<StopReport> {
   const why = stopReason(reason);
-  const entry = { scope: scope.kind, ...(scope.kind === "all" ? {} : { key: scope.key }), at: ctx.now() };
-  await requestStop(ctx.dirs, { ...entry, reason: why }); // (1) before anything else
+  const entry = o.requested ?? (await requestScopedStop(ctx.dirs, scope, reason, ctx.now())); // (1) before anything else
   const report: StopReport = {
     scope,
     stopped: [],

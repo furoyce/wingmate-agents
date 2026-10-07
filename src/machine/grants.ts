@@ -58,10 +58,12 @@ async function launchText(wt: string): Promise<{ text: string; raw: Record<strin
 /**
  * C28, a step of the advance before answers are delivered: `.wingmate/launch.json` `allowDeps` follows the grant rule — as the claim
  * found it, and again whenever it changes (an approver granting it in answer to a question, or removing the label). launch.json is
- * integrity-protected, so it is rewritten only while the rest of the kit hashes as pinned and launch.json itself either as pinned or
- * exactly as the grant rule writes it (a tampered kit is left for the integrity step to block, never overwritten). The new hash is
- * then pinned in spawn's copy (`.wingmate/integrity.json`) and in the ledger (`kit_rehashed`), in that order, so a crash between the
- * writes is repaired by the next tick instead of reading as tampering.
+ * integrity-protected, so it is rewritten only while the rest of the kit hashes as pinned and launch.json itself hashes as pinned
+ * (a tampered kit is left for the integrity step to block, never overwritten or re-pinned). The new hash is then pinned in spawn's
+ * copy (`.wingmate/integrity.json`) and in the ledger (`kit_rehashed`), in that order. F6: a crash between those writes leaves
+ * launch.json as the grant rule wrote it but unpinned; the next tick pins it only when it is the pinned content with nothing but
+ * `allowDeps` changed — written back with the other value it must hash exactly as pinned — so an edit of any other field (quota,
+ * verifyCross, forbiddenPaths, …) is never re-pinned, however it is formatted.
  */
 export async function allowDepsGrant(a: Advance): Promise<StepOut> {
   const { ctx, r } = a;
@@ -81,8 +83,13 @@ export async function allowDepsGrant(a: Advance): Promise<StepOut> {
     if (errorCode(e) === "integrity_unverifiable") return "next"; // the integrity step surfaces it
     throw e;
   }
-  const launchOk = !changed.includes(LAUNCH) || launch.text === want;
-  if (!launchOk || changed.some((c) => c !== LAUNCH)) return "next";
+  // `want` is built from the file's own fields: trusted only where the pinned hash vouches for them (F6)
+  const pinned = !changed.includes(LAUNCH);
+  const unpinnedRewrite =
+    launch.text === want &&
+    contentDigest(JSON.stringify({ ...launch.raw, allowDeps: !granted }, null, 2), false) ===
+      expected[LAUNCH];
+  if ((!pinned && !unpinnedRewrite) || changed.some((c) => c !== LAUNCH)) return "next";
   let dir: string;
   try {
     dir = await worktreeDir(wt.path, ".wingmate");

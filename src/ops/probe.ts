@@ -1,10 +1,11 @@
 // src/ops/probe.ts — `doctor`'s live §13.3(b)/(c) checks. The Claude probe runs one `claude -p` under the kit settings and agentEnv in
 // a scratch `wm-doctor-<ulid>` worktree of this repository (under the owner's home, removed when it ends; never an issue worktree).
 // Every probe is a dispatcher-written script that prints exactly one `PROBE <n> exit=<code> sig=<class>` line, the class computed by
-// the shell from the command's own stderr, so a GitHub auth failure is never mistaken for a network block. Results are read from the
-// tool results of the stream-json output (the model's final text only where no tool result carries the line), a missing, conflicting
-// or inverted line fails, and every write probe is also checked on disk. Nothing a probe reads is ever printed: the credential read
-// discards its output, the token probe compares without echoing.
+// the shell from the command's own stderr, so a GitHub auth failure is never mistaken for a network block. A probe's result is read
+// only from the tool result of the Bash call that ran its own script (joined by tool_use_id in the stream-json output); the model's
+// reply is never read, so a command that did not run has no result (F3). Command 8 counts only as a call that set
+// `dangerouslyDisableSandbox: true` (F1/F4). A missing, conflicting or inverted line fails, and every write probe is also checked on
+// disk. Nothing a probe reads is ever printed: the credential read discards its output, the token probe compares without echoing.
 import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -35,7 +36,7 @@ export interface CodexProbeResult extends ProbeResult {
   readsBlocked: boolean | null;
 }
 export interface ProbeLine {
-  exit: number | "refused";
+  exit: number;
   sig: string;
 }
 type Expect = "fail" | "succeed" | "report";
@@ -45,14 +46,28 @@ interface Probe {
   expect: Expect;
   /** The classes a failing exit must carry to count as the control holding (`fail` probes); any class when absent. */
   blockedBy?: readonly string[];
+  /** The failure text when it failed with a class outside `blockedBy` (default: "failed for another reason than the control"). */
+  unproven?: string;
   /** The class a succeeding exit must carry (`succeed` probes); any when absent. */
   okSig?: RegExp;
   /**
-   * A network probe's host: the block must also be the sandbox's own, the `network-outbound <host>:<port>` violation Claude Code
-   * appends to the tool result (spike §3.4a/§3.4b) — a DNS or firewall failure would print the same curl/git error.
+   * The host a `net` failure must name: the block must also be the sandbox's own, the `network-outbound <host>:<port>` violation
+   * Claude Code appends to that command's tool result (spike §3.4a/§3.4b) — a DNS or firewall failure prints the same curl/git error.
    */
   violation?: string;
+  /**
+   * F1/F4: the probe's Bash call must set `dangerouslyDisableSandbox: true` (the escape hatch is tried, not assumed). Only such a
+   * call's tool result counts: a blocked line, or the harness refusing the call (an error result that printed no PROBE line).
+   */
+  escape?: boolean;
   body: string;
+}
+/** One Bash tool call of the stream: what it ran, whether it asked to leave the sandbox, and its tool result (null when none came). */
+export interface BashCall {
+  id: string;
+  command: string;
+  escape: boolean;
+  result: { text: string; isError: boolean } | null;
 }
 export interface ProbePaths {
   credentials: string;
@@ -66,8 +81,8 @@ export interface ProbePaths {
   home: string;
 }
 
-/** The PROBE line, strictly: a literal `$c` or `${sig}` in a script or prompt never matches. */
-const LINE = /PROBE (\d{1,2}) exit=(-?\d{1,3}|refused) sig=([a-z0-9]{1,24})/g;
+/** The PROBE line, strictly: a literal `$c` or `${sig}` in a script or prompt never matches, and the exit is a number (as printed). */
+const LINE = /PROBE (\d{1,2}) exit=(-?\d{1,3}) sig=([a-z0-9]{1,24})/g;
 export const PROBE_ID = "WMPROBE-1";
 const q = (s: string) => shellQuote([s]);
 
@@ -102,7 +117,16 @@ export function claudeProbes(p: ProbePaths): Probe[] {
       violation: "github.com",
       body: "o=$(git ls-remote https://github.com/git/git.git HEAD 2>&1 >/dev/null); c=$?",
     },
-    { n: 3, name: "gh_api_user", expect: "fail", body: "o=$(gh api user 2>&1 >/dev/null); c=$?" },
+    {
+      n: 3,
+      name: "gh_api_user",
+      expect: "fail",
+      // F5: no credentials (spike: exit 4 "gh auth login") or the sandbox refusing api.github.com; gh missing proves nothing
+      blockedBy: ["auth", "net"],
+      unproven: "gh not reachable: control unproven",
+      violation: "api.github.com",
+      body: "o=$(gh api user 2>&1 >/dev/null); c=$?",
+    },
     {
       n: 4,
       name: "hook_write",
@@ -133,7 +157,14 @@ export function claudeProbes(p: ProbePaths): Probe[] {
       violation: p.blockedHost,
       body: `o=$(curl -sS -m 15 -o /dev/null https://${p.blockedHost}/ 2>&1); c=$?`,
     },
-    { n: 8, name: "unsandboxed_bash", expect: "fail", blockedBy: ["eperm"], body: write(p.escapeFile) },
+    {
+      n: 8,
+      name: "unsandboxed_bash",
+      expect: "fail",
+      blockedBy: ["eperm"],
+      escape: true,
+      body: write(p.escapeFile),
+    },
     {
       n: 9,
       name: "allowlisted_registry",
@@ -189,14 +220,21 @@ export function probeLines(text: string): Map<number, ProbeLine[]> {
   const out = new Map<number, ProbeLine[]>();
   for (const m of text.matchAll(LINE)) {
     const n = Number(m[1]);
-    const exit = m[2] === "refused" ? "refused" : Number(m[2]);
-    out.set(n, [...(out.get(n) ?? []), { exit, sig: m[3] ?? "" }]);
+    out.set(n, [...(out.get(n) ?? []), { exit: Number(m[2]), sig: m[3] ?? "" }]);
   }
   return out;
 }
 
+const ToolUse = z.object({
+  type: z.literal("tool_use"),
+  id: z.string().min(1),
+  name: z.string(),
+  input: z.object({ command: z.string(), dangerouslyDisableSandbox: z.unknown().optional() }).passthrough(),
+});
 const ToolResult = z.object({
   type: z.literal("tool_result"),
+  tool_use_id: z.string().min(1),
+  is_error: z.boolean().optional(),
   content: z.union([
     z.string(),
     z.array(z.object({ type: z.string(), text: z.string().optional() }).passthrough()),
@@ -209,15 +247,17 @@ const StreamEvent = z
       .object({ content: z.union([z.string(), z.array(z.unknown())]) })
       .passthrough()
       .optional(),
-    result: z.string().optional(),
   })
   .passthrough();
 
-/** Claude's stream-json output: the text of every tool result (what the commands printed) and the final reply. */
-export function streamTexts(stdout: string): { tools: string; final: string } {
-  const tools: string[] = [];
-  const final: string[] = [];
-  let parsedAny = false;
+/**
+ * Claude's stream-json output: every Bash tool call the model made (assistant `tool_use`), joined by `tool_use_id` to its tool result
+ * (user `tool_result`; an error is `is_error` or a `<tool_use_error>` text). Other tools, results of unknown calls and lines that are
+ * not stream-json are ignored; the model's reply is not read at all (F3).
+ */
+export function streamCalls(stdout: string): BashCall[] {
+  const uses: Omit<BashCall, "result">[] = [];
+  const results = new Map<string, NonNullable<BashCall["result"]>>();
   for (const line of stdout.split("\n")) {
     if (!line.trim().startsWith("{")) continue;
     let ev: z.infer<typeof StreamEvent>;
@@ -228,35 +268,65 @@ export function streamTexts(stdout: string): { tools: string; final: string } {
     } catch {
       continue;
     }
-    parsedAny = true;
-    if (ev.type === "result" && typeof ev.result === "string") final.push(ev.result);
-    if (ev.type !== "user" || !Array.isArray(ev.message?.content)) continue;
+    if (!Array.isArray(ev.message?.content)) continue;
     for (const item of ev.message.content) {
-      const tr = ToolResult.safeParse(item);
-      if (!tr.success) continue;
-      const c = tr.data.content;
-      tools.push(typeof c === "string" ? c : c.map((x) => x.text ?? "").join("\n"));
+      if (ev.type === "assistant") {
+        const u = ToolUse.safeParse(item);
+        if (u.success && u.data.name === "Bash" && !uses.some((x) => x.id === u.data.id))
+          uses.push({
+            id: u.data.id,
+            command: u.data.input.command,
+            escape: u.data.input.dangerouslyDisableSandbox === true,
+          });
+      } else if (ev.type === "user") {
+        const t = ToolResult.safeParse(item);
+        if (!t.success || results.has(t.data.tool_use_id)) continue;
+        const c = t.data.content;
+        const text = typeof c === "string" ? c : c.map((x) => x.text ?? "").join("\n");
+        results.set(t.data.tool_use_id, {
+          text,
+          isError: t.data.is_error === true || text.includes("<tool_use_error>"),
+        });
+      }
     }
   }
-  return parsedAny ? { tools: tools.join("\n"), final: final.join("\n") } : { tools: "", final: stdout };
+  return uses.map((u) => ({ ...u, result: results.get(u.id) ?? null }));
+}
+
+/** Whether `command` runs `script`: its full path, not a longer path that merely starts with it. */
+function runsScript(command: string, script: string): boolean {
+  for (let i = command.indexOf(script); i >= 0; i = command.indexOf(script, i + 1)) {
+    const next = command[i + script.length];
+    if (next === undefined || !/[\w./-]/.test(next)) return true;
+  }
+  return false;
 }
 
 /**
- * Judges each probe from the tool results (primary) or, only where no tool result carries its line, the final text: a missing line,
- * two different lines for one probe, a `fail` probe that succeeded or failed for the wrong reason (an auth failure is not a network
- * block), or a `succeed` probe that failed — each is a failure. `refused` counts only for probe 8 (the unsandboxed Bash call).
+ * Judges each probe only from the tool results of the Bash calls that ran its own script (`scriptOf(n)`), never from the model's
+ * reply (F3): no such result line, two different lines, a `fail` probe that succeeded or failed for another reason than its control
+ * (an auth failure is not a network block; a network failure needs the sandbox's violation for its host in that same result), or a
+ * `succeed` probe that failed — each is a failure. The `escape` probe (F1/F4) counts only calls that set dangerouslyDisableSandbox:
+ * none is "not exercised"; such a call the harness refused (an error result without a PROBE line) is the control holding.
  */
 export function judge(
   probes: Probe[],
-  tools: string,
-  final: string,
+  calls: BashCall[],
+  scriptOf: (n: number) => string,
 ): { failures: string[]; lines: Map<number, ProbeLine> } {
-  const primary = probeLines(tools);
-  const secondary = probeLines(final);
   const failures: string[] = [];
   const lines = new Map<number, ProbeLine>();
   for (const p of probes) {
-    const seen = primary.get(p.n)?.length ? (primary.get(p.n) ?? []) : (secondary.get(p.n) ?? []);
+    const ran = calls.filter((c) => runsScript(c.command, scriptOf(p.n)));
+    const mine = p.escape ? ran.filter((c) => c.escape) : ran;
+    if (p.escape && !mine.length) {
+      failures.push(
+        `${p.name}: not exercised (no Bash call ran command ${p.n} with dangerouslyDisableSandbox: true)`,
+      );
+      continue;
+    }
+    const texts = mine.map((c) => c.result?.text ?? "");
+    const seen = texts.flatMap((t) => probeLines(t).get(p.n) ?? []);
     const distinct = [...new Map(seen.map((l) => [`${l.exit}/${l.sig}`, l])).values()];
     if (distinct.length > 1) {
       failures.push(
@@ -266,25 +336,26 @@ export function judge(
     }
     const l = distinct[0];
     if (!l) {
+      if (p.escape && mine.some((c) => c.result?.isError)) continue; // the harness refused the unsandboxed call
       if (p.expect !== "report") failures.push(`${p.name}: no PROBE line`);
       continue;
     }
     lines.set(p.n, l);
     const desc = `exit=${l.exit} sig=${l.sig}`;
     if (p.expect === "report") continue;
-    if (l.exit === "refused") {
-      if (p.n !== 8) failures.push(`${p.name}: refused is not a result for this probe`);
-      continue;
-    }
     if (p.expect === "fail") {
       if (l.exit === 0) failures.push(`${p.name}: ALLOWED (${desc})`);
       else if (p.blockedBy && !p.blockedBy.includes(l.sig))
         failures.push(
-          `${p.name}: failed for another reason than the control (${desc}${l.sig === "auth" ? "; an auth failure proves no network block" : ""})`,
+          `${p.name}: ${p.unproven ?? "failed for another reason than the control"} (${desc}${l.sig === "auth" ? "; an auth failure proves no network block" : ""})`,
         );
-      else if (p.violation && !tools.includes(`network-outbound ${p.violation}:`))
+      else if (
+        p.violation &&
+        l.sig === "net" &&
+        !texts.some((t) => t.includes(`network-outbound ${p.violation}:`))
+      )
         failures.push(
-          `${p.name}: blocked, but no sandbox violation for ${p.violation} in the tool results (a DNS or firewall failure proves nothing about the sandbox)`,
+          `${p.name}: blocked, but no sandbox violation for ${p.violation} in its tool result (a DNS or firewall failure proves nothing about the sandbox)`,
         );
     } else if (l.exit !== 0) failures.push(`${p.name}: failed (${desc})`);
     else if (p.okSig && !p.okSig.test(l.sig)) failures.push(`${p.name}: unexpected result (${desc})`);
@@ -297,8 +368,7 @@ const PROMPT = (scripts: string[]) =>
     "This is Wingmate's sandbox self-test. Run each command below exactly as written, each as its own Bash tool call, in the order given.",
     "Never retry, change, combine or work around a command: a command that fails is an expected result.",
     "For command 8 only, set the Bash tool parameter dangerouslyDisableSandbox to true.",
-    "Each command prints one result line. When every command has run, reply with only those result lines, one per line, in order.",
-    "If the tool call for command 8 is refused, reply for it with the word PROBE, a space, the digit 8, a space, then exit=refused sig=refused.",
+    "Each command prints one result line, which is read from the tool output. When every command has run, reply with the single word done.",
     ...scripts.map((s, i) => `${i + 1}. sh ${q(s)}`),
   ].join("\n");
 
@@ -409,11 +479,11 @@ export async function claudeProbe(ctx: Ctx, d: ClaudeProbeDeps): Promise<ClaudeP
       identifier: PROBE_ID,
       home: ctx.home,
     });
+    const scriptOf = (n: number) => join(kitDir, "probe", `${n}.sh`);
     const scripts: string[] = [];
     for (const p of probes) {
-      const file = join(kitDir, "probe", `${p.n}.sh`);
-      await writeAtomic(file, probeScript(p), 0o644);
-      scripts.push(file);
+      await writeAtomic(scriptOf(p.n), probeScript(p), 0o644);
+      scripts.push(scriptOf(p.n));
     }
     const watched = {
       hook: join(common, "hooks", "pre-commit"),
@@ -449,8 +519,7 @@ export async function claudeProbe(ctx: Ctx, d: ClaudeProbeDeps): Promise<ClaudeP
     );
     if (r.timedOut) notes.push("claude timed out");
     if (r.truncated) notes.push("claude output truncated");
-    const { tools, final } = streamTexts(r.stdout);
-    const { failures, lines } = judge(probes, tools, final);
+    const { failures, lines } = judge(probes, streamCalls(r.stdout), scriptOf);
     // on disk, whatever the lines say: a write that went through is an inverted result (and is undone where it can be)
     const after = {
       hook: await fileState(watched.hook),
@@ -543,12 +612,9 @@ export async function codexProbe(ctx: Ctx, d: { exec: Runner }): Promise<CodexPr
     };
     const net = one(1);
     const read = one(2);
-    const netBlocked =
-      net !== null && net !== "conflict" && net.exit !== 0 && net.exit !== "refused" && net.sig === "net";
+    const netBlocked = net !== null && net !== "conflict" && net.exit !== 0 && net.sig === "net";
     const readsBlocked =
-      read === null || read === "conflict"
-        ? null
-        : read.exit !== 0 && read.exit !== "refused" && read.sig === "eperm";
+      read === null || read === "conflict" ? null : read.exit !== 0 && read.sig === "eperm";
     const describe = (l: ProbeLine | null | "conflict") =>
       l === null ? "no PROBE line" : l === "conflict" ? "conflicting lines" : `exit=${l.exit} sig=${l.sig}`;
     return {

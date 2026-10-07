@@ -1,6 +1,6 @@
 // tests/unit/git/refname.test.ts — the only branch names Wingmate pushes to or names on a command line (§13.3 d, h)
 import { describe, expect, test } from "bun:test";
-import { isBranchName } from "../../../src/git/refname";
+import { isBranchName, qualifiedBase } from "../../../src/git/refname";
 
 describe("isBranchName (git check-ref-format --branch)", () => {
   test("ordinary branch names pass", () => {
@@ -44,5 +44,14 @@ describe("isBranchName (git check-ref-format --branch)", () => {
       "a\u007fb",
     ];
     for (const n of bad) expect({ n, ok: isBranchName(n) }).toEqual({ n, ok: false });
+  });
+});
+
+describe("qualifiedBase (F7)", () => {
+  test("the configured base names exactly one ref: origin/<b> is refs/remotes/origin/<b>, a full ref stays, a bare name is a local branch", () => {
+    expect(qualifiedBase("origin/main")).toBe("refs/remotes/origin/main");
+    expect(qualifiedBase("upstream/release/1.2")).toBe("refs/remotes/upstream/release/1.2");
+    expect(qualifiedBase("refs/heads/main")).toBe("refs/heads/main");
+    expect(qualifiedBase("main")).toBe("refs/heads/main");
   });
 });
