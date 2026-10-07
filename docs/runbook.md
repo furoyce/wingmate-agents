@@ -328,7 +328,7 @@ A refusal pushes nothing:
 | `nothing_to_publish` | The branch has no commits beyond its base. | The coordinator commits its work, or asks you. |
 | `path_guard` | A changed path matches `forbiddenPaths`: in the net diff or in any pushed commit, either side of a rename, deletions included. Nothing lifts this guard. | The commits are rewritten without the path. Change protected files yourself. |
 | `secret_detected` | A secret-like token appears in an added line, a pushed commit or its message, or the PR or completion text. | The unpushed commits are rewritten (amend or squash); a fix committed on top does not clear it. Rotate the secret if it is real. |
-| `dependency_policy` | A manifest or lockfile changed without an approver-granted `allow-deps`. The grant counts when it was added before the claim, or while the issue waited on a question. | Add `allow-deps` while the issue is parked, or drop the dependency change. |
+| `dependency_policy` | A manifest or lockfile changed without an approver-granted `allow-deps`. The grant counts when it was added before the claim, or while the issue waited on a question. With the grant, any dependency change passes: slice 1 does not check the packages themselves (section 16). | Add `allow-deps` while the issue is parked, or drop the dependency change. With `allow-deps`, review the lockfile diff yourself. |
 | `validate_stale` | `validate` is not PASS at the commit to publish, or its report does not show exit 0 for every pinned gate command. | The coordinator re-runs `gate validate` at HEAD. |
 | `diff_too_large` | The diff or the pushed history exceeds the 8 MiB that the guards read in full. | Make the branch smaller (drop generated or binary files). |
 | `push_rejected` | The push was rejected as non-fast-forward. Wingmate never force-pushes. | Put the new commits on top of the remote tip, or ask you. |
@@ -646,6 +646,14 @@ The rest are slice-1 gaps:
 - **Mention markup is unverified.** The @mention markup in questions has not been checked live; your subscription to the
   issue is what carries the notification.
 - **`planVerify` is not cross-checked against Orca** (`plan_verify_unverified`).
+- **`allow-deps` admits any dependency change.** §13.3(e) wants each changed package checked when the grant is given:
+  registry, exact version, a publish date at least 14 days old, at least 1,000 weekly downloads unless named in the
+  grant, no install script outside `allowedBuildScripts`, and the `pnpm audit --prod` or `npm audit` result (§8.2 stage
+  6). None of that is built in slice 1, so with the grant, the publish guard passes any manifest or lockfile change and
+  the PR shows no evidence about the packages. Lifecycle scripts stay off by default during installs in the worktree
+  (the kit writes `ignore-scripts=true` into each package root's `.npmrc`, which an agent could edit). Grant `allow-deps`
+  only when you will review every added or upgraded package in the lockfile diff yourself: age, popularity and install
+  scripts. The checks come in slice 2 or 4.
 - **Deny rules are prefix matches.** An agent can get around them with `sh -c` or absolute paths. The sandbox is the
   hard layer.
 - **A stale clone blocks claims.** After you merge a Wingmate PR on GitHub, the next claim in that repository blocks
