@@ -315,7 +315,7 @@ Rules:
 | From → to | Cause (section) |
 |---|---|
 | `claimed → working` | brief accepted, `turn_started` (§5.4 step 5) |
-| `claimed → blocked` | `launch_failed`, `setup_failed`, `launch_not_ready` twice (§5.4) |
+| `claimed → blocked` | `launch_failed`, `setup_failed`, `launch_not_ready` twice (§5.4); also `kit_tampered`, `cascade_exhausted`, `provider_unavailable`, `grace_expired_no_cascade` before the first turn (amended 2026-10-06) |
 | `working → awaiting-human` | `ask` intent executed (§6.3 step 2) |
 | `working → review` | `finish` intent published (§13.3 d) |
 | `working → claimed` | handoff (§9.4) or reroute (§10.3): same worktree, next attempt |
@@ -466,7 +466,10 @@ orcaReachable, counts }` and print the same object as JSON (identifiers and enum
 printing; exit 2 if validation fails).
 
 ### 6.6 Idempotency and the journal
-Every external write is a journal entry at `~/.local/share/wingmate/journal/<ulid>.json`: `{ id, issue, kind, key,
+Every Linear write, and every multi-step operation, is a journal entry at `~/.local/share/wingmate/journal/<ulid>.json`
+(amended 2026-10-06 for the pilot: single Orca mutations are made idempotent by record state instead — the handle is
+persisted right after `terminal create`, a create that timed out is adopted by title on replay, terminal closes are
+bulk `--all`, and a worktree the fleet no longer lists is never removed twice): `{ id, issue, kind, key,
 input, state: intent|acted|confirmed|abandoned|poisoned, attempts, createdAt, actedAt, confirmedAt, receipt,
 error }`. Multi-step operations (claim, publish, handoff, stop) are one entry with ordered steps. Keys and confirm
 rules by kind are in Appendix D. Replay order: journal before any new work; an entry failing three replays becomes
@@ -1207,8 +1210,8 @@ Zustand, TanStack Query, Lucide (Recharts lazily, v1.1).
    loads a recorded snapshot, runs axe, and asserts the performance budget.
 
 ### 14.3 Invariants asserted after every simulated tick, and the minimum scenario set
-Invariants: I1 at most one live coordinator per issue worktree; I2 no Linear or Orca write without a journal entry
-that reaches `confirmed`; I3 zero agent launches, resumes or `terminal send`s while an issue is `awaiting-human`
+Invariants: I1 at most one live coordinator per issue worktree; I2 no Linear write without a journal entry that reaches
+`confirmed`, and no Orca mutation repeated after a crash (record-state idempotency, §6.6); I3 zero agent launches, resumes or `terminal send`s while an issue is `awaiting-human`
 unless a verified answer exists; I4 exactly one status comment and at most one completion comment per issue; I5 an
 owner change made between read and write is never overwritten; I6 transitions follow only §5.2.1 edges; I7 caps
 are never exceeded by a claim; I8 `unverifiable` liveness never causes stop, relaunch, handoff or `blocked`; I9 no
