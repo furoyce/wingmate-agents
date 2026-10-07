@@ -88,6 +88,23 @@ describe("wingmate tick", () => {
     expect(JSON.parse(h.lines[0] ?? "")).toMatchObject({ outcome: "lock_held", reason: null });
   });
 
+  test("F10: the summary's quota field is closed — provider names, the enum code quota_stale and a whole number of minutes only", async () => {
+    const w = await makeWorld();
+    const { d, lines } = deps(w);
+    await tickCommand(parseArgv(["tick", "--precheck"]), d);
+    const printed = SummarySchema.parse(JSON.parse(lines[0] ?? ""));
+    expect(printed.quota).toEqual({});
+    const withQuota = (quota: unknown) => SummarySchema.safeParse({ ...printed, quota }).success;
+    expect(withQuota({ claude: { attention: ["quota_stale"], ageMin: 420 } })).toBe(true);
+    expect(withQuota({ claude: { attention: ["quota_stale(claude, 420)"], ageMin: 420 } })).toBe(false);
+    expect(withQuota({ "SECRET TITLE": { attention: ["quota_stale"], ageMin: 1 } })).toBe(false);
+    expect(withQuota({ claude: { attention: ["quota_stale"], ageMin: "420" } })).toBe(false);
+    expect(withQuota({ claude: { attention: [], ageMin: 1 } })).toBe(false);
+    expect(withQuota({ claude: { attention: ["quota_stale"], ageMin: 1, note: "x" } })).toBe(false);
+    const { quota: _drop, ...without } = printed;
+    expect(SummarySchema.safeParse(without).success).toBe(false); // every summary says it, empty or not
+  });
+
   test("a valued or repeated-with-a-value --dry-run/--precheck is a usage error (exit 2), never a guess", async () => {
     const w = await makeWorld();
     const { d, readOnly } = deps(w);

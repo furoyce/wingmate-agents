@@ -207,6 +207,11 @@ export function renderStatusMd(r: StatusReport): string {
     "",
     `Dispatcher: ${d ? `${d.kind} ${d.outcome}${d.reason ? ` (${d.reason})` : ""} at ${d.at}, ${d.durationMs} ms, exit ${d.exitCode}` : "no heartbeat yet"}`,
   ];
+  // F10 (§9.1): the last heartbeat's quota notices, per provider (advisory: a stale snapshot still counts as available)
+  const quota = Object.entries(d?.quota ?? {}).flatMap(([p, n]) =>
+    n ? [`${p} ${n.attention.join(", ")} (snapshot ${n.ageMin} min old)`] : [],
+  );
+  if (quota.length) lines.push(`Quota: ${quota.join("; ")}`);
   if (r.pausedScopes.length) lines.push(`Paused: ${r.pausedScopes.join(", ")}`);
   if (r.stopRequested) lines.push("Stop requested: yes (ticks abort until the stop finishes)");
   if (r.problems.length) lines.push(`Problems: ${r.problems.join(", ")}`);

@@ -1,11 +1,14 @@
 // tests/unit/ops/status.test.ts — §13.2 `wingmate status`: dispatcher block, queue with skip reasons, per-issue rows, `--cost`;
 // identifiers and enum codes only.
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { SummarySchema } from "../../../src/cli/commands/tick";
+import { scan } from "../../../src/machine/scan";
 import { setPause } from "../../../src/ops/pause";
 import { renderStatusMd, statusReport } from "../../../src/ops/status";
-import { requestStop } from "../../../src/state/heartbeat";
+import type { QuotaNotices } from "../../../src/policy/quota";
+import { readHeartbeat, requestStop } from "../../../src/state/heartbeat";
 import { readRecord, writeRecord } from "../../../src/state/records";
 import { labeledByOwner, runTick, todo, world } from "../../sim/harness";
 
@@ -55,6 +58,45 @@ describe("status", () => {
     expect(rep.cost?.byProvider.claude?.costUsd).toBe(0.5);
     expect(rep.cost?.byProvider.codex?.agentMinutes).toBe(7);
     expect(rep.cost?.byProvenance["measured-transcript"]?.tokens).toBe(1000);
+  });
+});
+
+describe("status — Task 13 F10: quota_stale per provider (§9.1, Review Focus 3)", () => {
+  const STALE: QuotaNotices = { claude: { attention: ["quota_stale"], ageMin: 420 } };
+
+  test("a stale quota snapshot still claims, and quota_stale shows per provider with its age in the tick summary, the heartbeat (tick and scan) and status (--json and Markdown)", async () => {
+    const w = await world();
+    const nowMs = Date.parse(w.ctx.now());
+    const { claude, codex } = w.orca.rateLimits;
+    if (!claude || !codex) throw new Error("rate limits missing");
+    claude.updatedAt = nowMs - 7 * 3_600_000; // older than quota.maxSnapshotAgeMin (360 min)
+    codex.updatedAt = nowMs - 5 * 60_000;
+    labeledByOwner(w, todo("i1", "JRF-921"));
+    const s = await runTick(w);
+    expect(s.claims).toEqual(["JRF-921"]); // advisory, never a veto
+    expect(s.quota).toEqual(STALE);
+    expect(SummarySchema.parse(s).quota).toEqual(STALE); // the printed summary carries it under its closed schema
+    expect((await readHeartbeat(w.dirs))?.quota).toEqual(STALE);
+    const rep = await statusReport(w.ctx);
+    expect(JSON.parse(JSON.stringify(rep)).dispatcher.quota).toEqual(STALE); // `status --json`
+    expect(renderStatusMd(rep)).toContain("Quota: claude quota_stale (snapshot 420 min old)");
+    const dry = await scan(w.ctx);
+    expect(dry.summary.quota).toEqual(STALE);
+    expect(await readHeartbeat(w.dirs)).toMatchObject({ kind: "scan", quota: STALE });
+  });
+
+  test("fresh snapshots record nothing: an empty quota object and no Quota line; a heartbeat written before F10 still parses", async () => {
+    const w = await world();
+    const nowMs = Date.parse(w.ctx.now());
+    for (const p of Object.values(w.orca.rateLimits)) p.updatedAt = nowMs - 60_000;
+    const s = await runTick(w);
+    expect(s.quota).toEqual({});
+    expect(renderStatusMd(await statusReport(w.ctx))).not.toContain("Quota:");
+    const old = JSON.parse(readFileSync(join(w.dirs.state, "heartbeat.json"), "utf8"));
+    old.quota = undefined;
+    writeFileSync(join(w.dirs.state, "heartbeat.json"), JSON.stringify(old));
+    expect((await statusReport(w.ctx)).dispatcher?.quota).toEqual({});
+    expect((await statusReport(w.ctx)).problems).toEqual([]);
   });
 });
 

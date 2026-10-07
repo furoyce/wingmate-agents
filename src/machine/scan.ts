@@ -20,6 +20,7 @@ export async function scan(ctx: Ctx): Promise<{ exitCode: 0 | 1 | 2; summary: Ti
     linearAuth: { ok: summary.outcome !== "linear_error", expiresAt: null },
     orcaReachable: summary.outcome !== "orca_unreachable",
     counts: summary.counts,
+    quota: summary.quota,
   });
   return { exitCode, summary };
 }

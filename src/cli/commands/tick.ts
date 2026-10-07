@@ -5,7 +5,7 @@ import type { Ctx } from "../../machine/context";
 import { type TickSummary, exitCodeFor, tick } from "../../machine/tick";
 import { errorCode } from "../../shared/errors";
 import { IDENTIFIER_RE } from "../../shared/ids";
-import { HeartbeatSchema } from "../../state/heartbeat";
+import { HeartbeatSchema, QuotaNoticesSchema } from "../../state/heartbeat";
 import type { Argv } from "../index";
 import { buildRealCtx } from "../wire";
 
@@ -28,6 +28,7 @@ export const SummarySchema = z
     finished: z.array(Id),
     skipped: z.array(z.object({ identifier: Id, reason: Code }).strict()),
     attention: z.array(z.object({ identifier: Id, code: Code }).strict()),
+    quota: QuotaNoticesSchema, // F10: provider names, enum codes and the snapshot's age only
     counts: z.record(z.number()),
     durationMs: z.number(),
   })

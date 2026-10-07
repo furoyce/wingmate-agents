@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { availability } from "../../../src/policy/quota";
+import { availability, quotaAttention } from "../../../src/policy/quota";
 import type { ProviderLimits, RateLimits } from "../../../src/ports";
 
 const now = Date.parse("2026-10-06T10:00:00Z");
@@ -80,10 +80,35 @@ describe("availability", () => {
       ),
     ).toMatchObject({ available: false, reason: "quota", detail: "claude, opus, 99" });
   });
-  test("stale snapshot is advisory", () => {
-    const r = availability(rl({ updatedAt: now - 7 * 3_600_000 }), "claude", q, now);
-    expect(r).toMatchObject({ available: true });
-    expect((r as { attention: string[] }).attention[0]).toMatch(/^quota_stale\(claude, \d+\)$/);
+  test("stale snapshot is advisory: available, with the enum code quota_stale and the snapshot's age in minutes beside it (F10)", () => {
+    expect(availability(rl({ updatedAt: now - 7 * 3_600_000 }), "claude", q, now)).toEqual({
+      available: true,
+      attention: ["quota_stale"],
+      ageMin: 420,
+    });
+    expect(availability(rl({}), "claude", q, now)).toEqual({ available: true, attention: [], ageMin: 1 });
+    expect(availability(rl({ updatedAt: null }), "claude", q, now)).toEqual({
+      available: true,
+      attention: [],
+      ageMin: null,
+    });
+  });
+  test("F10: quotaAttention keeps the evaluated providers whose snapshot is stale — enum codes and the age only; fresh, unreadable or over-cap ones carry none", () => {
+    const stale = now - 7 * 3_600_000;
+    const limits: RateLimits = {
+      ...rl({ updatedAt: stale }),
+      codex: { ...(rl({}).claude as ProviderLimits), updatedAt: now - 5 * 60_000 },
+      cursor: { ...(rl({ updatedAt: stale }).claude as ProviderLimits) },
+    };
+    expect(quotaAttention(limits, ["claude", "codex"], q, now)).toEqual({
+      claude: { attention: ["quota_stale"], ageMin: 420 },
+    }); // cursor is stale too, but not a provider the tick evaluates
+    const overCap = rl({
+      updatedAt: stale,
+      windows: { weekly: { usedPercent: 99, windowMinutes: 10080, resetsAt: now + 1 } },
+    });
+    expect(quotaAttention(overCap, ["claude"], q, now)).toEqual({}); // unavailable: its skip reason says why
+    expect(quotaAttention({}, ["claude", "codex"], q, now)).toEqual({}); // quota_unknown, never stale
   });
   test("missing provider or status error → quota_unknown", () => {
     expect(availability({}, "codex", q, now)).toMatchObject({ available: false, reason: "quota_unknown" });

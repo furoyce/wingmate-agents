@@ -4,6 +4,15 @@ import { z } from "zod";
 import type { Dirs } from "../shared/paths";
 import { readText, writeAtomic } from "./fs";
 
+/**
+ * §9.1 (Task 13 F10): the advisory quota codes a tick recorded per provider, beside the snapshot's age in minutes — provider names,
+ * enum codes and a number only (closed). Providers without a code are left out, so a healthy tick records `{}`.
+ */
+export const QuotaNoticesSchema = z.record(
+  z.enum(["claude", "codex", "cursor", "antigravity"]),
+  z.object({ attention: z.array(z.enum(["quota_stale"])).min(1), ageMin: z.number().int() }).strict(),
+);
+
 export const HeartbeatSchema = z.object({
   kind: z.enum(["scan", "tick"]),
   at: z.string(),
@@ -26,13 +35,17 @@ export const HeartbeatSchema = z.object({
   linearAuth: z.object({ ok: z.boolean(), expiresAt: z.string().nullable() }),
   orcaReachable: z.boolean(),
   counts: z.record(z.number()),
+  // F10: a heartbeat written before the field existed reads as one without notices
+  quota: QuotaNoticesSchema.default({}),
 });
 export type Heartbeat = z.infer<typeof HeartbeatSchema>;
+/** What a writer hands `writeHeartbeat`: the schema's input, where `quota` may be left out (it defaults to none). */
+export type HeartbeatInput = z.input<typeof HeartbeatSchema>;
 
 const lastTickPath = (dirs: Dirs) => join(dirs.state, "last-tick.json");
 
 /** §6.5: `heartbeat.json` holds the latest heartbeat of either kind; a tick's is also kept as the last tick's (C17). */
-export async function writeHeartbeat(dirs: Dirs, h: Heartbeat): Promise<void> {
+export async function writeHeartbeat(dirs: Dirs, h: HeartbeatInput): Promise<void> {
   const text = JSON.stringify(HeartbeatSchema.parse(h), null, 2);
   await writeAtomic(join(dirs.state, "heartbeat.json"), text);
   if (h.kind === "tick") await writeAtomic(lastTickPath(dirs), text);

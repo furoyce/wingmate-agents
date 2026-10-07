@@ -2,6 +2,7 @@
 // queue + heartbeat. Bounded per §4.3; the summary carries identifiers, enumerated codes and counts only.
 import { join } from "node:path";
 import { OrcaError } from "../orca/cli";
+import { type QuotaNotices, quotaAttention } from "../policy/quota";
 import { errorCode, errorText } from "../shared/errors";
 import { writeAtomic } from "../state/fs";
 import { type Heartbeat, readLastTick, stopRequested, writeHeartbeat } from "../state/heartbeat";
@@ -30,6 +31,8 @@ export interface TickSummary {
   finished: string[];
   skipped: { identifier: string; reason: string }[];
   attention: { identifier: string; code: string }[];
+  /** F10 (§9.1): availability()'s advisory codes per coordinator provider (`quota_stale`) with the snapshot's age; `{}` when none. */
+  quota: QuotaNotices;
   counts: Record<string, number>;
   durationMs: number;
 }
@@ -67,6 +70,7 @@ const newSummary = (at: string): TickSummary => ({
   finished: [],
   skipped: [],
   attention: [],
+  quota: {},
   counts: {},
   durationMs: 0,
 });
@@ -124,6 +128,7 @@ export async function tick(base: Ctx, opts: TickOptions): Promise<TickSummary> {
         linearAuth: { ok: outcome !== "linear_error", expiresAt: null },
         orcaReachable: outcome !== "orca_unreachable",
         counts: s.counts,
+        quota: s.quota,
       });
     return s;
   };
@@ -151,6 +156,13 @@ export async function tick(base: Ctx, opts: TickOptions): Promise<TickSummary> {
       return await finish(reconcileOutcome(e), errorCode(e));
     }
     pausedScopes = rec.pausedScopes;
+    // F10 (§9.1, Review Focus 3): a stale snapshot stays available, and the tick records it per provider for status and the run history
+    s.quota = quotaAttention(
+      rec.rateLimits,
+      ctx.cfg.defaults.providers.coordinatorCascade,
+      ctx.cfg.defaults.quota,
+      Date.parse(ctx.now()),
+    );
     s.reason = await reconcileOnly(ctx, rec, s.at);
     s.reconcileOnly = s.reason !== null;
     const budget: Budget = { resumes: ctx.cfg.defaults.dispatcher.resumesPerTick, handoffs: 1 };
