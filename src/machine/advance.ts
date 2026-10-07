@@ -27,6 +27,8 @@ import type { Budget, TickSummary } from "./tick";
 import { timers, budgets, integrity, liveness } from "./watch";
 
 const ACTIVE = new Set(["claimed", "working", "awaiting-human", "review", "blocked"]);
+/** §7.4: the active records an owner's Blocked (or Needs-Human) label pauses. */
+const PAUSABLE: ReadonlySet<string> = new Set(["claimed", "working", "awaiting-human", "review"]);
 const CLOSED = new Set(["completed", "canceled", "duplicate"]);
 const LABEL_FOR: Record<string, string> = {
   claimed: "In-Agent",
@@ -56,7 +58,7 @@ async function releaseFor(
   cause: "override" | "owner_done" | "owner_cancel",
   comment: string | null,
 ) {
-  if (await release(a.ctx, a.r, a.issue, cause, comment))
+  if (await release(a.ctx, a.r, a.issue, cause, comment, a.rec))
     (cause === "override" ? a.s.released : a.s.done).push(a.r.identifier);
   a.dirty = true;
   return "stop" as const;
@@ -111,22 +113,28 @@ async function labelOverride(a: Advance, lb: LabelsEvent): Promise<StepOut> {
   if (r.paused && (lb.lifecycle === null || lb.lifecycle === "Ready")) {
     r.paused = false;
     r.linear.pausedWith = null;
-    const now = ctx.now(); // §9.6: timers restart when the issue resumes
-    Object.assign(r.timers, {
-      stageStartedAt: now,
-      lastActivityAt: now,
-      nudgedAt: null,
-      nudges: 0,
-      graceEndsAt: null,
-    });
+    // §9.6: timers restart when the issue resumes; a parked issue's stay as they are (I10) until its answer resumes it
+    if (r.stage !== "awaiting-human") {
+      const now = ctx.now();
+      Object.assign(r.timers, {
+        stageStartedAt: now,
+        lastActivityAt: now,
+        nudgedAt: null,
+        nudges: 0,
+        graceEndsAt: null,
+      });
+    }
     await new LinearWrites(ctx).setLifecycle(r, a.issue, LABEL_FOR[r.stage] ?? "In-Agent");
     addNote(r, "unpaused by owner");
     a.dirty = true;
     return "next";
   }
+  // §7.4: an owner-added Blocked pauses any active record, a parked one too (C20: the mirror follows, so the change is consumed
+  // once); an owner-added Needs-Human pauses only a record that is not already awaiting-human
   const pausing =
-    lb.lifecycle === "Blocked" || (lb.lifecycle === "Needs-Human" && r.stage !== "awaiting-human");
-  if (!r.paused && pausing && ["working", "claimed", "review"].includes(r.stage)) {
+    (lb.lifecycle === "Blocked" && PAUSABLE.has(r.stage)) ||
+    (lb.lifecycle === "Needs-Human" && PAUSABLE.has(r.stage) && r.stage !== "awaiting-human");
+  if (!r.paused && pausing) {
     r.paused = true;
     r.linear.pausedWith = lb.lifecycle;
     r.linear.lifecycleLabel = lb.lifecycle;
@@ -149,7 +157,10 @@ async function overrides(a: Advance): Promise<StepOut> {
   if (lb && (await labelOverride(a, lb)) === "stop") return "stop";
   if (a.issue.state.name === a.r.linear.state && lifecycleOf(a) === a.r.linear.lifecycleLabel)
     a.r.linear.lastSeenUpdatedAt = a.issue.updatedAt;
-  return a.r.paused ? "stop" : "next"; // paused: no outbox, resume, relaunch, nudge or timers (§7.4)
+  if (!a.r.paused) return "next";
+  // paused: no outbox, resume, relaunch, nudge or timers (§7.4), but the kit is still re-hashed every tick (C19, §6.3 step 6)
+  await integrity(a);
+  return "stop";
 }
 
 /**

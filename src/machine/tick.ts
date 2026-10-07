@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { OrcaError } from "../orca/cli";
 import { errorCode, errorText } from "../shared/errors";
 import { writeAtomic } from "../state/fs";
-import { type Heartbeat, readHeartbeat, stopRequested, writeHeartbeat } from "../state/heartbeat";
+import { type Heartbeat, readLastTick, stopRequested, writeHeartbeat } from "../state/heartbeat";
 import { TickLock } from "../state/lock";
 import { writeQueue } from "../state/queue";
 import { advanceAll, planOnly } from "./advance";
@@ -87,12 +87,15 @@ function reconcileOutcome(e: unknown): Heartbeat["outcome"] {
   return errorCode(e).startsWith("linear_") ? "linear_error" : "error";
 }
 
-/** §6.7: after a long gap (Mac asleep, Orca down), on a partial fleet read, or while paused, a tick starts no agent. */
+/**
+ * §6.7: after a long gap (Mac asleep, Orca down), on a partial fleet read, or while paused, a tick starts no agent. C17: the gap runs
+ * from the last tick's heartbeat — a `scan` heartbeat written since never shortens it.
+ */
 async function reconcileOnly(ctx: Ctx, rec: Reconciled, at: string): Promise<string | null> {
   if (rec.partial) return "partial_fleet";
   if (rec.pausedScopes.includes("global")) return "paused";
-  const prev = await readHeartbeat(ctx.dirs).catch((e: unknown) => {
-    ctx.log.warn({ err: errorText(e) }, "heartbeat unreadable; treating as the first tick");
+  const prev = await readLastTick(ctx.dirs).catch((e: unknown) => {
+    ctx.log.warn({ err: errorText(e) }, "last tick heartbeat unreadable; treating as the first tick");
     return null;
   });
   return prev && Date.parse(at) - Date.parse(prev.at) > 3 * CADENCE_MS ? "gap" : null;

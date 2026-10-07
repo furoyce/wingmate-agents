@@ -4,6 +4,7 @@ import { basename } from "node:path";
 import { type ProjectConfig, type RepoConfig, repoFor } from "../config/schema";
 import { pointerBrief } from "../kit/brief";
 import { installKit } from "../kit/install";
+import { staleIntents } from "../kit/intents";
 import { agentEnv, coordinatorArgv, launchCommand } from "../kit/settings";
 import { MARK } from "../linear/markers";
 import { resolveTier } from "../policy/providers";
@@ -279,6 +280,18 @@ async function createCoordinator(ctx: Ctx, r: WRecord, tier: Tier): Promise<void
 }
 
 /**
+ * C14: nothing an earlier cycle or attempt left pending in a reused worktree's outbox reaches the coordinator about to launch — those
+ * intents move to `outbox/stale/` (ledgered with their count). It runs while no terminal is recorded, so no coordinator of this
+ * launch has been given its brief yet and none of its own intents can be there.
+ */
+async function staleOutbox(ctx: Ctx, r: WRecord): Promise<void> {
+  if (!r.worktree) return;
+  const count = await staleIntents(r.worktree.path);
+  if (count)
+    await ctx.ledger.append({ at: ctx.now(), issue: r.identifier, type: "intents_staled", data: { count } });
+}
+
+/**
  * Steps worktree → kit → launch → orcaMeta of §5.4. Each step is skipped when the record already proves it happened, so a crashed
  * claim replays without a second worktree or terminal (S7). A launch that never reaches tui-idle leaves the record `claimed` with
  * the failure journaled; the next tick waits on the same handle again.
@@ -294,6 +307,7 @@ export async function provisionAndLaunch(
   const repo = repoFor(project, r.repo);
   if (!r.worktree) await provisionWorktree(ctx, r, repo, entryId);
   if (!r.coordinator.terminalHandle) {
+    await staleOutbox(ctx, r);
     if (!(await installAndSetup(ctx, r, issue, project, repo, entryId, tier))) return;
     await createCoordinator(ctx, r, tier);
   }

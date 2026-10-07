@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { agentActiveAt, coordinatorLiveness } from "../../../src/machine/liveness";
 import type { FleetRow, TerminalRow } from "../../../src/ports";
 import { newRecord } from "../../../src/state/records";
@@ -67,6 +70,15 @@ describe("coordinatorLiveness", () => {
     const r = rec();
     r.coordinator.terminalHandle = null;
     expect(coordinatorLiveness(r, [term], row("working"))).toBe("exited");
+  });
+  test("C12 (§5.5 '… or the worktree is gone'): a worktree removed from disk is exited while Orca still lists its row and terminal", () => {
+    const r = rec();
+    const dir = mkdtempSync(join(tmpdir(), "wm-live-"));
+    r.worktree = { id: "w", path: dir, branch: "b", baseSha: "s", gitCommonDir: "/c", gitdirName: "g" };
+    expect(coordinatorLiveness(r, [term], row("working"))).toBe("working");
+    rmSync(dir, { recursive: true, force: true });
+    expect(coordinatorLiveness(r, [term], row("working"))).toBe("exited");
+    expect(coordinatorLiveness(r, [term], row("done"))).toBe("exited");
   });
 });
 

@@ -1,6 +1,17 @@
 // tests/unit/machine/claim.test.ts — §5.4 claim and its replay, relaunch, delivery, release and block against the fakes (real files)
 import { describe, expect, test } from "bun:test";
-import { existsSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { LaunchSchema } from "../../../src/kit/local";
 import { claimIssue, provisionAndLaunch } from "../../../src/machine/claim";
@@ -267,6 +278,49 @@ describe("deliver (§7.1 step 4, §7.2)", () => {
     const n = w.orca.calls.length;
     expect(await deliver(w.ctx, r, "note", "later", "exited", "plan")).toBe("exited");
     expect(w.orca.calls.length).toBe(n);
+  });
+
+  test("C11: a worktree gone from disk is never re-created — nothing written or sent; exited with attention worktree_gone", async () => {
+    const w = await makeWorld();
+    const r = await claim(w);
+    const path = r.worktree?.path ?? "";
+    rmSync(path, { recursive: true, force: true });
+    const n = w.orca.calls.length;
+    expect(await deliver(w.ctx, r, "note", "later", "idle", "plan")).toBe("exited");
+    expect(existsSync(path)).toBe(false);
+    expect(r.attention).toContain("worktree_gone");
+    expect(w.orca.calls.length).toBe(n);
+  });
+
+  test("C11: a symlinked .wingmate/inbox or .wingmate is never written through; nothing is sent (attention inbox_unsafe)", async () => {
+    for (const planted of [".wingmate/inbox", ".wingmate"]) {
+      const w = await makeWorld();
+      const r = await claim(w);
+      const outside = mkdtempSync(join(tmpdir(), "wm-outside-"));
+      const link = join(r.worktree?.path ?? "", planted);
+      rmSync(link, { recursive: true, force: true });
+      symlinkSync(outside, link);
+      const n = w.orca.calls.length;
+      const d = await deliver(w.ctx, r, "note", "fyi", "idle", "plan");
+      expect({ planted, outside: readdirSync(outside) }).toEqual({ planted, outside: [] });
+      expect(d).toBe("input_accepted");
+      expect(w.orca.calls.length).toBe(n); // no pointer to a file that was never written
+      expect(r.attention).toContain("inbox_unsafe");
+    }
+  });
+
+  test("C11: a stage.json planted as a symlink is replaced in the worktree, never followed", async () => {
+    const w = await makeWorld();
+    const r = await claim(w);
+    const outside = join(mkdtempSync(join(tmpdir(), "wm-outside-")), "target.txt");
+    writeFileSync(outside, "keep");
+    const stage = join(r.worktree?.path ?? "", ".wingmate", "stage.json");
+    rmSync(stage, { force: true });
+    symlinkSync(outside, stage);
+    expect(await deliver(w.ctx, r, "note", "fyi", "idle", "plan")).toBe("turn_started");
+    expect(readFileSync(outside, "utf8")).toBe("keep");
+    expect(lstatSync(stage).isFile()).toBe(true);
+    expect(JSON.parse(readFileSync(stage, "utf8")).pipelineStage).toBe("plan");
   });
 });
 

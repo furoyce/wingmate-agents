@@ -8,6 +8,8 @@ import { newUlid } from "../shared/ids";
 import type { WRecord } from "../state/records";
 import type { Ctx } from "./context";
 import { LinearWrites } from "./linearWrites";
+import { worktreeGone } from "./liveness";
+import type { Reconciled } from "./reconcile";
 import { saveRecord } from "./save";
 import { addAttention, dropAttention, endAttempt, transition } from "./states";
 
@@ -71,9 +73,18 @@ export async function stopAgents(ctx: Ctx, r: WRecord): Promise<{ unverifiable: 
 
 const workersOf = (u: string[]) => u.filter((x) => !x.startsWith("terminals:"));
 
+/** C13: Orca no longer knows the record's worktree (a complete fleet read has no row for it) and its path is gone from disk. */
+export function worktreeForgotten(r: WRecord, fleet: Pick<Reconciled, "partial" | "fleet">): boolean {
+  const wt = r.worktree;
+  if (!wt || fleet.partial) return false;
+  return !fleet.fleet.worktrees.some((x) => x.worktreeId === wt.id) && worktreeGone(wt.path);
+}
+
 /**
  * §7.4 release, also for Done/Canceled (`owner_done`/`owner_cancel`, without the comment). A failed bulk terminal close keeps the
- * record as it is and returns false: the override is still visible next tick, so the release is retried then.
+ * record as it is and returns false: the override is still visible next tick, so the release is retried then. C13: with the tick's
+ * fleet read, a worktree Orca no longer knows and that is gone from disk has nothing left to close — its failed close counts as
+ * closed, so such a release completes instead of staying `release_unverifiable(terminals)` for good.
  */
 export async function release(
   ctx: Ctx,
@@ -81,15 +92,18 @@ export async function release(
   issue: LinearIssue,
   cause: "override" | "owner_done" | "owner_cancel",
   comment: string | null,
+  fleet?: Pick<Reconciled, "partial" | "fleet">,
 ): Promise<boolean> {
   const { unverifiable } = await stopAgents(ctx, r);
   const workers = workersOf(unverifiable);
   if (workers.length) addAttention(r, `release_unverifiable(${workers.join(",")})`);
-  if (workers.length !== unverifiable.length) {
+  const closed = workers.length === unverifiable.length || (!!fleet && worktreeForgotten(r, fleet));
+  if (!closed) {
     addAttention(r, "release_unverifiable(terminals)");
     await saveRecord(ctx, r);
     return false;
   }
+  dropAttention(r, "release_unverifiable(terminals)");
   const w = new LinearWrites(ctx);
   await w.setLifecycle(
     r,
@@ -148,6 +162,9 @@ export async function block(
   if (unverifiable.length)
     addAttention(r, `release_unverifiable(${unverifiable.map((u) => u.split(":")[0]).join(",")})`);
   await transition(ctx, r, "blocked", reason, detail);
+  // a pause holds an active record (§7.4); a blocked one is re-queued by the owner, so removing Blocked never "unpauses" it (C19)
+  r.paused = false;
+  r.linear.pausedWith = null;
   const notice: BlockNotice = {
     key: `blocked:${r.identifier}:${r.cycle}:${r.history.length}`,
     reason,

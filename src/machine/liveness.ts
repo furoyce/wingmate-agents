@@ -1,4 +1,5 @@
 // src/machine/liveness.ts — §5.5: one function decides whether the coordinator is working, idle, exited or unverifiable
+import { statSync } from "node:fs";
 import type { FleetRow, TerminalRow } from "../ports";
 import type { WRecord } from "../state/records";
 
@@ -6,10 +7,20 @@ export type Liveness = "working" | "idle" | "exited" | "unverifiable";
 
 const SHELL_PROMPT = /(\$|%|#|>)\s*$/;
 
+/** §5.5 "… or the worktree is gone": its path is no longer a directory on disk, whatever Orca still lists for it. */
+export function worktreeGone(path: string): boolean {
+  try {
+    return !statSync(path).isDirectory();
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code;
+    return code === "ENOENT" || code === "ENOTDIR"; // anything else (EACCES) cannot tell: the path is not judged gone
+  }
+}
+
 /**
- * Inputs: the record's terminal handle, the worktree's `terminal list` rows and its `worktree ps` row.
- * `exited` when the worktree or the handle is gone; `working`/`idle` from the `agents[]` entry joined on
- * `tabId:leafId`; a bare shell prompt in the preview means the agent process ended; otherwise unverifiable.
+ * Inputs: the record's terminal handle and worktree path, the worktree's `terminal list` rows and its `worktree ps` row.
+ * `exited` when the worktree (its fleet row, or C12 its path on disk) or the handle is gone; `working`/`idle` from the `agents[]`
+ * entry joined on `tabId:leafId`; a bare shell prompt in the preview means the agent process ended; otherwise unverifiable.
  */
 export function coordinatorLiveness(
   r: WRecord,
@@ -17,7 +28,7 @@ export function coordinatorLiveness(
   row: FleetRow | undefined,
   shellPreview?: string,
 ): Liveness {
-  if (!row) return "exited";
+  if (!row || (r.worktree && worktreeGone(r.worktree.path))) return "exited";
   const handle = r.coordinator.terminalHandle;
   const term = handle ? terminals.find((t) => t.handle === handle) : undefined;
   if (!term) return "exited";

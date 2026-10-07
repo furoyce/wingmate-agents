@@ -29,12 +29,30 @@ export const HeartbeatSchema = z.object({
 });
 export type Heartbeat = z.infer<typeof HeartbeatSchema>;
 
-export const writeHeartbeat = (dirs: Dirs, h: Heartbeat) =>
-  writeAtomic(join(dirs.state, "heartbeat.json"), JSON.stringify(HeartbeatSchema.parse(h), null, 2));
+const lastTickPath = (dirs: Dirs) => join(dirs.state, "last-tick.json");
+
+/** §6.5: `heartbeat.json` holds the latest heartbeat of either kind; a tick's is also kept as the last tick's (C17). */
+export async function writeHeartbeat(dirs: Dirs, h: Heartbeat): Promise<void> {
+  const text = JSON.stringify(HeartbeatSchema.parse(h), null, 2);
+  await writeAtomic(join(dirs.state, "heartbeat.json"), text);
+  if (h.kind === "tick") await writeAtomic(lastTickPath(dirs), text);
+}
 
 export async function readHeartbeat(dirs: Dirs): Promise<Heartbeat | null> {
   const t = await readText(join(dirs.state, "heartbeat.json"));
   return t ? HeartbeatSchema.parse(JSON.parse(t)) : null;
+}
+
+/**
+ * C17: the last tick's heartbeat. §6.7 measures the reconcile-only gap from it, so a manual `scan` (which writes `heartbeat.json`
+ * too) never turns the first tick after a long sleep into a normal one. Until a tick has written `last-tick.json`, `heartbeat.json`
+ * counts only when a tick wrote it.
+ */
+export async function readLastTick(dirs: Dirs): Promise<Heartbeat | null> {
+  const t = await readText(lastTickPath(dirs));
+  if (t) return HeartbeatSchema.parse(JSON.parse(t));
+  const h = await readHeartbeat(dirs);
+  return h?.kind === "tick" ? h : null;
 }
 
 const StopSchema = z.object({

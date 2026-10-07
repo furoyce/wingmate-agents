@@ -215,6 +215,7 @@ export class FakeOrca implements OrcaPort {
   }
   async terminalClose(wt: string) {
     await this.rec("terminalClose", wt);
+    if (!this.rows.has(wt)) return { ok: false }; // as the CLI wrapper reports a close for a worktree id Orca no longer knows
     this.closed.push(wt);
     this.terminals.set(wt, []);
     const row = this.rows.get(wt);

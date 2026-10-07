@@ -127,6 +127,7 @@ async function comment(a: Advance, e: CommentEvent): Promise<Seen> {
       return r.stage === "blocked" ? continueBlocked(a, e) : "done";
     case "note":
       if (WORKING.has(r.stage)) {
+        if (a.ro) return "defer"; // C16 (§6.7): a reconcile-only tick starts no turn; the note stays unseen for the next normal tick
         await deliver(ctx, r, "note", e.body, a.live ?? "exited", r.pipelineStage);
         addNote(r, "owner note delivered");
         a.dirty = true;

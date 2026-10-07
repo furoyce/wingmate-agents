@@ -55,26 +55,43 @@ async function exited(a: Advance): Promise<StepOut> {
   return "stop";
 }
 
+/**
+ * §5.4 step 5, launch_unconfirmed (C18): a claimed coordinator whose pane is idle has started when its agent wrote `stage.json`;
+ * otherwise it gets the start nudge once — counted in `timers.nudges`, which every transition into `claimed` resets — and a launch
+ * still unconfirmed on a later tick is a failed launch: `blocked` (`launch_failed`, §13.1), never a fresh nudge every tick.
+ */
+async function unconfirmedLaunch(a: Advance): Promise<StepOut> {
+  const { ctx, r } = a;
+  if (r.worktree && (await agentProgressed(r.worktree.path))) {
+    await started(a, "stage_json");
+    return "next";
+  }
+  if (r.timers.nudges >= 1) {
+    await block(
+      ctx,
+      r,
+      a.issue,
+      "launch_failed",
+      "the coordinator did not start after its brief and one start nudge",
+      "check the coordinator terminal in Orca, then move the issue back to Todo to re-queue it",
+    );
+    a.s.blocked.push(r.identifier);
+    a.dirty = true;
+    return "stop";
+  }
+  r.timers.nudges += 1;
+  r.timers.nudgedAt = ctx.now();
+  const text = "start now: read .wingmate/BRIEF.md and begin the intake stage";
+  if ((await deliver(ctx, r, "nudge", text, "idle", r.pipelineStage)) === "turn_started")
+    await started(a, "nudge");
+  return "next";
+}
+
 /** §6.3 step 4: idle with no progress → two nudges, then the §9.6 grace clock as if the stage cap had been crossed. */
 async function idle(a: Advance): Promise<StepOut> {
   const { ctx, r, project } = a;
   const now = ctx.now();
-  if (r.stage === "claimed") {
-    // §5.4 step 5, launch_unconfirmed: the agent already reported progress, or it gets one "start now" nudge
-    if (r.worktree && (await agentProgressed(r.worktree.path))) await started(a, "stage_json");
-    else if (
-      (await deliver(
-        ctx,
-        r,
-        "nudge",
-        "start now: read .wingmate/BRIEF.md and begin the intake stage",
-        "idle",
-        r.pipelineStage,
-      )) === "turn_started"
-    )
-      await started(a, "nudge");
-    return "next";
-  }
+  if (r.stage === "claimed") return unconfirmedLaunch(a);
   const idleMin = minutesSince(now, r.timers.lastActivityAt);
   const n = project.timers.idleNudgeMin;
   if (r.timers.nudges < 2 && idleMin > n * (r.timers.nudges + 1)) {
@@ -129,7 +146,10 @@ export async function timers(a: Advance): Promise<StepOut> {
     a.live !== "unverifiable" &&
     minutesSince(now, r.timers.lastActivityAt) > project.timers.graceMin;
   if (!quiet) {
+    // C19: activity through the grace period re-arms the cap from now — one nudge per crossing, never a nudge every tick
     r.timers.graceEndsAt = null;
+    r.timers.stageStartedAt = now;
+    r.timers.nudges = 0;
     dropAttention(r, "cap_passed");
     return "next";
   }

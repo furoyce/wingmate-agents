@@ -16,6 +16,7 @@ import {
   listIntents,
   quarantineIntent,
   readIntentFiles,
+  staleIntents,
   writeIntent,
 } from "../../../src/kit/intents";
 import { renameInWorktree, worktreeDir } from "../../../src/kit/local";
@@ -183,4 +184,41 @@ describe("F7: outbox moves never follow an agent-planted symlink", () => {
       expect(existsSync(join(box, "settings.json"))).toBe(true);
     },
   );
+});
+
+describe("C14: staleIntents — a reused worktree's pending intents leave the outbox before a new cycle", () => {
+  test("every pending *.json (valid or not) moves to outbox/stale/; done/ and the rest stay; a second call finds none", async () => {
+    const { wt, box } = sandbox();
+    const a = await writeIntent(wt, { issue: "JRF-1", kind: "note", payload: { text: "a" } });
+    const b = await writeIntent(wt, {
+      issue: "JRF-1",
+      kind: "handoff",
+      payload: { reason: "r", repo: null },
+    });
+    writeFileSync(join(box, "01BAD.json"), "{");
+    await consumeIntent(wt, a.id);
+    expect(await staleIntents(wt)).toBe(2);
+    expect(readdirSync(box).filter((f) => f.endsWith(".json"))).toEqual([]);
+    expect(readdirSync(join(box, "stale")).sort()).toEqual(["01BAD.json", `${b.id}.json`].sort());
+    expect(readdirSync(join(box, "done"))).toEqual([`${a.id}.json`]);
+    expect(await staleIntents(wt)).toBe(0);
+  });
+
+  test("a worktree without an outbox has none and gets none created; a symlinked outbox or stale/ is refused, nothing moved", async () => {
+    const bare = mkdtempSync(join(tmpdir(), "wm-c14-"));
+    expect(await staleIntents(bare)).toBe(0);
+    expect(existsSync(join(bare, ".wingmate"))).toBe(false);
+    const { wt, outside, box } = sandbox();
+    const i = await writeIntent(wt, { issue: "JRF-1", kind: "note", payload: { text: "a" } });
+    symlinkSync(outside, join(box, "stale"));
+    await expect(staleIntents(wt)).rejects.toMatchObject({ code: "outbox_unsafe" });
+    expect(readdirSync(outside)).toEqual([]);
+    expect(existsSync(join(box, `${i.id}.json`))).toBe(true);
+    const other = sandbox();
+    rmSync(other.box, { recursive: true });
+    symlinkSync(outside, other.box);
+    writeFileSync(join(outside, "x.json"), "{}");
+    await expect(staleIntents(other.wt)).rejects.toMatchObject({ code: "outbox_unsafe" });
+    expect(readdirSync(outside)).toEqual(["x.json"]);
+  });
 });

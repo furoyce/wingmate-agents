@@ -1,7 +1,8 @@
 // src/kit/local.ts — the agent-side mirror under <worktree>/.wingmate/: advisory for the dispatcher, authoritative for the
 // verbs' local checks (§8.0). Every file is Zod-parsed; a parse failure names the file instead of defaulting.
+import { randomBytes } from "node:crypto";
 import { constants } from "node:fs";
-import { lstat, mkdir, realpath, rename } from "node:fs/promises";
+import { lstat, mkdir, open, realpath, rename, unlink } from "node:fs/promises";
 import { isAbsolute, join, normalize, relative, sep } from "node:path";
 import { z } from "zod";
 import { WingmateError } from "../shared/errors";
@@ -228,23 +229,41 @@ export async function worktreeFile(
   return { ok: true, rel, abs: resolved[1] };
 }
 
+/** macOS sys/fcntl.h: open(2) refuses a symlink anywhere in the path (ELOOP); must not be combined with `O_NOFOLLOW` (EINVAL). */
+const O_NOFOLLOW_ANY = 0x20000000;
 /**
- * open(2) flags for reading an agent-named file without following a symlink. On macOS `O_NOFOLLOW_ANY` (sys/fcntl.h, 0x20000000)
- * refuses a symlink anywhere in the path (ELOOP), so a directory swapped for a symlink after a check cannot redirect the read; it
- * covers the last component too and must not be combined with `O_NOFOLLOW` (EINVAL). Elsewhere `O_NOFOLLOW` guards the file only.
+ * open(2) flags for reading an agent-named file without following a symlink. On macOS `O_NOFOLLOW_ANY` refuses a symlink anywhere
+ * in the path, so a directory swapped for a symlink after a check cannot redirect the read; it covers the last component too.
+ * Elsewhere `O_NOFOLLOW` guards the file only.
  */
 export const O_READ_NOFOLLOW =
-  process.platform === "darwin" ? constants.O_RDONLY | 0x20000000 : constants.O_RDONLY | constants.O_NOFOLLOW;
+  process.platform === "darwin"
+    ? constants.O_RDONLY | O_NOFOLLOW_ANY
+    : constants.O_RDONLY | constants.O_NOFOLLOW;
+/**
+ * C11: open(2) flags for creating a new file the same way — `O_CREAT | O_EXCL` never opens an existing path (a symlink planted at
+ * the name is EEXIST) and, on macOS, `O_NOFOLLOW_ANY` refuses a directory of the path swapped for a symlink after its check.
+ */
+const O_CREATE_NOFOLLOW =
+  constants.O_WRONLY |
+  constants.O_CREAT |
+  constants.O_EXCL |
+  (process.platform === "darwin" ? O_NOFOLLOW_ANY : constants.O_NOFOLLOW);
 const RENAME_NOFOLLOW_ANY = 0x10; // macOS sys/stdio.h, for renamex_np
 
 const unsafe = (msg: string) =>
-  new WingmateError("outbox_unsafe", msg, "the outbox and its subdirectories must be plain directories");
+  new WingmateError(
+    "outbox_unsafe",
+    msg,
+    ".wingmate, its outbox and inbox and their subdirectories must be plain directories",
+  );
 
 /**
- * F7: a directory under the worktree that the dispatcher reads or moves files into (`.wingmate/outbox` and its `invalid/`,
- * `failed/`, `done/`). Every component below the worktree must be a real directory, never a symlink, and the result must resolve
- * inside the worktree (realpath containment, as `worktreeFile` does for files). Missing components are created when `create`.
- * Returns the real absolute path; anything else is `outbox_unsafe`.
+ * F7: a directory under the worktree that the dispatcher reads, writes or moves files into (`.wingmate`, `.wingmate/inbox` (C11),
+ * `.wingmate/outbox` and its `invalid/`, `failed/`, `done/`, `stale/` (C14)). Every component below the worktree must be a real
+ * directory, never a symlink, and the result must resolve inside the worktree (realpath containment, as `worktreeFile` does for
+ * files). Missing components are created when `create` (never the worktree itself). Returns the real absolute path; anything else
+ * is `outbox_unsafe`.
  */
 export async function worktreeDir(wt: string, rel: string, create = false): Promise<string> {
   const root = await realpath(wt);
@@ -288,6 +307,13 @@ function noFollowRenamer(): Promise<RenameNoFollow | null> {
   return renamer;
 }
 
+/** A rename that, on macOS, refuses a symlink in any directory of either path (RENAME_NOFOLLOW_ANY); elsewhere a plain rename. */
+async function moveNoFollow(from: string, to: string, name: string): Promise<void> {
+  const rx = await noFollowRenamer();
+  if (!rx) return rename(from, to);
+  if (rx(from, to) !== 0) throw unsafe(`${name} was not moved: a symlink in its path, or the file is gone`);
+}
+
 /**
  * F7: moves `name` between two directories `worktreeDir` checked. On macOS the rename itself refuses a symlink anywhere in
  * either path (RENAME_NOFOLLOW_ANY), so a directory the agent swaps for a symlink between the check and the move still cannot
@@ -295,9 +321,30 @@ function noFollowRenamer(): Promise<RenameNoFollow | null> {
  */
 export async function renameInWorktree(fromDir: string, toDir: string, name: string): Promise<void> {
   const from = join(fromDir, name);
-  const to = join(toDir, name);
   await lstat(from); // a file already gone keeps its ENOENT
-  const rx = await noFollowRenamer();
-  if (!rx) return rename(from, to);
-  if (rx(from, to) !== 0) throw unsafe(`${name} was not moved: a symlink in its path, or the file is gone`);
+  await moveNoFollow(from, join(toDir, name), name);
+}
+
+/**
+ * C11: writes the dispatcher's own file `name` into a directory `worktreeDir` checked, never through a symlink. The temp file is
+ * created exclusively (`O_CREATE_NOFOLLOW`) and moved into place with the no-follow rename, which replaces a symlink planted at
+ * `name` instead of following it; a directory swapped for a symlink after the check fails the write (`outbox_unsafe`).
+ */
+export async function writeInWorktree(dir: string, name: string, text: string): Promise<void> {
+  const tmp = join(dir, `.${name}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`);
+  const fh = await open(tmp, O_CREATE_NOFOLLOW, 0o644).catch((e: NodeJS.ErrnoException) => {
+    if (e.code === "ELOOP" || e.code === "EEXIST")
+      throw unsafe(`${name}: a symlink in its path (never followed)`);
+    throw e;
+  });
+  try {
+    await fh.writeFile(text);
+    await fh.sync();
+  } finally {
+    await fh.close();
+  }
+  await moveNoFollow(tmp, join(dir, name), name).catch(async (e: unknown) => {
+    await unlink(tmp).catch(() => undefined); // the temp file was ours; the failure is what the caller sees
+    throw e;
+  });
 }

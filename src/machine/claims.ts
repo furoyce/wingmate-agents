@@ -18,6 +18,7 @@ import { refreshRepoSiblings } from "./launch";
 import type { Candidate, Reconciled } from "./reconcile";
 import { closeClaimEntries } from "./release";
 import { saveRecord } from "./save";
+import { TERMINAL } from "./states";
 import { syncStatus } from "./status";
 import type { TickOptions, TickSummary } from "./tick";
 
@@ -87,7 +88,10 @@ async function refreshStatus(ctx: Ctx, r: WRecord, issue: LinearIssue): Promise<
   }
 }
 
-/** §5.2 re-claim: archive the terminal record, keep its status comment, start the next cycle; a failed claim still holds its slot. */
+/**
+ * §5.2 re-claim: archive the terminal record (C20: `claimCandidates` never gets here with a record the advance made active again),
+ * keep its status comment, start the next cycle; a failed claim still holds its slot.
+ */
 async function claimOne(
   ctx: Ctx,
   c: Candidate,
@@ -181,6 +185,13 @@ export async function claimCandidates(
       item(c, project.key, sk.reason, sk.detail);
       s.skipped.push({ identifier: id, reason: sk.reason });
     };
+    // C20: the advance can take the issue's record out of its terminal stage (an approver's `continue`); that record is the issue's
+    // live owner again and is never archived for a new cycle (§5.2: only a terminal record is archived on re-claim)
+    const prior = opts.dryRun ? undefined : known.find((x) => x.identifier === id);
+    if (prior && !TERMINAL.has(prior.stage)) {
+      skipped({ reason: "live_owner", detail: `record ${prior.stage}` });
+      continue;
+    }
     const pick = pickProvider(ctx, rec, c.verdict.provider, nowMs);
     if ("reason" in pick) {
       skipped(pick);

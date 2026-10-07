@@ -1,7 +1,7 @@
 // src/kit/intents.ts — the outbox: `issue` verbs write intents here; the dispatcher executes them at the next tick (§8.1, D17).
 // Intent files are an external boundary (an agent can write them directly), so the schema is strict: file paths stay inside
 // the worktree and ids are alphanumeric (an id names its file).
-import { mkdir, open, readdir } from "node:fs/promises";
+import { lstat, mkdir, open, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { monotonicFactory } from "ulid";
 import { z } from "zod";
@@ -199,4 +199,19 @@ export async function consumeIntent(wt: string, id: string): Promise<void> {
     throw new WingmateError("intent_invalid", `intent_invalid: bad intent id ${id}`);
   const { box, dest } = await outboxDirs(wt, "done");
   await renameInWorktree(box, dest, `${id}.json`);
+}
+
+/**
+ * C14: a reused worktree starts its new claim with an empty outbox — every pending `*.json` (valid or not) left by an earlier cycle
+ * moves to `outbox/stale/`, which the dispatcher never reads, so an old ask, gate or handoff cannot run in the new cycle. F7: plain
+ * directories only, and the moves never follow a symlink. A worktree without an outbox has none (nothing is created). The count.
+ */
+export async function staleIntents(wt: string): Promise<number> {
+  if (!(await lstat(join(wt, OUTBOX)).catch(() => null))) return 0;
+  const box = await worktreeDir(wt, OUTBOX);
+  const names = (await readdir(box)).filter((n) => n.endsWith(".json")).sort();
+  if (!names.length) return 0;
+  const dest = await worktreeDir(wt, `${OUTBOX}/stale`, true);
+  for (const n of names) await renameInWorktree(box, dest, n);
+  return names.length;
 }

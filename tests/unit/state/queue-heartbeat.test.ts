@@ -7,6 +7,7 @@ import { homeDirs } from "../../../src/shared/paths";
 import {
   clearStop,
   readHeartbeat,
+  readLastTick,
   requestStop,
   stopRequested,
   writeHeartbeat,
@@ -70,5 +71,27 @@ describe("queue + heartbeat", () => {
     expect(await stopRequested(dirs, "smart-dispatcher")).toBe(false);
     await clearStop(dirs);
     expect(await stopRequested(dirs, "bouncr")).toBe(false);
+  });
+  test("C17: the last tick's heartbeat survives a later scan heartbeat (§6.7 measures the gap from the tick)", async () => {
+    const beat = (kind: "tick" | "scan", at: string) =>
+      writeHeartbeat(dirs, {
+        kind,
+        at,
+        exitCode: 1,
+        outcome: "idle",
+        reason: null,
+        durationMs: 10,
+        pausedScopes: [],
+        linearAuth: { ok: true, expiresAt: null },
+        orcaReachable: true,
+        counts: {},
+      });
+    expect(await readLastTick(dirs)).toBeNull();
+    await beat("scan", "2026-10-06T09:00:00.000Z");
+    expect(await readLastTick(dirs)).toBeNull(); // a scan is never a tick
+    await beat("tick", "2026-10-06T10:00:00.000Z");
+    await beat("scan", "2026-10-06T10:20:00.000Z");
+    expect((await readHeartbeat(dirs))?.kind).toBe("scan"); // §6.5: heartbeat.json is the latest of either
+    expect(await readLastTick(dirs)).toMatchObject({ kind: "tick", at: "2026-10-06T10:00:00.000Z" });
   });
 });
