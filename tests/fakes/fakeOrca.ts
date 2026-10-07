@@ -4,6 +4,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { OrcaError } from "../../src/orca/cli";
 import type {
+  AutomationRow,
   FleetRow,
   FleetSnapshot,
   OrcaPort,
@@ -72,6 +73,10 @@ export class FakeOrca implements OrcaPort {
   closed: string[] = [];
   removed: string[] = [];
   previews = new Map<string, string>();
+  /** `automations list`; `automationsCreate` appends to it and `automationsEdit` changes a row, as Orca does. */
+  automations: AutomationRow[] = [];
+  /** What `worktree current` reports for any cwd (the checkout `install` and `doctor` run from). */
+  current = { repoId: "repo-self", worktreeId: "wt-self", path: "/wt/self" };
   private seq = 0;
 
   private tookEffect(verb: string) {
@@ -110,6 +115,10 @@ export class FakeOrca implements OrcaPort {
       truncated: false,
       omittedHostIds: this.partial ? ["ssh-1"] : [],
     };
+  }
+  async worktreeCurrent(cwd: string) {
+    await this.rec("worktreeCurrent", cwd);
+    return { ...this.current };
   }
   async terminalList(wt: string) {
     await this.rec("terminalList", wt);
@@ -259,14 +268,42 @@ export class FakeOrca implements OrcaPort {
     return structuredClone(this.runs);
   }
   async automationsList() {
-    return [];
+    await this.rec("automationsList", null);
+    return structuredClone(this.automations);
   }
   async automationsCreate(args: string[]) {
     await this.rec("automationsCreate", args);
-    return { id: "auto-1" };
+    const id = `auto-${this.automations.length + 1}`;
+    this.automations.push({ id, name: "", enabled: true, nextRunAt: null, lastRunAt: null });
+    this.applyAutomationFlags(id, args);
+    return { id };
   }
   async automationsEdit(id: string, args: string[]) {
     await this.rec("automationsEdit", { id, args });
+    if (!this.automations.some((a) => a.id === id))
+      throw new OrcaError("orca_error", `fake orca: no automation ${id}`); // as Orca reports an unknown id
+    this.applyAutomationFlags(id, args);
+  }
+  /** The flags `create` and `edit` share (spike results §5): only those that are given change the row. */
+  private applyAutomationFlags(id: string, args: string[]) {
+    const a = this.automations.find((x) => x.id === id);
+    if (!a) return;
+    const val = (flag: string) => {
+      const i = args.indexOf(flag);
+      return i >= 0 ? args[i + 1] : undefined;
+    };
+    const name = val("--name");
+    if (name !== undefined) a.name = name;
+    const prompt = val("--prompt");
+    if (prompt !== undefined) a.prompt = prompt;
+    const precheck = val("--precheck");
+    if (precheck !== undefined) a.precheckCommand = precheck;
+    const timeout = val("--precheck-timeout");
+    if (timeout !== undefined) a.precheckTimeoutSec = Number(timeout);
+    const mode = val("--workspace-mode");
+    if (mode !== undefined) a.workspaceMode = mode;
+    if (args.includes("--disabled")) a.enabled = false;
+    if (args.includes("--enabled")) a.enabled = true;
   }
 
   // --- test helpers ---

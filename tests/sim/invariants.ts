@@ -98,7 +98,8 @@ async function assertJournal(w: World): Promise<void> {
   expect(unjournaled).toEqual([]);
   for (const c of w.orca.calls.filter((x) => x.verb === "worktreeCreate")) {
     const issue = (c.args as { linearIssue: string }).linearIssue;
-    expect(journal.some((e) => e.kind === "claim" && e.issue === issue)).toBe(true);
+    // an issue worktree; `install`'s dispatcher worktree and `doctor`'s probe worktree belong to no issue (Task 12)
+    if (issue) expect(journal.some((e) => e.kind === "claim" && e.issue === issue)).toBe(true);
   }
   const removed = w.orca.removed; // removals that took effect (a call that failed before acting may be retried)
   expect(removed.filter((id, i) => removed.indexOf(id) !== i)).toEqual([]);

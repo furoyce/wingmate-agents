@@ -174,3 +174,24 @@ describe("LinearClient — fix round 1", () => {
 function client(body: unknown): LinearClient {
   return new LinearClient(new GraphQL(tokens, (async () => respond(body)) as unknown as typeof fetch));
 }
+
+describe("LinearClient — Task 12", () => {
+  test("issueByIdentifier filters by team key and number, and returns null for a malformed or unknown identifier", async () => {
+    const seen: Record<string, unknown>[] = [];
+    const g = new GraphQL(tokens, (async (_u: string | URL | Request, init?: RequestInit) => {
+      const vars = JSON.parse(String(init?.body)).variables as {
+        filter: Record<string, unknown>;
+        after: string | null;
+      };
+      if (vars.after) return respond(page("issues", [])); // the fixture page says hasNextPage: true
+      seen.push(vars.filter);
+      return respond(read("tests/fixtures/linear/graphql-issues-page.json"));
+    }) as unknown as typeof fetch);
+    const c = new LinearClient(g);
+    expect((await c.issueByIdentifier("JRF-404"))?.identifier).toBe("JRF-404");
+    expect(seen[0]).toEqual({ team: { key: { eq: "JRF" } }, number: { eq: 404 } });
+    expect(await c.issueByIdentifier("JRF-999")).toBeNull(); // the page holds no JRF-999
+    expect(await c.issueByIdentifier("not an id")).toBeNull();
+    expect(seen.length).toBe(2); // the malformed identifier never reached Linear
+  });
+});

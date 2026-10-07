@@ -59,6 +59,8 @@ export interface LinearPort {
   listCandidates(projectIds: string[], labelNames: string[]): Promise<LinearIssue[]>;
   listUpdatedSince(projectIds: string[], sinceIso: string): Promise<LinearIssue[]>;
   getIssues(ids: string[]): Promise<LinearIssue[]>;
+  /** One issue by its identifier (`JRF-123`), or null: `doctor --notify-test <identifier>` (§7.5) names the scratch issue so. */
+  issueByIdentifier(identifier: string): Promise<LinearIssue | null>;
   listComments(issueIds: string[], sinceIso: string): Promise<LinearComment[]>;
   issueHistory(issueId: string, sinceIso: string): Promise<LinearHistoryEntry[]>;
   updateIssue(
@@ -103,6 +105,8 @@ export interface FleetRow {
   lastOutputAt: string | null;
   childWorktreeIds: string[];
   agents: AgentEntry[];
+  /** The repo's main checkout (R6: `doctor` reads Claude's folder trust for it); absent means false. */
+  isMainWorktree?: boolean;
 }
 export interface FleetSnapshot {
   worktrees: FleetRow[];
@@ -143,8 +147,25 @@ export interface SendReceipt {
   stage: "input_accepted" | "turn_started";
   requestId: string | null;
 }
+/**
+ * An `automations list` row (spike results §4). `prompt`, `precheckCommand`, `precheckTimeoutSec` and `workspaceMode` are what
+ * `doctor` diffs against the install (§4.3); a source that cannot report them leaves them out.
+ */
+export interface AutomationRow {
+  id: string;
+  name: string;
+  enabled: boolean;
+  nextRunAt: number | null;
+  lastRunAt: number | null;
+  prompt?: string | null;
+  precheckCommand?: string | null;
+  precheckTimeoutSec?: number | null;
+  workspaceMode?: string | null;
+}
 export interface OrcaPort {
   worktreePs(): Promise<FleetSnapshot>;
+  /** `orca worktree current --json` run in `cwd` (spike §4: `result.worktree.{id, repoId, path}`): the worktree that directory is in. */
+  worktreeCurrent(cwd: string): Promise<{ repoId: string; worktreeId: string; path: string }>;
   terminalList(worktreeId: string): Promise<TerminalRow[]>;
   accountList(): Promise<RateLimits>;
   worktreeCreate(a: {
@@ -186,11 +207,11 @@ export interface OrcaPort {
   workerRelease(dispatchId: string): Promise<void>;
   orchestrationSend(to: string, subject: string, body: string): Promise<void>;
   runList(): Promise<{ id: string; coordinatorHandle: string | null }[]>;
-  automationsList(): Promise<
-    { id: string; name: string; enabled: boolean; nextRunAt: number | null; lastRunAt: number | null }[]
-  >;
-  automationsCreate(args: string[]): Promise<{ id: string }>;
-  automationsEdit(id: string, args: string[]): Promise<void>;
+  automationsList(): Promise<AutomationRow[]>;
+  /** `orca automations create <flags>`: `flags` follow the verb (the client adds `automations create`). */
+  automationsCreate(flags: string[]): Promise<{ id: string }>;
+  /** `orca automations edit <id> <flags>`: `edit` accepts every flag `create` does (spike results §5). */
+  automationsEdit(id: string, flags: string[]): Promise<void>;
 }
 export interface BranchHistory {
   paths: string[];

@@ -1,7 +1,15 @@
 import { z } from "zod";
 // src/orca/client.ts — OrcaPort over the `orca` CLI. argv builders live in `argvFor` and result mappers are static so
 // tests cover both without spawning Orca. Result shapes follow spike results §4 (nested result.worktree/terminal/wait/send.prompt).
-import type { FleetSnapshot, OrcaPort, RateLimits, SendReceipt, TerminalRow, WorkerRow } from "../ports";
+import type {
+  AutomationRow,
+  FleetSnapshot,
+  OrcaPort,
+  RateLimits,
+  SendReceipt,
+  TerminalRow,
+  WorkerRow,
+} from "../ports";
 import { OrcaError, type OrcaOptions, orca } from "./cli";
 import { parseFleet, parseRateLimits, parseTerminals } from "./fleet";
 
@@ -39,8 +47,8 @@ export class OrcaClient implements OrcaPort {
       "--no-parent",
       "--base-branch",
       a.baseBranch,
-      "--linear-issue",
-      a.linearIssue,
+      // the long-lived dispatcher worktree and doctor's probe worktree belong to no issue (§4.3)
+      ...(a.linearIssue ? ["--linear-issue", a.linearIssue] : []),
       "--comment",
       a.comment,
       "--setup",
@@ -145,6 +153,55 @@ export class OrcaClient implements OrcaPort {
       requestId: pr.requestId ?? null,
     };
   }
+  /** `worktree current` (spike §4: nested `result.worktree.{id, repoId, branch, path, …}`). */
+  static mapWorktreeCurrent(r: R): { repoId: string; worktreeId: string; path: string } {
+    const w = shape(
+      "worktree current",
+      z.object({ id: z.string().min(1), repoId: z.string().min(1), path: z.string().min(1) }),
+      rec(r.worktree) ?? r,
+    );
+    return { repoId: w.repoId, worktreeId: w.id, path: w.path };
+  }
+  /** `automations list` rows (spike §4 row keys); a row without an id or name is `orca_shape`. */
+  static mapAutomations(r: R): AutomationRow[] {
+    const rows = shape(
+      "automations list",
+      z.array(
+        z
+          .object({
+            id: z.string().min(1),
+            name: z.string(),
+            enabled: z.boolean().optional(),
+            nextRunAt: z.number().nullish(),
+            lastRunAt: z.number().nullish(),
+            prompt: z.string().nullish(),
+            precheck: z
+              .object({ command: z.string().nullish(), timeoutSeconds: z.number().nullish() })
+              .passthrough()
+              .nullish(),
+            workspaceMode: z.string().nullish(),
+          })
+          .passthrough(),
+      ),
+      Array.isArray(r.automations) ? r.automations : [],
+    );
+    return rows.map((a) => ({
+      id: a.id,
+      name: a.name,
+      enabled: a.enabled === true,
+      nextRunAt: a.nextRunAt ?? null,
+      lastRunAt: a.lastRunAt ?? null,
+      prompt: a.prompt ?? null,
+      precheckCommand: a.precheck?.command ?? null,
+      precheckTimeoutSec: a.precheck?.timeoutSeconds ?? null,
+      workspaceMode: a.workspaceMode ?? null,
+    }));
+  }
+  /** `automations create` (not exercised live in Task 0): the new id at `result.automation.id` or `result.id`. */
+  static mapAutomationCreate(r: R): { id: string } {
+    const a = shape("automations create", z.object({ id: z.string().min(1) }), rec(r.automation) ?? r);
+    return { id: a.id };
+  }
   static mapWorktreeShow(id: string, r: R): { id: string; path: string; branch: string; head: string } {
     const w = shape(
       "worktree show",
@@ -175,11 +232,16 @@ export class OrcaClient implements OrcaPort {
     });
   }
 
-  private call = (args: string[], timeoutMs?: number): Promise<R> =>
-    orca(args, { ...this.opts, ...(timeoutMs ? { timeoutMs } : {}) }).then((v) => rec(v) ?? {});
+  private call = (args: string[], timeoutMs?: number, cwd?: string): Promise<R> =>
+    orca(args, { ...this.opts, ...(timeoutMs ? { timeoutMs } : {}), ...(cwd ? { cwd } : {}) }).then(
+      (v) => rec(v) ?? {},
+    );
 
   async worktreePs(): Promise<FleetSnapshot> {
     return parseFleet({ ok: true, result: await this.call(["worktree", "ps"], 20_000) });
+  }
+  async worktreeCurrent(cwd: string): Promise<{ repoId: string; worktreeId: string; path: string }> {
+    return OrcaClient.mapWorktreeCurrent(await this.call(["worktree", "current"], 15_000, cwd));
   }
   async terminalList(wt: string): Promise<TerminalRow[]> {
     return parseTerminals({
@@ -279,26 +341,13 @@ export class OrcaClient implements OrcaPort {
       coordinatorHandle: typeof x.coordinator_handle === "string" ? x.coordinator_handle : null,
     }));
   }
-  async automationsList(): Promise<
-    { id: string; name: string; enabled: boolean; nextRunAt: number | null; lastRunAt: number | null }[]
-  > {
-    const r = await this.call(["automations", "list"]);
-    const rows = Array.isArray(r.automations)
-      ? r.automations.map((x) => rec(x)).filter((x): x is R => x !== undefined)
-      : [];
-    return rows.map((a) => ({
-      id: str(a.id),
-      name: str(a.name),
-      enabled: a.enabled === true,
-      nextRunAt: typeof a.nextRunAt === "number" ? a.nextRunAt : null,
-      lastRunAt: typeof a.lastRunAt === "number" ? a.lastRunAt : null,
-    }));
+  async automationsList(): Promise<AutomationRow[]> {
+    return OrcaClient.mapAutomations(await this.call(["automations", "list"]));
   }
-  async automationsCreate(args: string[]): Promise<{ id: string }> {
-    const r = await this.call(["automations", "create", ...args]);
-    return { id: str(rec(r.automation)?.id ?? r.id) };
+  async automationsCreate(flags: string[]): Promise<{ id: string }> {
+    return OrcaClient.mapAutomationCreate(await this.call(["automations", "create", ...flags]));
   }
-  async automationsEdit(id: string, args: string[]): Promise<void> {
-    await this.call(["automations", "edit", id, ...args]);
+  async automationsEdit(id: string, flags: string[]): Promise<void> {
+    await this.call(["automations", "edit", id, ...flags]);
   }
 }

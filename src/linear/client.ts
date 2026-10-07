@@ -234,6 +234,14 @@ export class LinearClient implements LinearPort {
     return ids.length ? this.pageIssues({ id: { in: ids } }) : Promise.resolve([]);
   }
 
+  /** `JRF-123` → the team-scoped issue number 123 of team `JRF`; null when the identifier names no issue. */
+  async issueByIdentifier(identifier: string): Promise<LinearIssue | null> {
+    const m = /^([A-Z][A-Z0-9]*)-(\d+)$/.exec(identifier);
+    if (!m) return null;
+    const found = await this.pageIssues({ team: { key: { eq: m[1] } }, number: { eq: Number(m[2]) } });
+    return found.find((i) => i.identifier === identifier) ?? null;
+  }
+
   async listComments(issueIds: string[], sinceIso: string): Promise<LinearComment[]> {
     if (!issueIds.length) return [];
     const out: LinearComment[] = [];

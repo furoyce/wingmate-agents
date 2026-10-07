@@ -104,6 +104,11 @@ export class FakeLinear implements LinearPort {
       }),
     );
   }
+  async issueByIdentifier(identifier: string) {
+    this.call("issueByIdentifier");
+    const i = [...this.issues.values()].find((x) => x.identifier === identifier);
+    return i ? structuredClone(i) : null;
+  }
   async listComments(issueIds: string[], since: string) {
     this.call("listComments");
     return structuredClone(this.comments.filter((c) => issueIds.includes(c.issueId) && c.createdAt > since));

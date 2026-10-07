@@ -91,3 +91,20 @@ export async function stopRequested(dirs: Dirs, projectKey?: string, identifier?
 }
 
 export const clearStop = (dirs: Dirs) => unlink(stopPath(dirs)).catch(() => undefined);
+
+/**
+ * Removes the one scope entry a `wingmate stop` wrote (same scope, key and time), and the file once no entry is left: a stop that
+ * finishes never clears the flag of another stop still running (§13.3 i).
+ */
+export async function releaseStop(
+  dirs: Dirs,
+  s: { scope: "all" | "project" | "issue"; key?: string; at: string },
+): Promise<void> {
+  const t = await readText(stopPath(dirs));
+  if (!t) return;
+  const cur = StopSchema.parse(JSON.parse(t));
+  const i = cur.scopes.findIndex((x) => x.scope === s.scope && x.key === (s.key ?? null) && x.at === s.at);
+  if (i >= 0) cur.scopes.splice(i, 1);
+  if (cur.scopes.length === 0) await clearStop(dirs);
+  else await writeAtomic(stopPath(dirs), JSON.stringify(cur, null, 2));
+}

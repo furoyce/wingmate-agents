@@ -1,6 +1,6 @@
 // tests/unit/state/queue-heartbeat.test.ts
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { homeDirs } from "../../../src/shared/paths";
@@ -8,6 +8,7 @@ import {
   clearStop,
   readHeartbeat,
   readLastTick,
+  releaseStop,
   requestStop,
   stopRequested,
   writeHeartbeat,
@@ -93,5 +94,21 @@ describe("queue + heartbeat", () => {
     await beat("scan", "2026-10-06T10:20:00.000Z");
     expect((await readHeartbeat(dirs))?.kind).toBe("scan"); // §6.5: heartbeat.json is the latest of either
     expect(await readLastTick(dirs)).toMatchObject({ kind: "tick", at: "2026-10-06T10:00:00.000Z" });
+  });
+});
+
+describe("releaseStop (Task 12)", () => {
+  test("removes only the entry one stop wrote; the file goes once no entry is left", async () => {
+    const all = { scope: "all" as const, at: "2026-10-06T10:00:00.000Z" };
+    const one = { scope: "issue" as const, key: "JRF-1", at: "2026-10-06T10:01:00.000Z" };
+    await requestStop(dirs, all);
+    await requestStop(dirs, one);
+    await releaseStop(dirs, one);
+    expect(await stopRequested(dirs)).toBe(true);
+    expect(await stopRequested(dirs, "bouncr", "JRF-2")).toBe(true); // `all` still covers everything
+    await releaseStop(dirs, { scope: "issue", key: "JRF-1", at: "2026-10-06T10:01:00.000Z" }); // already gone: no-op
+    await releaseStop(dirs, all);
+    expect(await stopRequested(dirs)).toBe(false);
+    expect(existsSync(join(dirs.state, "stop-requested.json"))).toBe(false);
   });
 });

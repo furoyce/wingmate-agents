@@ -40,6 +40,13 @@ const registry: Record<string, () => Promise<Handler>> = {
   issue: async () => (await import("./commands/issue")).issueCommand,
   tick: async () => (await import("./commands/tick")).tickCommand,
   scan: async () => (await import("./commands/scan")).scanCommand,
+  install: async () => (await import("./commands/install")).installCommand,
+  doctor: async () => (await import("./commands/doctor")).doctorCommand,
+  stop: async () => (await import("./commands/stop")).stopCommand,
+  pause: async () => (await import("./commands/pause")).pauseCommand,
+  // `resume` is `pause --off` (Appendix A): the same command, which reads its own name
+  resume: async () => (await import("./commands/pause")).pauseCommand,
+  status: async () => (await import("./commands/status")).statusCommand,
 };
 
 /** Every error a command lets escape: `code: message` on stderr (never a stack trace, never stdout), exit 2. */

@@ -76,6 +76,8 @@ export interface BuildCtxInput {
   toolchainPaths?: string[];
   sweep?: SweepFn;
   publishImpl?: () => Promise<{ publish: PublishFn }>;
+  /** Team metadata read already (or the empty fallback of a command that must run while Linear is down); absent → read here. */
+  teamMeta?: LinearTeamMeta;
 }
 
 /** The Homebrew prefix: git and gh may live under a user-level prefix inside `denyRead ~/` (spike 2026-10-06 §2.5, Ruling R11). */
@@ -110,7 +112,7 @@ export async function defaultToolchainPaths(home: string): Promise<string[]> {
 }
 
 export async function buildCtx(o: BuildCtxInput): Promise<Ctx> {
-  const tm = await o.linear.teamMeta(o.cfg.workspace.team);
+  const tm = o.teamMeta ?? (await o.linear.teamMeta(o.cfg.workspace.team));
   const labelId = (name: string) => {
     const l = tm.labels.find((x) => x.name === name);
     if (!l) throw new Error(`Linear label not found: ${name}`);

@@ -146,18 +146,17 @@ async function postBlockNotice(
 }
 
 /**
- * Stop, `blocked`, the `Blocked` Lifecycle label and exactly one blocked comment (§7.5 step 2). F2: the record is written `blocked`
- * (with its open claim entries closed) before any Linear write, so a failed label or comment can never let it escape to a relaunch;
- * its next processing finishes them (`finishBlock`).
+ * The on-disk half of `block`: stop the agents, `blocked`, the notice ledgered and marked unposted (F2), open claim entries closed,
+ * the record saved. The Linear half — the `Blocked` label and the one blocked comment — follows in `block`, or, when Linear cannot
+ * be reached (`wingmate stop`, §13.3 i), on the record's next tick through `finishBlock`.
  */
-export async function block(
+export async function markBlocked(
   ctx: Ctx,
   r: WRecord,
-  issue: LinearIssue,
   reason: string,
   detail: string,
   nextAction: string,
-): Promise<void> {
+): Promise<BlockNotice> {
   const { unverifiable } = await stopAgents(ctx, r);
   if (unverifiable.length)
     addAttention(r, `release_unverifiable(${unverifiable.map((u) => u.split(":")[0]).join(",")})`);
@@ -175,6 +174,23 @@ export async function block(
   addAttention(r, BLOCK_UNPOSTED);
   await closeClaimEntries(ctx, r.identifier, `blocked:${reason}`);
   await saveRecord(ctx, r);
+  return notice;
+}
+
+/**
+ * Stop, `blocked`, the `Blocked` Lifecycle label and exactly one blocked comment (§7.5 step 2). F2: the record is written `blocked`
+ * (with its open claim entries closed) before any Linear write, so a failed label or comment can never let it escape to a relaunch;
+ * its next processing finishes them (`finishBlock`).
+ */
+export async function block(
+  ctx: Ctx,
+  r: WRecord,
+  issue: LinearIssue,
+  reason: string,
+  detail: string,
+  nextAction: string,
+): Promise<void> {
+  const notice = await markBlocked(ctx, r, reason, detail, nextAction);
   await postBlockNotice(ctx, r, issue, notice, true);
 }
 

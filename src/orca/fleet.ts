@@ -24,6 +24,7 @@ const RowZ = z.object({
   lastOutputAt: z.number().nullable().default(null),
   childWorktreeIds: z.array(z.string()).default([]),
   agents: z.array(AgentZ).default([]),
+  isMainWorktree: z.boolean().default(false),
 });
 const PsZ = z.object({
   worktrees: z.array(RowZ),
@@ -51,6 +52,7 @@ export function parseFleet(envelope: unknown): FleetSnapshot {
       liveTerminalCount: w.liveTerminalCount,
       lastOutputAt: ms(w.lastOutputAt),
       childWorktreeIds: w.childWorktreeIds,
+      isMainWorktree: w.isMainWorktree,
       agents: w.agents.map((a) => ({
         paneKey: a.paneKey,
         state: a.state,

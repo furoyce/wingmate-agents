@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { chmodSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { OrcaError } from "../../../src/orca/cli";
 import { OrcaClient } from "../../../src/orca/client";
 
@@ -235,5 +238,97 @@ describe("OrcaClient result mappers reject unexpected shapes (orca_shape, never 
     expect(() => new OrcaClient({ bin: "/bin/true" }).argvFor.terminalKeys("term_1", {})).toThrow(
       /text|enter/,
     );
+  });
+});
+
+describe("Task 12: worktree current, automations and the dispatcher worktree", () => {
+  // spike results §3.1/§4: `worktree current|show|create` nest the row under `result.worktree`, whose `id` is `<repoId>::<path>`
+  const SPIKE_CURRENT = {
+    worktree: {
+      id: "1f1e7f87-e283-4432-beaf-92efba56ddb9::/Users/owner/orca/workspaces/wingmate-agents/orca-linear-wingmate-agents",
+      repoId: "1f1e7f87-e283-4432-beaf-92efba56ddb9",
+      branch: "refs/heads/orca-linear-wingmate-agents",
+      path: "/Users/owner/orca/workspaces/wingmate-agents/orca-linear-wingmate-agents",
+      head: "4856101c0ffee",
+      displayName: "orca-linear-wingmate-agents",
+    },
+  };
+  test("worktreeCurrent maps result.worktree.{id, repoId, path} (spike §4) and runs `worktree current` in the given cwd", async () => {
+    expect(OrcaClient.mapWorktreeCurrent(SPIKE_CURRENT)).toEqual({
+      repoId: "1f1e7f87-e283-4432-beaf-92efba56ddb9",
+      worktreeId:
+        "1f1e7f87-e283-4432-beaf-92efba56ddb9::/Users/owner/orca/workspaces/wingmate-agents/orca-linear-wingmate-agents",
+      path: "/Users/owner/orca/workspaces/wingmate-agents/orca-linear-wingmate-agents",
+    });
+    // a fake orca that answers with the envelope and the cwd it ran in: the client passes cwd and parses the nested row
+    const dir = mkdtempSync(join(tmpdir(), "wm-orca-current-"));
+    const bin = join(dir, "orca");
+    writeFileSync(
+      bin,
+      `#!/bin/sh\nif [ "$1 $2 $3" = "worktree current --json" ]; then printf '{"id":"x","ok":true,"result":{"worktree":{"id":"r1::%s","repoId":"r1","path":"%s","branch":"refs/heads/b"}}}' "$PWD" "$PWD"; else echo boom >&2; exit 3; fi\n`,
+    );
+    chmodSync(bin, 0o755);
+    const real = realpathSync(dir);
+    expect(await new OrcaClient({ bin }).worktreeCurrent(dir)).toEqual({
+      repoId: "r1",
+      worktreeId: `r1::${real}`,
+      path: real,
+    });
+  });
+  test("worktreeCurrent refuses a row without id, repoId or path (orca_shape), never a silent default", () => {
+    for (const missing of ["id", "repoId", "path"] as const) {
+      const w: Record<string, unknown> = { ...SPIKE_CURRENT.worktree };
+      delete w[missing];
+      expect(() => OrcaClient.mapWorktreeCurrent({ worktree: w })).toThrow(/worktree current/);
+    }
+  });
+  test("automations list maps id, name, enabled, prompt, precheck command and workspace mode (spike §4 row keys)", () => {
+    const fixture = JSON.parse(readFileSync("tests/fixtures/orca/automations-list.json", "utf8")) as {
+      result: Record<string, unknown>;
+    };
+    const rows = OrcaClient.mapAutomations(fixture.result);
+    expect(rows.length).toBe(3);
+    expect(rows[0]).toEqual({
+      id: "2631faa3-9ab9-4b64-81d8-9ced947506c4",
+      name: "automation-1",
+      enabled: false,
+      nextRunAt: 1790949600000,
+      lastRunAt: 1790944087491,
+      prompt: "REDACTED",
+      precheckCommand: "REDACTED",
+      precheckTimeoutSec: 60,
+      workspaceMode: "new_per_run",
+    });
+    expect(() => OrcaClient.mapAutomations({ automations: [{ name: "no id" }] })).toThrow(/automations list/);
+  });
+  test("automations create returns the new id from result.automation.id or result.id; anything else is orca_shape", () => {
+    expect(OrcaClient.mapAutomationCreate({ automation: { id: "a-1" } })).toEqual({ id: "a-1" });
+    expect(OrcaClient.mapAutomationCreate({ id: "a-2" })).toEqual({ id: "a-2" });
+    expect(() => OrcaClient.mapAutomationCreate({ automation: {} })).toThrow(/automations create/);
+  });
+  test("worktreeCreate omits --linear-issue when there is no issue (the long-lived dispatcher and doctor worktrees)", () => {
+    const argv = client().argvFor.worktreeCreate({
+      repoId: "r1",
+      name: "wingmate-dispatcher",
+      baseBranch: "origin/main",
+      linearIssue: "",
+      comment: "wingmate dispatcher (long-lived)",
+    });
+    expect(argv).not.toContain("--linear-issue");
+    expect(argv).toEqual([
+      "worktree",
+      "create",
+      "--repo",
+      "id:r1",
+      "--name",
+      "wingmate-dispatcher",
+      "--no-parent",
+      "--base-branch",
+      "origin/main",
+      "--comment",
+      "wingmate dispatcher (long-lived)",
+      "--setup",
+      "skip",
+    ]);
   });
 });
