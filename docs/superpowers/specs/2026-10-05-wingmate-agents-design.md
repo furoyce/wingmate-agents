@@ -357,7 +357,9 @@ matters. Every skip reason is recorded in `queue.json` with the next evaluation 
    §13.3(b)) and a courtesy copy of the deny rules to `<path>/.claude/settings.local.json` (merged if present);
    append `.wingmate/` and `.claude/settings.local.json` to `<gitCommonDir>/info/exclude`; write the install-policy
    files (§13.3(e)); take the integrity-set hashes (§6.3 step 6); run `repos.<name>.setup` synchronously with a
-   10-minute timeout (journaled; failure → `blocked`, `setup_failed`).
+   10-minute timeout (journaled; failure → `blocked`, `setup_failed`) — only for a worktree this claim created (the
+   setup runs outside the sandbox, so a reused or rerouted worktree that an earlier agent modified is never set up
+   by the dispatcher; amended 2026-10-06).
 5. Launch per §4.4: `terminal create … --command "exec <argv>"` → handle and pane key; `terminal wait --terminal
    <handle> --for tui-idle` with the `satisfied` rule; `terminal send --terminal <handle> …`. `turn_started` →
    stage `working`; record `terminalHandle`, `paneKey`, `sessionId` (Claude: the uuid passed as `--session-id`;
@@ -1122,13 +1124,18 @@ are advisory; the controls below are enforced in code and verified by `wingmate 
   explicitly that Codex sessions can read every file of the owner's user, and the owner may set `verifyCross:
   false` per project to keep Codex out entirely.
 - **(d) Publishing is a dispatcher action.** Agents never run `git push`, `gh pr create/merge`, `gh secret`, `gh
-  api` writes or deploy CLIs. `finish` enqueues a `publish` intent; the dispatcher runs, in order: `git diff
-  --name-only --diff-filter=ACMRD <baseSha>...HEAD` → **path guard** against the merged `forbiddenPaths` (no lift
+  api` writes or deploy CLIs. `finish` enqueues a `publish` intent; the dispatcher first verifies that the worktree's
+  gitfile and `commondir` still point at the expected gitdir and common dir (both are agent-writable; a mismatch is
+  `kit_tampered`) and then runs git with an explicit `--git-dir`/`--work-tree`, hooks and fsmonitor disabled, and
+  text-mode diffs (`--text --no-textconv --no-ext-diff`, type changes included) over the net diff, every commit not
+  yet on the remote, and their messages, in order: `git diff --name-only --diff-filter=ACMRDT <baseSha>...<sha>` →
+  **path guard** against the merged `forbiddenPaths` (no lift
   mechanism in the pilot: ticket text, comments and labels never lift it) → **secret scan** over added lines and
   the PR title/body (pattern set ported from `ehr-dispatch` `guard.mjs`/`screen.mjs` plus `sk-ant-`, `gh[pousr]_`,
   `github_pat_`, JWTs, `AKIA`, private-key blocks, `postgres(ql)?://…:…@`, Supabase/Neon strings, `xox[abp]-`,
-  high-entropy ≥ 32-char tokens) → **dependency policy** (below) → `git push -u origin
-  HEAD:refs/heads/<worktree.branch>` → `gh pr create --head <worktree.branch>` (never `--web`; body from the
+  high-entropy ≥ 32-char tokens) → **dependency policy** (below) → `git push -u <the configured
+  GitHub URL> <sha>:refs/heads/<worktree.branch>` (the exact commit the guards checked; a truncated guard read refuses
+  with `diff_too_large`, a non-fast-forward rejection with `push_rejected`) → `gh pr create --head <worktree.branch>` (never `--web`; body from the
   template; `--draft` on request) → attach, complete — all from the dispatcher process with the owner's `gh`
   session; no agent environment holds GitHub credentials (b). Any guard failure follows §8.1 `finish` (finding
   delivered, nothing pushed). Four of five pilot repos have no branch protection today, which is exactly why the
