@@ -6,11 +6,12 @@ import { errorCode, errorText } from "../shared/errors";
 import { fence } from "../shared/fence";
 import { newUlid, newUuid } from "../shared/ids";
 import { writeAtomic } from "../state/fs";
-import { type WRecord, writeRecord } from "../state/records";
+import type { WRecord } from "../state/records";
 import type { Ctx } from "./context";
 import { isTickAbort } from "./guard";
 import { kitNonce, prepareLaunch } from "./launch";
 import type { Liveness } from "./liveness";
+import { saveRecord } from "./save";
 import { addAttention, dropAttention, ensureAttempt, transition } from "./states";
 
 const TRUST_DIALOG = "agent-trust-workspace";
@@ -144,13 +145,13 @@ export async function relaunch(
   if (opts.counted !== false) r.coordinator.relaunches += 1;
   if (!existsSync(wt.path)) {
     addAttention(r, "worktree_gone");
-    await writeRecord(ctx.dirs, r);
+    await saveRecord(ctx, r);
     return false;
   }
   const argv = successorArgv(r);
   if (!argv) {
     addAttention(r, "launch_argv_missing");
-    await writeRecord(ctx.dirs, r);
+    await saveRecord(ctx, r);
     return false;
   }
   try {
@@ -160,10 +161,10 @@ export async function relaunch(
     r.coordinator.terminalHandle = term.handle;
     r.coordinator.paneKey = `${term.tabId}:${term.leafId}`;
     r.coordinator.startedAt = ctx.now();
-    await writeRecord(ctx.dirs, r); // the handle is on disk before anything else can fail (never a second terminal for one launch)
+    await saveRecord(ctx, r); // the handle is on disk before anything else can fail (never a second terminal for one launch)
     if (!(await waitForTui(ctx, r, term.handle))) {
       addAttention(r, "launch_not_ready");
-      await writeRecord(ctx.dirs, r);
+      await saveRecord(ctx, r);
       return false;
     }
     const nonce = (await kitNonce(ctx, r)) ?? "";
@@ -182,13 +183,13 @@ export async function relaunch(
     });
     if (receipt.stage !== "turn_started") {
       addAttention(r, "launch_unconfirmed");
-      await writeRecord(ctx.dirs, r);
+      await saveRecord(ctx, r);
       return false;
     }
     if (r.stage === "claimed") await transition(ctx, r, "working", "turn_started");
     ensureAttempt(ctx, r);
     dropAttention(r, "launch_not_ready", "launch_unconfirmed", "relaunch_failed", "worktree_gone");
-    await writeRecord(ctx.dirs, r);
+    await saveRecord(ctx, r);
     return true;
   } catch (e) {
     if (isTickAbort(e)) throw e;
@@ -200,7 +201,7 @@ export async function relaunch(
       data: { reason, code: errorCode(e) },
     });
     ctx.log.warn({ issue: r.identifier, err: errorText(e) }, "relaunch failed");
-    await writeRecord(ctx.dirs, r);
+    await saveRecord(ctx, r);
     return false;
   }
 }

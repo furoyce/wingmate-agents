@@ -1,5 +1,6 @@
 // src/machine/guard.ts — a check before every external action (§6.0 stop flag, Ruling R16 lost lock) and the read-only context, both
 // as proxies over the ports' write verbs, so no call site can forget them.
+import { stopRequested } from "../state/heartbeat";
 import type { Ctx } from "./context";
 
 /** Raised by the tick's guard; the tick turns it into its outcome instead of an error. */
@@ -13,6 +14,34 @@ export class TickAbort extends Error {
   }
 }
 export const isTickAbort = (e: unknown): e is TickAbort => e instanceof TickAbort;
+
+/**
+ * F1: raised inside one record's processing — a stop scoped to its issue or project, or another writer changed the record since this
+ * tick read or wrote it. It is a `TickAbort`, so every catch that lets the tick's aborts through lets it through too; the record's
+ * boundary (advance, claim, cleanup) catches it, and only that record stops for this tick.
+ */
+export class RecordAbort extends TickAbort {
+  constructor(
+    readonly code: "record_changed" | "stop_requested",
+    readonly identifier: string,
+  ) {
+    super("stopped", code);
+    this.name = "RecordAbort";
+  }
+}
+export const isRecordAbort = (e: unknown): e is RecordAbort => e instanceof RecordAbort;
+
+/**
+ * F1 (§6.0, §13.3 i): the tick's context for one record. Before each external action a stop scoped to the record's project or issue
+ * aborts that record; a stop for everything is left to the tick's own guard, which aborts the whole tick.
+ */
+export function recordCtx(ctx: Ctx, project: string, identifier: string): Ctx {
+  return guardedCtx(ctx, async () => {
+    if (await stopRequested(ctx.dirs)) return;
+    if (await stopRequested(ctx.dirs, project, identifier))
+      throw new RecordAbort("stop_requested", identifier);
+  });
+}
 
 /** The write verbs of each port: Linear and GitHub writes, Orca mutations, git push (reads pass through unguarded). */
 export const WRITE_VERBS = {

@@ -10,13 +10,14 @@ import { OrcaError } from "../orca/cli";
 import { scanText } from "../policy/secrets";
 import type { LinearIssue } from "../ports";
 import { WingmateError, errorCode, errorText } from "../shared/errors";
-import { PIPELINE, type WRecord, writeRecord } from "../state/records";
+import { PIPELINE, type WRecord } from "../state/records";
 import type { Ctx } from "./context";
 import { isTickAbort } from "./guard";
 import { LinearWrites } from "./linearWrites";
 import { syncMirror } from "./mirror";
 import type { Reconciled } from "./reconcile";
 import { coordinatorMarker } from "./resume";
+import { saveRecord } from "./save";
 import { addAttention, dropAttention, enterPipelineStage, transition } from "./states";
 import { addNote, syncStatus } from "./status";
 
@@ -310,7 +311,7 @@ async function runIntent(x: Run, i: Intent): Promise<boolean> {
     return false;
   }
   x.r.timers.lastActivityAt = x.ctx.now(); // §9.6: an executed intent is activity
-  await writeRecord(x.ctx.dirs, x.r); // effects on disk before the intent leaves the outbox
+  await saveRecord(x.ctx, x.r); // effects on disk before the intent leaves the outbox
   await consumeIntent(x.wt, i.id);
   x.res.executed += 1;
   await x.ctx.ledger.append({
@@ -384,8 +385,8 @@ export async function executeOutbox(
     await unsafeOutbox(x, e);
   }
   r.outbox = { pending: await pendingCount(x), lastDrainedAt: ctx.now() };
+  await saveRecord(ctx, r);
   await syncMirror(r);
-  await writeRecord(ctx.dirs, r);
   if (res.executed + res.failed > 0) await syncStatus(ctx, r, issue); // Ruling R1: only when an intent ran
   return res;
 }

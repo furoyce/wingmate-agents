@@ -10,19 +10,13 @@ import type { LinearIssue } from "../ports";
 import { errorCode, errorText } from "../shared/errors";
 import { stopRequested } from "../state/heartbeat";
 import type { Queue, SkipReason } from "../state/queue";
-import {
-  type WRecord,
-  archiveRecord,
-  listRecords,
-  newRecord,
-  readRecord,
-  writeRecord,
-} from "../state/records";
+import { type WRecord, archiveRecord, listRecords, newRecord, readRecord } from "../state/records";
 import { claimIssue } from "./claim";
 import type { Ctx } from "./context";
-import { isTickAbort } from "./guard";
+import { isRecordAbort, isTickAbort, recordCtx } from "./guard";
 import { refreshRepoSiblings } from "./launch";
 import type { Candidate, Reconciled } from "./reconcile";
+import { saveRecord } from "./save";
 import { syncStatus } from "./status";
 import type { TickOptions, TickSummary } from "./tick";
 
@@ -82,7 +76,7 @@ async function nextCycle(ctx: Ctx, identifier: string, old: WRecord | undefined)
 async function refreshStatus(ctx: Ctx, r: WRecord, issue: LinearIssue): Promise<void> {
   try {
     await syncStatus(ctx, r, issue);
-    await writeRecord(ctx.dirs, r);
+    await saveRecord(ctx, r);
   } catch (e) {
     if (isTickAbort(e)) throw e;
     ctx.log.warn(
@@ -109,8 +103,9 @@ async function claimOne(
     known.splice(known.indexOf(old), 1);
   }
   const rt = route(project, c.issue.title, c.issue.description);
+  const rctx = recordCtx(ctx, project.key, id); // F1: a stop scoped to this issue or project stops the claim at its next action
   try {
-    const made = await claimIssue(ctx, {
+    const made = await claimIssue(rctx, {
       issue: c.issue,
       project,
       provider,
@@ -121,9 +116,14 @@ async function claimOne(
     });
     s.claims.push(id);
     await refreshRepoSiblings(ctx, known, made.worktree?.gitCommonDir, id); // R22/R24: the repo gained a sibling
-    if (made.stage !== "claimed") await refreshStatus(ctx, made, c.issue);
+    if (made.stage !== "claimed") await refreshStatus(rctx, made, c.issue);
     return made;
   } catch (e) {
+    if (isRecordAbort(e)) {
+      s.skipped.push({ identifier: id, reason: e.code });
+      await ctx.ledger.append({ at: ctx.now(), issue: id, type: e.code, data: {} });
+      return readRecord(ctx.dirs, id); // the half-made claim holds its slot; the next tick replays it or sees the newer write
+    }
     if (isTickAbort(e)) throw e;
     s.attention.push({ identifier: id, code: "claim_failed" });
     await ctx.ledger.append({ at: ctx.now(), issue: id, type: "claim_failed", data: { code: errorCode(e) } });

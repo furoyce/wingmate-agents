@@ -3,9 +3,10 @@ import { renderBlocked } from "../linear/templates";
 import type { LinearIssue } from "../ports";
 import { errorText } from "../shared/errors";
 import { newUlid } from "../shared/ids";
-import { type WRecord, writeRecord } from "../state/records";
+import type { WRecord } from "../state/records";
 import type { Ctx } from "./context";
 import { LinearWrites } from "./linearWrites";
+import { saveRecord } from "./save";
 import { addAttention, endAttempt, transition } from "./states";
 
 const SETTLED = new Set(["completed", "failed"]);
@@ -61,7 +62,7 @@ export async function release(
   if (workers.length) addAttention(r, `release_unverifiable(${workers.join(",")})`);
   if (workers.length !== unverifiable.length) {
     addAttention(r, "release_unverifiable(terminals)");
-    await writeRecord(ctx.dirs, r);
+    await saveRecord(ctx, r);
     return false;
   }
   const w = new LinearWrites(ctx);
@@ -81,7 +82,7 @@ export async function release(
         comment: `wingmate: ${to}`,
       })
       .catch((e: unknown) => ctx.log.warn({ issue: r.identifier, err: errorText(e) }, "worktree set failed"));
-  await writeRecord(ctx.dirs, r);
+  await saveRecord(ctx, r);
   return true;
 }
 
@@ -109,5 +110,5 @@ export async function block(
       key: `blocked:${r.identifier}:${r.cycle}:${r.history.length}`,
     },
   );
-  await writeRecord(ctx.dirs, r);
+  await saveRecord(ctx, r);
 }

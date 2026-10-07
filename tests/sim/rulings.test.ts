@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { writeIntent } from "../../src/kit/intents";
 import { scan } from "../../src/machine/scan";
 import { readHeartbeat, requestStop } from "../../src/state/heartbeat";
+import { withRecordLock } from "../../src/state/lock";
 import { type WRecord, listRecords, readRecord, writeRecord } from "../../src/state/records";
 import { OWNER, type World, advance, labeledByOwner, runTick, todo, world } from "./harness";
 
@@ -85,6 +86,80 @@ describe("§13.3(i) stop requests", () => {
     const s = await runTick(w);
     expect(s.claims).toEqual(["JRF-502"]);
     expect(s.skipped).toContainEqual({ identifier: "JRF-501", reason: "stop_requested" });
+  });
+});
+
+describe("F1: the record lock is held only for a read or a write; another writer's change is never overwritten", () => {
+  const SMART = "a0d17ec1-b237-4481-9efb-1eff9fe69efe";
+
+  test("a stop that blocks the record during a relaunch's Orca wait survives the tick (record_changed); nothing relaunches after", async () => {
+    const w = await world();
+    const r = await claimed(w);
+    w.orca.killTerminal(r.worktree?.id ?? "", r.coordinator.terminalHandle ?? "");
+    const seen: { lockHeld: boolean | null } = { lockHeld: null };
+    w.orca.onCall = async (verb) => {
+      if (verb !== "terminalWait" || seen.lockHeld !== null) return;
+      seen.lockHeld = existsSync(join(w.dirs.records, "JRF-501.lock"));
+      // `wingmate stop` step (4): under the record lock, the record is marked blocked (owner_stop) and its handle dropped
+      const stop = async () => {
+        const cur = await rec(w);
+        cur.history.push({
+          at: w.ctx.now(),
+          from: cur.stage,
+          to: "blocked",
+          cause: "owner_stop",
+          evidence: null,
+        });
+        Object.assign(cur, { stage: "blocked" });
+        Object.assign(cur.coordinator, { terminalHandle: null, paneKey: null });
+        await writeRecord(w.dirs, cur);
+      };
+      if (seen.lockHeld)
+        await stop(); // as P7: the tick's lock went stale (> 60 s) and the stop broke it
+      else await withRecordLock(w.dirs, "JRF-501", stop);
+    };
+    advance(w, 5);
+    const s = await runTick(w);
+    w.orca.onCall = null;
+    expect(seen.lockHeld).toBe(false);
+    const after = await rec(w);
+    expect(after.stage).toBe("blocked");
+    expect(after.history.at(-1)?.cause).toBe("owner_stop");
+    expect(after.coordinator.terminalHandle).toBeNull();
+    expect(s.skipped).toContainEqual({ identifier: "JRF-501", reason: "record_changed" });
+    expect((await w.ctx.ledger.readIssue("JRF-501")).some((e) => e.type === "record_changed")).toBe(true);
+    const creates = w.orca.calls.filter((c) => c.verb === "terminalCreate").length;
+    advance(w, 5);
+    const next = await runTick(w);
+    expect(w.orca.calls.filter((c) => c.verb === "terminalCreate").length).toBe(creates);
+    expect([...next.relaunches, ...next.handoffs]).toEqual([]);
+  });
+
+  test("a stop scoped to the issue, requested while its relaunch is in flight, aborts that record before its next external action; the tick goes on", async () => {
+    const w = await world();
+    const smart = w.cfg.projects["smart-dispatcher"]?.repos.main;
+    if (!smart) throw new Error("smart-dispatcher repo missing");
+    smart.setup = "none";
+    const r = await claimed(w);
+    w.orca.killTerminal(r.worktree?.id ?? "", r.coordinator.terminalHandle ?? "");
+    labeledByOwner(w, todo("i2", "JRF-601", { projectId: SMART }));
+    let mark = -1;
+    w.orca.onCall = async (verb, args) => {
+      if (verb !== "terminalCreate" || mark >= 0 || (args as { wt: string }).wt !== r.worktree?.id) return;
+      mark = w.orca.calls.length;
+      await requestStop(w.dirs, { scope: "issue", key: "JRF-501", at: w.ctx.now() });
+    };
+    advance(w, 5);
+    const s = await runTick(w);
+    w.orca.onCall = null;
+    const sentAfterStop = w.orca.calls
+      .slice(mark)
+      .filter((c) => ["terminalSend", "terminalKeys", "orchestrationSend"].includes(c.verb))
+      .filter((c) => !JSON.stringify(c.args).includes("JRF-601"));
+    expect(sentAfterStop).toEqual([]);
+    expect(s.outcome).not.toBe("stopped");
+    expect(s.skipped).toContainEqual({ identifier: "JRF-501", reason: "stop_requested" });
+    expect(s.claims).toEqual(["JRF-601"]);
   });
 });
 

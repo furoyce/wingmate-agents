@@ -1,12 +1,11 @@
 // src/machine/cleanup.ts — §6.3 step 7 / §13.3(h): a `done`/`cancelled` record's worktree is removed after the grace hours, by its
 // recorded id, never while an open PR references its branch (then retried daily).
 import { errorCode, errorText } from "../shared/errors";
-import { withRecordLock } from "../state/lock";
-import { readRecord, writeRecord } from "../state/records";
 import type { Ctx } from "./context";
-import { isTickAbort } from "./guard";
+import { isRecordAbort, isTickAbort, recordCtx } from "./guard";
 import { refreshRepoSiblings } from "./launch";
 import type { Reconciled } from "./reconcile";
+import { readTracked, saveRecord } from "./save";
 import { addAttention, dropAttention } from "./states";
 import type { TickSummary } from "./tick";
 
@@ -18,14 +17,14 @@ async function deferredRecently(ctx: Ctx, identifier: string): Promise<boolean> 
 }
 
 async function cleanupOne(ctx: Ctx, rec: Reconciled, identifier: string): Promise<void> {
-  const r = await readRecord(ctx.dirs, identifier);
+  const r = await readTracked(ctx, identifier); // F1: the lock is held for this read, then for each write — never across gh or Orca
   const old = r?.worktree;
   if (!r || !old || (r.stage !== "done" && r.stage !== "cancelled")) return;
   if (await deferredRecently(ctx, identifier)) return;
   const defer = async (why: string) => {
     addAttention(r, "cleanup_failed");
     await ctx.ledger.append({ at: ctx.now(), issue: identifier, type: "cleanup_deferred", data: { why } });
-    await writeRecord(ctx.dirs, r);
+    await saveRecord(ctx, r);
   };
   for (const pr of r.prs.filter((p) => p.state === "OPEN")) {
     try {
@@ -48,7 +47,7 @@ async function cleanupOne(ctx: Ctx, rec: Reconciled, identifier: string): Promis
   r.worktree = null;
   dropAttention(r, "cleanup_failed");
   await ctx.ledger.append({ at: ctx.now(), issue: identifier, type: "cleanup", data: { worktree: old.id } });
-  await writeRecord(ctx.dirs, r);
+  await saveRecord(ctx, r);
   await refreshRepoSiblings(ctx, rec.records, old.gitCommonDir, identifier); // R22/R24: the repo lost a sibling
 }
 
@@ -59,8 +58,13 @@ export async function cleanup(ctx: Ctx, rec: Reconciled, s: TickSummary): Promis
     const last = r.history.at(-1);
     if (!last || Date.parse(ctx.now()) - Date.parse(last.at) < graceMs) continue;
     try {
-      await withRecordLock(ctx.dirs, r.identifier, () => cleanupOne(ctx, rec, r.identifier));
+      await cleanupOne(recordCtx(ctx, r.project, r.identifier), rec, r.identifier);
     } catch (e) {
+      if (isRecordAbort(e)) {
+        s.skipped.push({ identifier: r.identifier, reason: e.code });
+        await ctx.ledger.append({ at: ctx.now(), issue: r.identifier, type: e.code, data: {} });
+        continue;
+      }
       if (isTickAbort(e)) throw e;
       s.attention.push({ identifier: r.identifier, code: "tick_error" });
       const data = { code: errorCode(e), message: errorText(e).slice(0, 300) };

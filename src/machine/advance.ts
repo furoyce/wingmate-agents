@@ -1,17 +1,17 @@
 // src/machine/advance.ts — §6.3 for every active record, in order: owner overrides, unfinished claim steps (§6.6 replay), the outbox,
-// answers and comments, liveness, timers, kit integrity, budgets. Each record is processed under its lock and in isolation: one
-// record's failure is reported and the tick moves on (its state is as a crash would leave it, which the journal replays).
+// answers and comments, liveness, timers, kit integrity, budgets. Each record is processed in isolation: one record's failure is
+// reported and the tick moves on (its state is as a crash would leave it, which the journal replays). The record lock is held only
+// for a read or a write (F1, §6.0): every write compares the file with the version this tick last read or wrote.
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { readIntentFiles } from "../kit/intents";
 import { resolveTier } from "../policy/providers";
 import { errorCode, errorText } from "../shared/errors";
 import { stopRequested } from "../state/heartbeat";
-import { withRecordLock } from "../state/lock";
-import { readRecord, writeRecord } from "../state/records";
+import type { WRecord } from "../state/records";
 import { claimLinear, provisionAndLaunch } from "./claim";
 import type { Ctx } from "./context";
-import { isTickAbort } from "./guard";
+import { isRecordAbort, isTickAbort, recordCtx } from "./guard";
 import { doHandoff, doReroute } from "./handoff";
 import { comments, reviewFeedback } from "./humans";
 import { LinearWrites } from "./linearWrites";
@@ -19,6 +19,7 @@ import { syncMirror } from "./mirror";
 import { executeOutbox } from "./outbox";
 import type { Event, Reconciled } from "./reconcile";
 import { block, release, stopAgents } from "./release";
+import { readTracked, saveRecord } from "./save";
 import { addAttention, dropAttention, stageOf } from "./states";
 import { addNote, flushNotes, syncStatus } from "./status";
 import { type Advance, type StepOut, WORKING } from "./step";
@@ -217,11 +218,11 @@ const STEPS = [overrides, replayClaim, outbox, comments, liveness, timers, integ
 /** The mirror, the record, then the status comment when a tick-level change made it stale (once per tick, Ruling R1). */
 async function settle(a: Advance, before: string[]): Promise<void> {
   const { ctx, r } = a;
-  await syncMirror(r);
-  await writeRecord(ctx.dirs, r);
+  await saveRecord(ctx, r);
+  await syncMirror(r); // after the record: a write refused as record_changed leaves the mirror alone too
   if (a.dirty) {
     await syncStatus(ctx, r, a.issue);
-    await writeRecord(ctx.dirs, r);
+    await saveRecord(ctx, r);
   } else await flushNotes(ctx, r);
   for (const code of r.attention)
     if (!before.includes(code))
@@ -231,14 +232,17 @@ async function settle(a: Advance, before: string[]): Promise<void> {
       });
 }
 
-async function advanceLocked(ctx: Ctx, rec: Reconciled, identifier: string, s: TickSummary, budget: Budget) {
-  const r0 = rec.records.find((x) => x.identifier === identifier);
-  const r = await readRecord(ctx.dirs, identifier);
+/** F1: this record's processing stopped (a scoped stop, or another writer changed it); the newer state stands. */
+async function recordAborted(ctx: Ctx, s: TickSummary, identifier: string, code: string): Promise<void> {
+  s.skipped.push({ identifier, reason: code });
+  await ctx.ledger.append({ at: ctx.now(), issue: identifier, type: code, data: {} });
+}
+
+async function advanceOne(ctx: Ctx, rec: Reconciled, r0: WRecord, s: TickSummary, budget: Budget) {
+  const identifier = r0.identifier;
   // written by another process (stop, Console) since reconcile read it: the events no longer apply; next tick re-derives
-  if (!r || !r0 || JSON.stringify(r) !== JSON.stringify(r0)) {
-    await ctx.ledger.append({ at: ctx.now(), issue: identifier, type: "record_changed", data: {} });
-    return;
-  }
+  const r = await readTracked(ctx, identifier, r0);
+  if (!r) return recordAborted(ctx, s, identifier, "record_changed");
   const issue = rec.issuesById.get(r.linearId);
   const project = ctx.cfg.projects[r.project];
   if (!issue || !project) {
@@ -277,8 +281,12 @@ export async function advanceAll(ctx: Ctx, rec: Reconciled, s: TickSummary, budg
       continue;
     }
     try {
-      await withRecordLock(ctx.dirs, r0.identifier, () => advanceLocked(ctx, rec, r0.identifier, s, budget));
+      await advanceOne(recordCtx(ctx, r0.project, r0.identifier), rec, r0, s, budget);
     } catch (e) {
+      if (isRecordAbort(e)) {
+        await recordAborted(ctx, s, r0.identifier, e.code);
+        continue;
+      }
       if (isTickAbort(e)) throw e;
       s.attention.push({ identifier: r0.identifier, code: "tick_error" });
       const data = { code: errorCode(e), message: errorText(e).slice(0, 300) };

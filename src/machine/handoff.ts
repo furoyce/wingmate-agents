@@ -6,13 +6,14 @@ import { type Coordinator, nextInCascade, resolveTier } from "../policy/provider
 import { availability } from "../policy/quota";
 import { errorText } from "../shared/errors";
 import { newUuid } from "../shared/ids";
-import { PIPELINE, type WRecord, writeRecord } from "../state/records";
+import { PIPELINE, type WRecord } from "../state/records";
 import { provisionAndLaunch } from "./claim";
 import { isTickAbort } from "./guard";
 import { refreshRepoSiblings } from "./launch";
 import { LinearWrites } from "./linearWrites";
 import { block, stopAgents } from "./release";
 import { relaunch } from "./resume";
+import { saveRecord } from "./save";
 import { addAttention, endAttempt, enterPipelineStage, stageOf, transition, worktreeOf } from "./states";
 import { addNote } from "./status";
 import type { Advance } from "./step";
@@ -99,7 +100,7 @@ export async function doHandoff(a: Advance, trigger: string, reason: string | nu
     worktreePath: r.worktree?.path ?? ".",
   });
   r.coordinator.sessionId = next === "claude" ? sessionId : null;
-  await writeRecord(ctx.dirs, r);
+  await saveRecord(ctx, r);
   if (await relaunch(ctx, r, `handoff:${trigger}`, { counted: false })) s.handoffs.push(r.identifier);
   else addAttention(r, "launch_unconfirmed");
 }
@@ -156,7 +157,7 @@ export async function doReroute(a: Advance, repoName: string): Promise<void> {
     };
   await transition(ctx, r, "claimed", "reroute", repoName);
   enterPipelineStage(ctx, r, "intake");
-  await writeRecord(ctx.dirs, r);
+  await saveRecord(ctx, r);
   if (old) await retire(a, old);
   const l = r.coordinator.launch;
   const tier =

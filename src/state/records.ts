@@ -272,9 +272,12 @@ export function newRecord(i: NewRecordInput): WRecord {
 
 const file = (dirs: Dirs, id: string) => join(dirs.records, `${id}.json`);
 
+/** The record as it is written to disk (schema order): two versions are the same record exactly when their texts are equal. */
+export const recordText = (r: WRecord): string => JSON.stringify(RecordSchema.parse(r), null, 2);
+
 /** The claim itself: O_EXCL create of the record file; a second claim fails with `record_exists`. */
 export async function createRecordExclusive(dirs: Dirs, r: WRecord): Promise<void> {
-  if (!(await createExclusive(file(dirs, r.identifier), JSON.stringify(RecordSchema.parse(r), null, 2)))) {
+  if (!(await createExclusive(file(dirs, r.identifier), recordText(r)))) {
     throw new WingmateError("record_exists", `record for ${r.identifier} already exists`);
   }
 }
@@ -300,7 +303,7 @@ export async function readRecord(dirs: Dirs, id: string): Promise<WRecord | null
 }
 
 export async function writeRecord(dirs: Dirs, r: WRecord): Promise<void> {
-  await writeAtomic(file(dirs, r.identifier), JSON.stringify(RecordSchema.parse(r), null, 2));
+  await writeAtomic(file(dirs, r.identifier), recordText(r));
 }
 
 export async function listRecords(dirs: Dirs): Promise<WRecord[]> {

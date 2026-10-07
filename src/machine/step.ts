@@ -10,7 +10,7 @@ import type { Budget, TickSummary } from "./tick";
 export interface Advance {
   ctx: Ctx;
   rec: Reconciled;
-  /** The record, re-read under its lock; every step mutates this object and the tick writes it once at the end. */
+  /** The record, re-read under its lock (held for that read only, F1); steps mutate this object, every write is compare-and-write. */
   r: WRecord;
   /** The issue as reconcile read it, kept in step with Wingmate's own writes (LinearWrites). */
   issue: LinearIssue;

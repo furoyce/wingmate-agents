@@ -12,13 +12,14 @@ import type { LinearIssue } from "../ports";
 import { WingmateError, errorText } from "../shared/errors";
 import { run } from "../shared/exec";
 import { newUlid, newUuid } from "../shared/ids";
-import { type WRecord, createRecordExclusive, newRecord, writeRecord } from "../state/records";
+import { type WRecord, createRecordExclusive, newRecord } from "../state/records";
 import type { Ctx } from "./context";
 import { isTickAbort } from "./guard";
 import { kitNonce, prepareLaunch } from "./launch";
 import { LinearWrites } from "./linearWrites";
 import { block } from "./release";
 import { waitForTui } from "./resume";
+import { saveRecord, trackRecord } from "./save";
 import { addAttention, dropAttention, ensureAttempt, transition } from "./states";
 import { syncStatus } from "./status";
 
@@ -66,6 +67,7 @@ export async function claimIssue(ctx: Ctx, c: ClaimInput): Promise<WRecord> {
   r.linear.lifecycleLabel = r.linear.lifecycleLabelAtClaim;
   r.linear.state = c.issue.state.name;
   await createRecordExclusive(ctx.dirs, r); // step 1: the claim itself (O_EXCL)
+  trackRecord(r); // F1: every later write of this claim is a compare-and-write
   const entry = await ctx.journal.intent({
     issue: r.identifier,
     kind: "claim",
@@ -79,13 +81,13 @@ export async function claimIssue(ctx: Ctx, c: ClaimInput): Promise<WRecord> {
     return r;
   } catch (err) {
     if (isTickAbort(err)) {
-      await writeRecord(ctx.dirs, r); // keep the progress; the abort is not a failed step
+      await saveRecord(ctx, r); // keep the progress; the abort is not a failed step
       throw err;
     }
     await ctx.journal.failed(entry.id, errorText(err));
     r.coordinator.launchRetries += 1;
     addAttention(r, "claim_step_failed");
-    await writeRecord(ctx.dirs, r);
+    await saveRecord(ctx, r);
     throw err;
   }
 }
@@ -98,7 +100,7 @@ export async function claimLinear(ctx: Ctx, r: WRecord, issue: LinearIssue, entr
   await w.subscribeOwner(r, issue);
   await syncStatus(ctx, r, issue, null, "claiming");
   await ctx.journal.stepDone(entryId, "linear", { statusCommentId: r.linear.statusCommentId });
-  await writeRecord(ctx.dirs, r);
+  await saveRecord(ctx, r);
 }
 
 const worktreeName = (r: WRecord) =>
@@ -143,7 +145,7 @@ async function provisionWorktree(ctx: Ctx, r: WRecord, repo: RepoConfig, entryId
     branch: shown.branch,
     reused: !!existing,
   });
-  await writeRecord(ctx.dirs, r);
+  await saveRecord(ctx, r);
 }
 
 /** §5.4 step 4: kit (with tier `best` of both providers for review roles), install policy, hashes; then the repo's setup. */
@@ -246,7 +248,7 @@ async function createCoordinator(ctx: Ctx, r: WRecord, tier: Tier): Promise<void
   );
   r.coordinator.terminalHandle = term.handle;
   r.coordinator.paneKey = `${term.tabId}:${term.leafId}`;
-  await writeRecord(ctx.dirs, r);
+  await saveRecord(ctx, r);
 }
 
 /**
@@ -275,7 +277,7 @@ export async function provisionAndLaunch(
   if (!(await waitForTui(ctx, r, handle))) {
     addAttention(r, "launch_not_ready");
     r.coordinator.launchRetries += 1;
-    await writeRecord(ctx.dirs, r);
+    await saveRecord(ctx, r);
     await ctx.journal.failed(entryId, "launch_not_ready");
     return;
   }
@@ -303,5 +305,5 @@ export async function provisionAndLaunch(
     });
   await ctx.journal.stepDone(entryId, "orcaMeta", null);
   await ctx.journal.confirmed(entryId);
-  await writeRecord(ctx.dirs, r);
+  await saveRecord(ctx, r);
 }
