@@ -1,0 +1,589 @@
+# Wingmate runbook
+
+This runbook is for operating the dispatcher day to day. For the one-time Linear setup and credential rotation, see
+[linear-app-setup.md](linear-app-setup.md). Section numbers like §13.3 refer to the
+[design spec](superpowers/specs/2026-10-05-wingmate-agents-design.md).
+
+Conventions used throughout:
+
+- `wingmate` is `~/.local/bin/wingmate`, the binary `install` built.
+- `<state>` is `~/.local/share/wingmate`.
+- `<ID>` is an issue identifier such as `JRF-404`.
+- Commands that read the config (`stop`, `pause`/`resume`, `status --project`, `install`, `doctor`) must run where
+  `config/projects.yaml` is. That means the `wingmate-dispatcher` worktree or any checkout of this repository.
+  Alternatively, set `WINGMATE_CONFIG=<path>`.
+
+Contents:
+
+1. [What runs where](#1-what-runs-where)
+2. [Daily routine](#2-daily-routine)
+3. [Answering a question](#3-answering-a-question)
+4. [Requesting changes after review](#4-requesting-changes-after-review)
+5. [Stopping](#5-stopping)
+6. [Re-queuing a blocked issue](#6-re-queuing-a-blocked-issue)
+7. [Attention codes: claims, launches, liveness](#7-attention-codes-claims-launches-liveness)
+8. [Attention codes: input, outbox, publish, cleanup](#8-attention-codes-input-outbox-publish-cleanup)
+9. [Publish refusals](#9-publish-refusals)
+10. [Why an issue is not picked up](#10-why-an-issue-is-not-picked-up)
+11. [Incidents: Linear and Orca](#11-incidents-linear-and-orca)
+12. [Incidents: tampering and the journal](#12-incidents-tampering-and-the-journal)
+13. [Incidents: worktrees, trust dialog, notifications](#13-incidents-worktrees-trust-dialog-notifications)
+14. [Cost](#14-cost)
+15. [Upgrading](#15-upgrading)
+16. [Known limitations and D14 residuals](#16-known-limitations-and-d14-residuals)
+17. [Command reference](#17-command-reference)
+
+## 1. What runs where
+
+**The dispatcher.** It is the Orca automation `wingmate-dispatcher`, which runs every 5 minutes (`*/5 * * * *`) in the
+long-lived `wingmate-dispatcher` worktree:
+
+- Its precheck runs `<state>/bin/wingmate-<version> tick --precheck`, with a timeout of
+  `defaults.dispatcher.precheckTimeoutSec` (default 240 s).
+- The precheck never exits 0, so the automation's agent never starts. It exits 1 after acting or when idle, and 2 on an
+  error or while paused.
+- Orca's run history for the automation shows each run's precheck output: the tick summary as JSON (`outcome`,
+  `reason`, the lists of issues acted on, `skipped`, `attention`, `counts`). Whether Orca keeps that output for every
+  run has not been checked live yet (spike results row 7).
+
+**One tick** goes through these steps:
+
+1. It takes the lock `<state>/tick.lock`.
+2. It reconciles Linear, the Orca fleet and the local records.
+3. It applies owner overrides, then works through the agents' outbox intents, answers, liveness, timers, kit integrity
+   and budgets.
+4. It removes worktrees of finished issues once their grace time has passed.
+5. It claims at most `claimsPerTick` (default 2) eligible issues, within the concurrency caps.
+6. It writes the queue and the heartbeat.
+
+**Agents.** Each claimed issue gets one Claude coordinator in an Orca terminal of its own `wm-<id>` worktree. The
+coordinator is sandboxed by settings the dispatcher writes under `<state>/kit/<ID>/`. Agents hold no credentials:
+publishing, Linear writes and pushes are the dispatcher's.
+
+**Files.** Everything is under `<state>`, except the two secrets under `~/.config/wingmate/`, which the agents' sandbox
+cannot read:
+
+| File | What it holds |
+|---|---|
+| `~/.config/wingmate/credentials.json` (0600) | The OAuth app's id and secret, and the cached app token. |
+| `~/.config/wingmate/linear-token` (0600, optional) | Your personal key. Only `scan` and `tick --dry-run` use it, and only while `credentials.json` does not exist. |
+| `heartbeat.json` | The latest heartbeat, from a `scan` or a `tick`. |
+| `last-tick.json` | The latest tick's heartbeat. |
+| `queue.json` | The last tick's queue, with a skip reason for each issue. |
+| `queue.dryrun.json` | The plan that `scan` or `tick --dry-run` wrote. |
+| `records/<ID>.json` | One record per issue. Past cycles are in `records/archive/`. |
+| `journal/<entry id>.json` | One file per journaled external write (§6.6). |
+| `ledger/global.jsonl`, `ledger/<ID>.jsonl` | The append-only event log. |
+| `logs/wingmate.log` | The pino JSON log. |
+| `install.json`, `doctor.json` | The current install, and the last doctor report (including the notification test). |
+| `stop-requested.json`, `pause.json` | The stop flag and the paused scopes. |
+| `kit/<ID>/`, `bin/` | The agents' settings, and the compiled binary. |
+
+## 2. Daily routine
+
+1. Run `wingmate status`. It prints Markdown; `--md` gives the same output, `--json` gives JSON. The report shows:
+   - the dispatcher line: the latest heartbeat's kind, outcome, reason, time, duration and exit code;
+   - the paused scopes, whether a stop is requested, and any state files that did not parse;
+   - one row per active issue: Stage, Pipeline, Provider, Age, Waiting on, Cost, PR and Attention;
+   - the last tick's queue, with skip reasons.
+
+   Add `--project <key>` to see one project, or `--cost` to add the cost block (section 14).
+2. Open **Wingmate · Needs you** in Linear. It lists the issues carrying `Needs-Human` (answer them, section 3),
+   `Blocked` (section 6) or `Review-Ready` (review the PR, section 4).
+3. Run `wingmate doctor --quick`. It runs every check except the live sandbox probe, which costs a `claude -p` run.
+   - `FAIL` lines are blocking: `install --enable` refuses while any remains.
+   - `warn` lines are not blocking. `heartbeat_fresh` warns when no tick has run for 15 minutes; `journal_clean` warns
+     and names poisoned journal entries.
+4. Act on any code in the status report's Attention column (sections 7 and 8).
+
+A healthy dispatcher shows a heartbeat less than 5 minutes old with outcome `idle` or `work`. The reasons
+`partial_fleet` and `gap` mean the tick was reconcile-only: it re-read everything but started no agent. A `gap` is the
+first tick after more than 15 minutes without one.
+
+## 3. Answering a question
+
+A question arrives as a comment titled "**Wingmate needs your decision** on `<ID>`", with numbered options. The issue
+carries `Needs-Human`. Meanwhile the coordinator is parked: its session is idle, no other process of the issue runs,
+and it costs nothing.
+
+To answer:
+
+- Reply on the issue as yourself, with a number or free text, either in the question's thread or as a new comment.
+- The next tick, within 5 minutes, picks the reply up. It writes the reply into the worktree's `.wingmate/inbox/`,
+  points the coordinator at it, and swaps `Needs-Human` for `In-Agent`.
+- Do not edit Wingmate's comments: status, question, blocked or completion. Your edits are never read, and Wingmate
+  overwrites the status and completion comments.
+
+The code accepts a comment as an answer only when all of these hold:
+
+- it was created after the question;
+- its author is in `workspace.approvers`. Anyone else's comment gets attention `unverified_input(<comment id>)` and is
+  never forwarded;
+- no agent of the issue was working in the 60 seconds before it. Otherwise the issue is blocked
+  `self_answer_suspected`. To confirm the reply as the answer, post a comment whose first line is just `continue`
+  (case does not matter). The tick then takes your most recent flagged comment as the answer.
+
+Delivery limits:
+
+- A tick delivers one answer per issue. If the coordinator's turn does not visibly start, the issue gets attention
+  `resume_unconfirmed` and the next tick re-checks the pane before sending anything again.
+- After two failed deliveries of the same answer, the issue is blocked `resume_failed`. Fix the terminal or worktree,
+  then comment `continue`.
+
+If the coordinator decides your reply does not answer the question, it asks again: it edits the question comment and
+mentions you once more. Slice 1 sends no reminders and has no Console. To stop the issue instead of answering, add the
+`human` label (section 5).
+
+## 4. Requesting changes after review
+
+A finished issue sits in **In Review** with `Review-Ready`, its PR attached and one completion comment.
+
+**To request changes:**
+
+1. Write your feedback as comments on the Linear issue. While the issue is in review, comments are collected, not
+   delivered.
+2. Move the issue from In Review back to In Progress. Any started state other than In Review works.
+
+The next tick handles it as a resume (one of `resumesPerTick`); it does not happen while paused:
+
+- `Review-Ready` becomes `In-Agent`, the stage becomes `working` at `implement`, and the gates from `implement` to
+  `pr` reset.
+- Every comment an approver (you) made since the finish is delivered to the coordinator as feedback.
+- The next `finish` pushes to the same branch, so the same PR updates, and edits the same completion comment.
+
+Wingmate does not read reviews left on GitHub or in Linear Reviews.
+
+**To accept:** approve and merge the PR on GitHub as usual. Linear's GitHub integration moves the issue to Done.
+Wingmate then releases the issue (stage `done`) and removes its worktree after `cleanup.worktreeGraceHours` (default
+24 h), once no open PR references the branch. If an open PR still references it, the issue gets attention
+`cleanup_failed` and removal is retried daily.
+
+**To drop the work:**
+
+- Move the issue to Canceled. It is released and its worktree is removed after the grace hours.
+- Or add `human`. It is released and its worktree is kept.
+
+Moving an issue to Todo or Backlog releases it only while it is claimed, working or waiting on a question, not while
+it is in review.
+
+## 5. Stopping
+
+| Control | What it does | When it takes effect |
+|---|---|---|
+| `wingmate stop --issue <ID>` / `--project <key>` / `--all` `[--reason <text>]` | Kill switch: stops agents and blocks the issues `owner_stop`. | At once, with no tick needed. |
+| The `human` label (Agent group) | Releases that one issue. | At the next tick (5 minutes or less). |
+| `wingmate pause [--project <key>]`, and `wingmate resume [--project <key>]` (or `pause --off`) | Makes ticks reconcile-only. | At the next tick. |
+| Disabling the Orca automation | Stops new ticks. Running agents keep going. | At once. Run `wingmate stop` first. |
+
+**How `wingmate stop` works:**
+
+1. It reads the config first. If it cannot, it prints `stop flag NOT written: nothing was stopped (…)` and exits 2. Run
+   it where `config/projects.yaml` is, or set `WINGMATE_CONFIG`.
+2. It writes its entry to `<state>/stop-requested.json` before it contacts Linear or Orca. A running tick aborts
+   before its next external action: `--all` aborts the whole tick (outcome `stopped`), while `--project` and `--issue`
+   abort only their issues. Every later tick honors the flag too.
+3. Without waiting for the tick lock, it stops each issue's agents:
+   - workers: `worker-stop`, then `worker-abandon` when the worker is not proven exited;
+   - the terminals of the issue worktree and its child worktrees;
+   - a process sweep: SIGTERM, a 5-second wait, then SIGKILL.
+
+   With `--all` it also sweeps any `wm-` worktree with a working agent that no record covers.
+4. It blocks each active issue `owner_stop`: the `Blocked` label and one blocked comment. If Linear is unreachable,
+   the issue is blocked on disk and the output says `Linear label and comment follow on the next tick for: …`.
+5. It then clears its flag entry, printing `stop flag cleared`, and exits 0. It keeps the entry instead, prints
+   `stop flag KEPT …` and exits 1, when an issue was `not blocked: <ID>:<code>`. Ticks stay stopped for that scope:
+   fix the failure and re-run the same stop. A stop that finishes also clears older entries it covers, including one a
+   crashed stop left behind.
+
+   A line `could not verify stopped: …` (for example while Orca is down) also exits 1. Close what it names in Orca.
+
+To resume a stopped issue, re-queue it (section 6).
+
+**The `human` label.** At the next tick the issue is released: its agents stop, Wingmate's Lifecycle label is removed
+(`Ready` comes back if the issue had it at claim), the stage becomes `released`, and Wingmate posts one comment. The
+worktree is kept.
+
+**Pause.** `wingmate pause` makes every tick reconcile-only: outcome `paused`, and the precheck exits 2.
+
+- While paused, there are no claims, no answer deliveries, no relaunches, nudges or handoffs, and no publishing (a
+  `finish` waits).
+- Your Linear overrides and stops still apply.
+- `pause --project <key>` does the same for that project's issues only, and skips its queue as `paused`.
+- `pause` and `resume` touch only `<state>/pause.json`: no Linear or Orca call.
+
+## 6. Re-queuing a blocked issue
+
+A blocked comment reads "**Wingmate blocked `<ID>`** — `<reason>`: detail. Retained: branch, worktree. Next action for
+you: …".
+
+To re-queue:
+
+1. Fix the cause, using the table below.
+2. In Linear, remove `Blocked`, keep the issue's Agent label (`agent-ready`, `claude` or `codex`, added by an approver)
+   and move the issue to **Todo**.
+
+The next tick claims it as a new cycle. The old record is archived, the status comment is kept, and the worktree is
+reused if it still exists. A reused worktree does not run the repository's setup command again.
+
+For `budget`, `resume_failed` and `self_answer_suspected`, there is a shortcut: as an approver, post a comment whose
+first line is just `continue`. The issue then resumes in place.
+
+| Reason | Meaning | What to do |
+|---|---|---|
+| `owner_stop` | `wingmate stop` blocked it. | Re-queue it when you want the work to continue. |
+| `launch_failed` | The coordinator never started: a claim step failed twice, or the brief and one start nudge got no turn. | Look at the coordinator terminal in Orca (a dialog, an error), then re-queue. |
+| `setup_failed` | The repository's `setup` command failed. The comment shows only the exit code. | Fix `setup` in `config/projects.yaml` or in the repository, then re-queue. |
+| `base_mismatch` | The local `origin/<base>` does not name GitHub's base commit. Usually the clone is stale (after a merge on GitHub); otherwise `packed-refs` was rewritten. Nothing ran in the worktree. | Run `git fetch origin` in the repository's main checkout. If the ref still differs, inspect `<common dir>/packed-refs`. Remove a worktree this claim created, then re-queue. |
+| `kit_tampered` | A kit file changed, the worktree's `.git` file or `commondir` was redirected (`git_dir_tampered`), or a new worktree did not start at the verified commit. | Section 12. Treat it as a possible escape. |
+| `cascade_exhausted` | A handoff was due (the coordinator exited twice, or asked for a handoff) and no untried provider was available. With the Claude-only cascade, every handoff ends here. | Look at the worktree, then re-queue when ready. |
+| `grace_expired_no_cascade` | A stage passed its cap and grace with no activity, and no provider was left to hand off to. | Look at the work, then re-queue. |
+| `provider_unavailable` | During a handoff, the next provider's model could not be resolved. | Set the provider CLI's default model, then re-queue. |
+| `budget` | Usage went over `budgets.hardTokens`. | Comment `continue` to lift the cap. |
+| `publish_guard` | A second publish refusal in this cycle. | Read the finding in `.wingmate/inbox/publish-*.md` (section 9), fix it, then re-queue. |
+| `resume_failed` | The coordinator did not accept an answer twice. | Fix the terminal or worktree, then comment `continue`. |
+| `self_answer_suspected` | A comment arrived while an agent was active. | Comment `continue` to take your latest flagged comment as the answer. |
+| `worktree_gone` | The worktree of a parked issue was removed. | Re-queue: the new cycle uses a new worktree. Wingmate never re-creates the removed one. |
+
+## 7. Attention codes: claims, launches, liveness
+
+Attention codes show up in two places:
+
+- the Attention column of `wingmate status` (and `issues[].attention` in `--json`);
+- the tick summary's `attention` list, which carries only codes new in that tick.
+
+The Linear status comment does not show them.
+
+Codes without † clear themselves once the condition passes. Codes marked † stay on the record until the next cycle.
+
+| Code | Meaning | What to do |
+|---|---|---|
+| `claim_step_failed` | A claim, replay or reroute step failed. The next tick replays it once, and a second failure blocks `launch_failed`. | Usually nothing. If it persists, run `doctor --quick` (`orca_reachable`) and read `ledger/<ID>.jsonl`. |
+| `claim_failed` (summary only) | The claim threw. The half-made claim keeps its slot and is replayed next tick. | As for `claim_step_failed`. |
+| `launch_not_ready` | The coordinator's screen did not become ready within the launch waits: 5 minutes, or 7 when the folder-trust dialog had to be answered. The next tick waits again, and a second failure blocks. | Look at the terminal in Orca (section 13, trust dialog). |
+| `launch_unconfirmed` | The brief was accepted, but no turn started. Later ticks accept the agent's own `stage.json` as proof; otherwise they send one start nudge, then block `launch_failed`. | Look at the terminal if it persists. |
+| `relaunch_failed` | Starting a successor session failed in Orca. The relaunch still counts. | Check Orca. A further exit leads to a handoff or a block. |
+| `launch_argv_missing` † | The record has no launch argv to relaunch from. | Re-queue the issue. |
+| `model_unresolved` † | The tier-best model could not be resolved (the provider CLI's default model). The replay or reroute waits. | Set `model` in `~/.claude/settings.json`; `doctor` checks this under `providers`. |
+| `liveness_unverifiable` | Orca could not tell whether the coordinator is alive. Nothing is done about it while this lasts. | Check Orca (`doctor --quick`, `orca_reachable`). |
+| `cap_passed` | A stage ran past its cap (`timers` in config) and got a nudge, or the coordinator idled through two nudges. The grace clock (`graceMin`, default 30) runs, and activity clears the code. If the grace expires with no activity, the issue is handed off or blocked. | Nothing, if the issue is progressing. |
+| `worktree_gone` | The worktree is gone from disk. A parked issue is blocked; a working one counts as exited. | Section 13. |
+| `integrity_unverifiable` | This tick could not run the kit integrity check (git unreadable in the worktree). That is never a block; it is retried every tick. | Run `git -C <worktree> status` if it persists. |
+| `base_mismatch` † | The claim's base check failed and the issue is blocked. | Section 6. |
+| `blocked_unposted` | The issue is blocked on disk, but the `Blocked` label and comment are not posted yet (Linear was unreachable). The next tick posts them. | Nothing, unless Linear stays down (section 11). |
+| `release_unverifiable(…)` † | A release, block, handoff or stop could not prove everything stopped. `terminals`: the bulk terminal close failed; a failed release is retried, and its code clears once a retry closes them. `run`: the Run's workers could not be listed. Dispatch ids: workers fenced with `worker-abandon` without proof they exited. | Check those terminals or workers in Orca and stop them by hand. |
+| `tick_error` (summary only) | Processing this issue threw an unexpected error. It is retried next tick, and the ledger records the code. | If it repeats, read `logs/wingmate.log` and `ledger/<ID>.jsonl`. |
+
+`quota_stale` is not surfaced. The quota policy computes it, but slice 1 never records it, so no record or summary
+carries it (section 16).
+
+## 8. Attention codes: input, outbox, publish, cleanup
+
+| Code | Meaning | What to do |
+|---|---|---|
+| `resume_unconfirmed` | An answer was delivered, but no turn start was seen. The next tick re-checks the pane, and a second failed delivery blocks `resume_failed`. | Nothing yet. |
+| `possible_self_answer` | A comment arrived while an agent was active during a question. The issue is blocked `self_answer_suspected`. | Comment `continue` (section 3). |
+| `unverified_input(<comment id>)` † | The commenter is not in `workspace.approvers`. Their comment is never forwarded. | Repost the content yourself if it matters. |
+| `unauthorized_state_change` † | A state change was ignored: it came from someone who is not an approver, or arrived while an agent of the issue was working. | Redo the change yourself while no agent works. |
+| `unauthorized_label_change` † | The same, for a label change. | The same. |
+| `possible_self_close` | The issue went to Done or Canceled while an agent was active. Agents stopped once; the record and worktree are kept, and the close is not applied. | If you meant it, reopen the issue and close it again: a newer close made while no agent works releases it. If not, move it back to its previous state, which clears the code. |
+| `inbox_unsafe` † | The worktree's `.wingmate` or `.wingmate/inbox` is a symlink or not a directory, so nothing was delivered. | Treat it as tampering: `wingmate stop --issue <ID>`, then inspect. |
+| `outbox_unsafe` | `.wingmate/outbox` or one of its subdirectories is a symlink or not a directory, so no intent was read. | The same. |
+| `intent_invalid` † | An outbox intent failed validation, or named another issue. It was moved to `outbox/invalid/`. | Usually the agent retries. The ledger has the error. |
+| `intent_failed` † | An intent failed three counted times and was moved to `outbox/failed/`. | Read the `intent_failed` ledger events for the code, then comment on the issue or re-queue it. |
+| `workers_live` † | An `ask` or `finish` was refused, and consumed, because workers were still live. | Nothing: the coordinator settles its workers and retries. |
+| `secret_detected` † | A note, question or follow-up from the agent held a secret-like token, so it was not posted. | Inspect the worktree. If a real credential leaked, rotate it. |
+| `plan_verify_unverified` † | The `planVerify` gate comes from the coordinator's own report. Checking it against Orca's `worker-show` comes in slice 2. | Nothing (it is informational). |
+| `publish_step_failed` | A publish step failed: push, PR, attachment, completion or Linear state. The finish retries on later ticks with its progress kept. | Read `ledger/<ID>.jsonl`; check `gh auth status` and the repository's `origin` (section 9). |
+| `journal_poisoned` † | The publish journal entry failed three times and is never replayed. | Section 12. |
+| `reroute_unknown_repo` † | The coordinator asked to move to a repository the project does not configure. The request was refused. | Nothing, or add the repository to the config. |
+| `cleanup_failed` | After Done or Canceled the worktree was not removed: an open PR references its branch, or Orca refused. Removal is retried daily. This also covers a rerouted-from worktree that could not be removed. | Merge or close the PR, or remove the worktree in Orca yourself. |
+
+## 9. Publish refusals
+
+When the coordinator runs `finish`, the next tick checks the commit against these guards, in order:
+`nothing_to_publish`, `path_guard`, `secret_detected`, `dependency_policy`, `validate_stale`. It then pushes that exact
+commit to the configured GitHub URL, opens or reuses the PR, attaches it, and posts the completion comment.
+
+A refusal pushes nothing:
+
+- The finding goes to `.wingmate/inbox/publish-<id>.md`. Findings name patterns and paths, never values.
+- The `security` gate becomes FAIL (`publish_guard:<code>`), and the pointer reaches the coordinator in the same tick.
+- A second refusal in the same cycle blocks the issue `publish_guard`.
+
+| Refusal | Meaning | Fix |
+|---|---|---|
+| `nothing_to_publish` | The branch has no commits beyond its base. | The coordinator commits its work, or asks you. |
+| `path_guard` | A changed path matches `forbiddenPaths`: in the net diff or in any pushed commit, either side of a rename, deletions included. Nothing lifts this guard. | The commits are rewritten without the path. Change protected files yourself. |
+| `secret_detected` | A secret-like token appears in an added line, a pushed commit or its message, or the PR or completion text. | The unpushed commits are rewritten (amend or squash); a fix committed on top does not clear it. Rotate the secret if it is real. |
+| `dependency_policy` | A manifest or lockfile changed without an approver-granted `allow-deps`. The grant counts when it was added before the claim, or while the issue waited on a question. | Add `allow-deps` while the issue is parked, or drop the dependency change. |
+| `validate_stale` | `validate` is not PASS at the commit to publish, or its report does not show exit 0 for every pinned gate command. | The coordinator re-runs `gate validate` at HEAD. |
+| `diff_too_large` | The diff or the pushed history exceeds the 8 MiB that the guards read in full. | Make the branch smaller (drop generated or binary files). |
+| `push_rejected` | The push was rejected as non-fast-forward. Wingmate never force-pushes. | Put the new commits on top of the remote tip, or ask you. |
+
+Some errors are not refusals: they fail the finish instead, and nothing is delivered to the coordinator.
+
+- A failure inside a journaled step (push, PR, attachment, completion, Linear) gives attention `publish_step_failed`.
+  After three failures the entry is poisoned (attention `journal_poisoned`), and a later retry starts a fresh entry.
+- The pending `finish` is retried on later ticks.
+- A "counted" error also counts against the intent itself: after three counted failures the intent is quarantined
+  (`intent_failed`), and the coordinator must run `finish` again.
+
+| Error | Counted | Meaning |
+|---|---|---|
+| `remote_mismatch` | yes | The repository's `remote.origin.url` does not name `repos.<name>.github`, or the configured value is not a GitHub URL. Fix one or the other. |
+| `push_unconfirmed` | yes | After the push, GitHub does not show the pushed commit on the branch. |
+| `branch_invalid` | yes | The record's branch breaks git's ref-name rules; refused before anything runs. Re-queue. |
+| `git_failed`, `gh_failed`, `gh_shape`, `linear_*` | no | Infrastructure trouble, retried every tick. Check `gh auth status`, the network and Linear. |
+| `gh_repo_invalid` | no | `repos.<name>.github` is not `owner/name`. Fix the config; until then every retry fails the same way. |
+
+A redirected worktree `.git` file or `commondir` (`git_dir_tampered`) blocks the issue `kit_tampered` instead.
+`base_mismatch` is refused at claim time, not at publish (section 6).
+
+## 10. Why an issue is not picked up
+
+`status` (the last tick's queue) and `queue.dryrun.json` (from `scan` or `tick --dry-run`) give each labeled issue in
+the pilot projects either `eligible` or one of these reasons. Most reasons carry a detail in parentheses.
+
+| Reason | Meaning |
+|---|---|
+| `not_todo` | Not a pilot project, not in an unstarted state (the detail names the state), or no Agent label. |
+| `archived` | Archived or trashed. |
+| `paused` | `wingmate pause`; the detail is `global` or the project. |
+| `conflicting_agent_labels` | More than one Agent-group label. |
+| `human` | The Agent label is `human`. |
+| `unsupported_provider` | An Agent label that is not `agent-ready`, `claude` or `codex`. |
+| `veto_label` | It already carries `In-Agent`, `Needs-Human`, `Review-Ready` or `Blocked`. |
+| `has_open_children`, `prerequisite_open` | An open sub-issue, or an open blocking issue (named in the detail). |
+| `live_owner` | A working agent in an Orca worktree linked to the issue, or an active Wingmate record. |
+| `label_by_unlisted_actor` | The Agent label was added by someone not in `workspace.approvers`, or by a bot. |
+| `provider_unavailable`, `quota` | The provider is outside `coordinatorCascade` (`codex` in the pilot), its quota is unreadable, or its quota is over the 80% weekly or 90% session cap. |
+| `model_unresolved` | The provider CLI has no default model. |
+| `cap_worktrees`, `cap_inflight`, `cap_global`, `cap_project`, `cap_provider` | A concurrency cap (§9.5): 8 live `wm-` worktrees, 6 in flight, 3 working (1 per project, 2 per provider). The detail names what holds the slot. |
+
+The tick summary's `skipped` list adds four more reasons that never reach the queue file:
+
+- `claims_per_tick`: an eligible issue waits for the next tick;
+- `reconcile_only`: a reconcile-only tick claims nothing;
+- `stop_requested`: a stop covers the issue;
+- `record_changed`: another writer, such as `wingmate stop`, changed the record during the tick.
+
+## 11. Incidents: Linear and Orca
+
+**The Linear app token is expired, or minting fails.** Wingmate re-mints the app token when fewer than 24 hours remain,
+or after a 401.
+
+- If minting fails while a tick builds its context, the precheck prints
+  `{"outcome":"error","reason":"linear_token_mint_failed"}` and exits 2. No heartbeat is written, so `status` keeps
+  showing the last good one and `heartbeat_fresh` starts to warn.
+- A Linear failure while a tick reconciles ends with outcome `linear_error` and the code as `reason`. Agents keep
+  running.
+
+To fix it:
+
+1. Run `wingmate doctor --quick`; `linear_auth` shows the detail.
+2. Check network access to `api.linear.app`.
+3. If the secret was rotated, or the app was removed from the workspace, re-run
+   `pbpaste | wingmate install --client-id <id> --client-secret -` (see
+   [linear-app-setup.md](linear-app-setup.md)), then `wingmate install --enable`.
+
+`linear_app_required` means `credentials.json` is missing: install the app.
+
+**Personal-key dry runs fail.** The reasons are `linear_credentials_missing`, `linear_token_file_mode`,
+`linear_token_invalid` and `linear_http`. The setup guide's last section explains each one.
+
+**Orca is down.**
+
+- While the Orca app is not running, the automation does not run, so nothing ticks. There is nothing to do.
+- When Orca is back, its missed-run grace decides whether a missed run still happens. The setting is
+  `--missed-run-grace-minutes`, from `defaults.dispatcher.missedRunGraceMinutes` (default 10). The first tick after a
+  gap of more than 15 minutes is reconcile-only (reason `gap`); the next tick is normal.
+- If Orca runs but its CLI fails, ticks end `orca_unreachable` (exit 2).
+- If the fleet read is partial, ticks are reconcile-only (reason `partial_fleet`), and issues show
+  `liveness_unverifiable`. `wingmate doctor --quick` reports this under `orca_reachable`.
+- Coordinators in Orca terminals keep running while the dispatcher cannot see them.
+- `wingmate stop` still blocks every issue on disk while Orca is unreachable. It reports `could not verify stopped: …`
+  and exits 1. Close those terminals once Orca is back.
+
+**Linear is down or rate-limited.** Ticks read first and abort before writing. Journaled writes replay later. A block
+decided while Linear was down shows `blocked_unposted` until its label and comment are posted. There is nothing to do.
+
+## 12. Incidents: tampering and the journal
+
+**`kit_tampered` or `git_dir_tampered`.** The issue is blocked `kit_tampered` and its agents are stopped. The detail
+names up to five changed paths, or the git link that moved. `git_dir_tampered` is the internal refusal raised when the
+worktree's `.git` file, or its gitdir's `commondir`, no longer names the recorded git directories.
+
+1. If you suspect more than one issue, run `wingmate stop --all` and follow the rotation steps in
+   [linear-app-setup.md](linear-app-setup.md).
+2. Inspect the worktree:
+   - `cat <worktree>/.git` should read `gitdir: <common dir>/worktrees/<name>`;
+   - `cat <common dir>/worktrees/<name>/commondir` should name the common dir;
+   - run `git -C <worktree> status`, and compare `.wingmate/` with `<state>/kit/<ID>/`.
+3. Remove the worktree in Orca: Wingmate removes worktrees only after Done. Then re-queue the issue (section 6).
+
+**A journal entry is poisoned.** `doctor` reports `journal_clean: poisoned: <ID>/<kind>`, and a publish also shows
+`journal_poisoned`. A poisoned entry is never replayed.
+
+1. Find it with `grep -l '"state": "poisoned"' <state>/journal/*.json`. Each file is one entry, with `issue`, `kind`,
+   `key`, `steps` and `error`.
+2. Fix the cause that `error` names.
+3. For a publish whose `finish` is still pending, every tick retries with a fresh entry. That entry skips what GitHub
+   already has: the pushed commit, and the branch's open PR. If the intent was quarantined (`intent_failed`), ask the
+   coordinator to run `finish` again by commenting on the issue, or re-queue it.
+4. Claim entries never reach the poisoned state: two failures block the issue `launch_failed` first.
+5. Leaving a poisoned entry in place is safe: it is never replayed, and `journal_clean` is only a warning. To clear
+   the warning once the issue has moved on, rewrite the entry's state atomically:
+   `jq '.state = "abandoned"' <file> > <file>.tmp && mv <file>.tmp <file>`. Never edit journal files in place.
+
+To read an issue's record, use `wingmate status --json` or `<state>/records/<ID>.json`. Run
+`wingmate issue <ID> show` inside the issue worktree to see that worktree's `.wingmate/` mirror and its pending
+intents.
+
+## 13. Incidents: worktrees, trust dialog, notifications
+
+**Somebody removed a worktree by hand.**
+
+- Wingmate never re-creates it. The issue gets `worktree_gone`. A parked issue is blocked `worktree_gone`. A working
+  one counts as exited, and a relaunch is impossible, so with the Claude-only cascade it ends blocked
+  `cascade_exhausted`.
+- Re-queue the issue for a new cycle. Its branch is still in the repository.
+- After Done or Canceled, a worktree removed by hand is simply recorded as removed.
+
+**The folder-trust dialog appears.**
+
+- Claude may show "Is this a project you created or one you trust?" for a new worktree path, and the default answer is
+  "No, exit". The launch answers it once (Down, Enter) for a worktree Wingmate created, and records
+  `trust_dialog_answered` in the ledger. It never sends the brief into the dialog.
+- If the screen is still not ready, the issue shows `launch_not_ready`, then is blocked `launch_failed`. Answer the
+  dialog in the issue's Orca terminal, then re-queue.
+- To prevent this, keep `doctor`'s `claude_trust` check clean: run `claude` once in each pilot repository's main
+  checkout and trust it.
+
+**The notification test fails.** `notify_test` stays FAIL, and `install --enable` refuses, until the test is
+confirmed.
+
+- `not run`: run `wingmate doctor --notify-test <ID>`.
+- `asked on …`: wait for both notifications, then run `--confirm-notify`.
+- `could not be posted: <code>`: the scratch issue is wrong (`notify_issue_active`, `notify_issue_missing`,
+  `notify_issue_not_pilot`, `notify_issue_closed`) or Linear failed (`linear_*`).
+
+If nothing arrives:
+
+- check Linear → Settings → Notifications;
+- check your subscription to "Wingmate · Needs you";
+- if the app's comments do not notify at all, configure Linear's own team or project Slack notifications. Wingmate
+  holds no Slack credential.
+
+Then repeat the test on an open scratch issue.
+
+## 14. Cost
+
+`wingmate status --cost` adds a 7-day block covering the records, active and archived, that were updated in the last 7
+days. It shows the total and a breakdown by provider, by project and by provenance, each with dollars, tokens, agent
+minutes and sessions.
+
+The provenance values follow §9.7:
+
+- `measured-transcript`: usage read from the provider's local transcripts.
+- `timed`: agent minutes only, from Orca's state intervals. The cost is unknown.
+- `unknown`: no usage. It is shown as "—", never as 0.
+
+**In slice 1 nothing records per-session usage yet.** Transcript collection comes in slice 4. As a result:
+
+- the status comment's Cost row reads "— (unknown)";
+- `--cost` shows no sessions;
+- an optional `budgets.hardTokens` cap never triggers, because the token count stays empty.
+
+Until then, these are the real spend signals:
+
+- Claude's status line in each coordinator terminal;
+- the provider quota windows from `orca account list` (claims stop at 80% weekly or 90% session usage);
+- the full `doctor`, which spends one `claude -p` probe (about $0.75 in the 2026-10-06 spike).
+
+## 15. Upgrading
+
+1. Bring the dispatcher worktree up to date. The `wingmate-dispatcher` worktree, which `install` created from
+   `origin/main`, is on Orca's branch `wingmate-dispatcher`:
+
+   ```sh
+   git -C <dispatcher worktree> fetch origin
+   git -C <dispatcher worktree> merge --ff-only origin/main
+   ```
+
+2. Rebuild and re-point. Run this from that worktree or any checkout of this repository:
+
+   ```sh
+   wingmate install --enable
+   ```
+
+   `install` does the following:
+
+   - it runs `bun install --frozen-lockfile` and `bun build --compile` in the dispatcher worktree, writing
+     `<state>/bin/wingmate-<version>`. A running tick keeps its old binary; a new file replaces the old one by rename;
+   - it points `~/.local/bin/wingmate` at the new binary;
+   - it edits the automation's precheck to the new path;
+   - it updates the saved views, when the OAuth app is installed.
+
+   `--enable` then runs the full doctor and switches the automation back on only when every blocking check passes.
+
+A plain `wingmate install`, without `--enable`, leaves the automation **disabled** until you run
+`wingmate install --enable`. Run `wingmate doctor --quick` afterwards: `binary_installed` and `automation_present`
+must be `ok`.
+
+## 16. Known limitations and D14 residuals
+
+These are the D14 residuals: places where the agent trust boundary is weaker than the design intends.
+
+- **Codex is reviewer-only.** Codex sandboxes do not block reads outside the worktree (§13.3 c), so Codex runs only as a
+  read-only verifier or reviewer. `coordinatorCascade` and `workers` stay `[claude]` until you accept the D14 extension.
+- **Agent settings are pinned at launch.** A running Claude session keeps the sandbox settings it started with. Deny
+  entries for sibling worktrees created later reach it only at its next launch or relaunch.
+- **Orca may be reachable from the sandbox.** If `doctor` reports `orca_from_sandbox` reachable, an agent can start
+  processes outside its sandbox through Orca.
+- **Your git hooks do not run on the dispatcher's push.** For example, Git LFS `pre-push` does not run, so LFS objects
+  are not uploaded. Push them yourself, or keep LFS files out of agent work.
+- **PRs are not opened while paused.** A `finish` waits for a tick that may resume work.
+- **Setup runs only in worktrees the claim created.** The repository's `setup` command never runs in a reused worktree
+  (a re-queue or a replay).
+
+The rest are slice-1 gaps:
+
+- **No Console.** Blocked comments that suggest confirming in the Console mean: comment `continue`.
+- **No 24-hour reminder for an unanswered question.**
+- **Quota staleness is not surfaced.** `quota_stale` is computed but never recorded.
+- **Usage and cost are not measured** (section 14).
+- **Mention markup is unverified.** The @mention markup in questions has not been checked live; your subscription to the
+  issue is what carries the notification.
+- **`planVerify` is not cross-checked against Orca** (`plan_verify_unverified`).
+- **Deny rules are prefix matches.** An agent can get around them with `sh -c` or absolute paths. The sandbox is the
+  hard layer.
+- **A stale clone blocks claims.** After you merge a Wingmate PR on GitHub, the next claim in that repository blocks
+  `base_mismatch` until `git fetch origin` runs in its main checkout.
+- **The commit author fields are not secret-scanned.** The author, committer and extra commit headers are a small
+  unscanned channel.
+
+## 17. Command reference
+
+| Command | Exit codes |
+|---|---|
+| `wingmate status [--json\|--md] [--cost] [--project <key>]` | 0; 2 on a usage error. |
+| `wingmate stop --issue <ID> \| --project <key> \| --all [--reason <text>] [--json]` | 0 when stopped and the flag cleared; 1 when something was not blocked, not verified, or the flag was kept; 2 on a usage error or an unreadable config. |
+| `wingmate pause [--project <key>] [--off] [--json]`; `wingmate resume [--project <key>] [--json]` | 0; 2. |
+| `wingmate doctor [--quick] [--notify-test <ID>] [--confirm-notify] [--rotate] [--json]` | 0 when ok; 1 when a blocking check failed (or `--rotate` did not finish its stop); 2. |
+| `wingmate install [--enable] [--client-id <id> --client-secret -] [--json]` | 0; 1 when doctor refused `--enable`; 2. |
+| `wingmate scan [--json]` | 0 when a tick would act; 1 when idle, paused or stopped; 2 on an error. Writes `queue.dryrun.json` and `heartbeat.json`. |
+| `wingmate tick [--precheck] [--dry-run] [--json]` | Never 0. 1 after acting, idle, `lock_held`, `lock_lost` or `stopped`; 2 on `error`, `orca_unreachable`, `linear_error` or `paused`. |
+| `wingmate config validate \| show [--file <path>]` | 0; 2. |
+| `wingmate issue <ID> <verb> …` | The coordinator's verbs, run inside the issue worktree; `show` and `log` read its `.wingmate/`. |
+
+Notes:
+
+- `scan --dry-run` is accepted and means the same as `scan`.
+- `tick` and `scan` always print JSON; `--json` changes nothing.
+- An error that escapes a command prints `<code>: <message>` and a `next:` line on stderr, and exits 2.
+- `doctor`'s checks are:
+  - blocking: `config_valid`, `linear_auth`, `linear_meta`, `orca_reachable`, `providers`, `binary_installed`,
+    `automation_present`, `sandbox_settings`, `sandbox_probe` and `notify_test`. `codex_sandbox` is blocking whenever
+    Codex can run at all (`verifyCross`, or `codex` in the cascade or the workers), which it can in the pilot;
+  - warnings only: `claude_trust`, `heartbeat_fresh`, `journal_clean`, `orca_from_sandbox` and `d14_extension`, plus
+    `sandbox_probe` when skipped by `--quick`.
