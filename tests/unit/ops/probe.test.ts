@@ -31,6 +31,7 @@ import {
   streamCalls,
   withCanary,
 } from "../../../src/ops/probe";
+import { OrcaError } from "../../../src/orca/cli";
 import type { RunOptions } from "../../../src/shared/exec";
 import { childEnv, run } from "../../../src/shared/exec";
 import { SANDBOX_STATUS_OK, fakeExec, gitIn, ok } from "../../fakes/fakeExec";
@@ -766,6 +767,59 @@ describe("claudeProbe (a real wm-doctor worktree; the agent simulated)", () => {
     ]);
     await expect(claudeProbe(w2.ctx, { exec: crash.exec, cwd: "/wt/self" })).rejects.toThrow(/spawn failed/);
     expect(w2.orca.removed.length).toBe(1);
+  });
+});
+
+describe("claudeProbe setup (R34: its first live run met a repository without origin/main)", () => {
+  test("the scratch worktree starts at the commit Orca reports for doctor's checkout; origin/main only when none is reported", async () => {
+    const sha = "ddfb2bf3a729d18115b278435a578c12f4e49136";
+    for (const [head, base] of [
+      [sha, sha],
+      [null, "origin/main"],
+    ] as const) {
+      const w = await world();
+      w.orca.current = { ...w.orca.current, head };
+      const seen: Seen[] = [];
+      const exec = fakeClaude(async (cwd, kit) => {
+        await commit(cwd);
+        return stream(lines(), { kit });
+      }, seen);
+      expect(await claudeProbe(w.ctx, { exec: exec.exec, cwd: "/wt/self" })).toMatchObject({ ok: true });
+      const bases = w.orca.calls
+        .filter((c) => c.verb === "worktreeCreate")
+        .map((c) => (c.args as { baseBranch: string }).baseBranch);
+      expect(bases).toEqual([base]);
+      // the kit still denies the base branch's ref by name, whatever commit the worktree started at
+      expect(
+        seen[0]?.settings.sandbox.filesystem.denyWrite.some((p) => p.endsWith("/refs/heads/main*")),
+      ).toBe(true);
+    }
+  });
+
+  test("a setup step Orca refuses is a failed result naming the step and the code, never a throw; claude never runs", async () => {
+    const w = await world();
+    w.orca.onCall = (verb) => {
+      if (verb === "worktreeCreate")
+        throw new OrcaError("runtime_error", "fatal: invalid reference: origin/main");
+    };
+    const exec = fakeClaude(async () => "", []);
+    const created = await claudeProbe(w.ctx, { exec: exec.exec, cwd: "/wt/self" });
+    expect(created).toMatchObject({ ok: false, orcaReachable: null });
+    expect(created.detail).toContain(
+      "could not create the scratch worktree from origin/main (runtime_error)",
+    );
+    expect(created.detail).not.toContain("fatal:"); // the code and the step, never Orca's raw message
+    expect(exec.calls.length).toBe(0);
+    expect(w.orca.removed).toEqual([]);
+
+    const w2 = await world();
+    w2.orca.failNext = "worktreeCurrent";
+    const exec2 = fakeClaude(async () => "", []);
+    const current = await claudeProbe(w2.ctx, { exec: exec2.exec, cwd: "/wt/self" });
+    expect(current).toMatchObject({ ok: false, orcaReachable: null });
+    expect(current.detail).toContain("`orca worktree current` failed in /wt/self (orca_unreachable)");
+    expect(exec2.calls.length).toBe(0);
+    expect(w2.orca.calls.some((c) => c.verb === "worktreeCreate")).toBe(false);
   });
 });
 

@@ -164,8 +164,13 @@ export interface AutomationRow {
 }
 export interface OrcaPort {
   worktreePs(): Promise<FleetSnapshot>;
-  /** `orca worktree current --json` run in `cwd` (spike §4: `result.worktree.{id, repoId, path}`): the worktree that directory is in. */
-  worktreeCurrent(cwd: string): Promise<{ repoId: string; worktreeId: string; path: string }>;
+  /**
+   * `orca worktree current --json` run in `cwd` (spike §4: `result.worktree.{id, repoId, path, head}`): the worktree that directory is
+   * in; `head` is the commit it is at, only as a full object id (R34), else null.
+   */
+  worktreeCurrent(
+    cwd: string,
+  ): Promise<{ repoId: string; worktreeId: string; path: string; head: string | null }>;
   terminalList(worktreeId: string): Promise<TerminalRow[]>;
   accountList(): Promise<RateLimits>;
   worktreeCreate(a: {

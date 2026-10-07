@@ -4,10 +4,10 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { writeCredentials } from "../../../src/linear/auth";
-import { type DoctorOptions, type DoctorReport, doctor } from "../../../src/ops/doctor";
+import { type DoctorOptions, type DoctorReport, defaultProbe, doctor } from "../../../src/ops/doctor";
 import { install, readInstallState } from "../../../src/ops/install";
 import { WingmateError } from "../../../src/shared/errors";
-import { fakeExec } from "../../fakes/fakeExec";
+import { fakeExec, ok } from "../../fakes/fakeExec";
 import { labeledByOwner, runTick, todo, world } from "../../sim/harness";
 
 describe("doctor", () => {
@@ -482,5 +482,48 @@ describe("doctor — every check", () => {
     const text = readFileSync(join(w.dirs.state, "doctor.json"), "utf8");
     expect(text).not.toContain(secret);
     expect(text).not.toContain("ghp_");
+  });
+});
+
+describe("R34: doctor's default probe", () => {
+  test("one probe's crash never hides the other's result", async () => {
+    const w = await world();
+    w.orca.onCall = (verb) => {
+      if (verb === "worktreeShow") throw new WingmateError("git_dir_tampered", "x");
+    };
+    const codex = fakeExec([
+      {
+        match: (a) => a[0] === "codex",
+        reply: () => ok("PROBE 1 exit=6 sig=net\nPROBE 2 exit=0 sig=none\n", ""),
+      },
+    ]);
+    const first = await defaultProbe(w.ctx, codex.exec, "/wt/self", true);
+    expect(first.claude).toEqual({
+      ok: false,
+      detail: "probe failed to run: git_dir_tampered",
+      orcaReachable: null,
+    });
+    expect(first.codex).toMatchObject({ ok: true, readsBlocked: false });
+    expect(w.orca.removed.length).toBe(1); // the scratch worktree the Claude probe made is still removed
+
+    w.orca.onCall = (verb) => {
+      if (verb === "worktreeShow") throw new WingmateError("git_dir_tampered", "x");
+    };
+    const crashing = fakeExec([
+      {
+        match: (a) => a[0] === "codex",
+        reply: () => {
+          throw new Error("spawn failed");
+        },
+      },
+    ]);
+    const second = await defaultProbe(w.ctx, crashing.exec, "/wt/self", true);
+    expect(second.codex).toEqual({
+      ok: false,
+      detail: "probe failed to run: internal_error",
+      readsBlocked: null,
+    });
+    expect(second.claude.ok).toBe(false);
+    expect((await defaultProbe(w.ctx, crashing.exec, "/wt/self", false)).codex).toBeNull();
   });
 });

@@ -477,17 +477,38 @@ export async function claudeProbe(ctx: Ctx, d: ClaudeProbeDeps): Promise<ClaudeP
       detail: "no Claude model to probe with: ~/.claude/settings.json does not parse",
       orcaReachable: null,
     };
-  const self = await ctx.orca.worktreeCurrent(d.cwd);
+  // R34: a setup step Orca refuses is a failed result naming the step and its code (never Orca's raw message), not a throw
+  let self: Awaited<ReturnType<Ctx["orca"]["worktreeCurrent"]>>;
+  try {
+    self = await ctx.orca.worktreeCurrent(d.cwd);
+  } catch (e) {
+    return {
+      ok: false,
+      detail: `probe not run: \`orca worktree current\` failed in ${d.cwd} (${errorCode(e)}): run doctor from a checkout of the wingmate repository that Orca manages`,
+      orcaReachable: null,
+    };
+  }
+  // R34: the commit doctor's checkout is at, so a repository without a fetched origin/main (no remote yet) can be probed too
+  const base = self.head ?? "origin/main";
   const name = `wm-doctor-${newUlid().toLowerCase()}`;
   const kitDir = join(ctx.dirs.kit, name);
   const notes: string[] = [];
-  const wt = await ctx.orca.worktreeCreate({
-    repoId: self.repoId,
-    name,
-    baseBranch: "origin/main",
-    linearIssue: "",
-    comment: "wingmate doctor probe (removed when it ends)",
-  });
+  let wt: { id: string; path: string };
+  try {
+    wt = await ctx.orca.worktreeCreate({
+      repoId: self.repoId,
+      name,
+      baseBranch: base,
+      linearIssue: "",
+      comment: "wingmate doctor probe (removed when it ends)",
+    });
+  } catch (e) {
+    return {
+      ok: false,
+      detail: `probe not run: Orca could not create the scratch worktree from ${base} (${errorCode(e)})${base === "origin/main" ? ": the repository needs origin/main (a GitHub remote, fetched)" : ""}`,
+      orcaReachable: null,
+    };
+  }
   let target: GitTarget | null = null;
   let headBefore: string | null = null;
   let decoyDir: string | null = null;

@@ -154,13 +154,17 @@ export class OrcaClient implements OrcaPort {
     };
   }
   /** `worktree current` (spike §4: nested `result.worktree.{id, repoId, branch, path, …}`). */
-  static mapWorktreeCurrent(r: R): { repoId: string; worktreeId: string; path: string } {
+  static mapWorktreeCurrent(r: R): { repoId: string; worktreeId: string; path: string; head: string | null } {
+    const row = rec(r.worktree) ?? r;
     const w = shape(
       "worktree current",
       z.object({ id: z.string().min(1), repoId: z.string().min(1), path: z.string().min(1) }),
-      rec(r.worktree) ?? r,
+      row,
     );
-    return { repoId: w.repoId, worktreeId: w.id, path: w.path };
+    // R34: only a full object id (SHA-1 or SHA-256) — doctor's probe creates its scratch worktree at this commit
+    const head =
+      typeof row.head === "string" && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(row.head) ? row.head : null;
+    return { repoId: w.repoId, worktreeId: w.id, path: w.path, head };
   }
   /** `automations list` rows (spike §4 row keys); a row without an id or name is `orca_shape`. */
   static mapAutomations(r: R): AutomationRow[] {
@@ -240,7 +244,9 @@ export class OrcaClient implements OrcaPort {
   async worktreePs(): Promise<FleetSnapshot> {
     return parseFleet({ ok: true, result: await this.call(["worktree", "ps"], 20_000) });
   }
-  async worktreeCurrent(cwd: string): Promise<{ repoId: string; worktreeId: string; path: string }> {
+  async worktreeCurrent(
+    cwd: string,
+  ): Promise<{ repoId: string; worktreeId: string; path: string; head: string | null }> {
     return OrcaClient.mapWorktreeCurrent(await this.call(["worktree", "current"], 15_000, cwd));
   }
   async terminalList(wt: string): Promise<TerminalRow[]> {

@@ -81,7 +81,12 @@ export class FakeOrca implements OrcaPort {
   /** `automations list`; `automationsCreate` appends to it and `automationsEdit` changes a row, as Orca does. */
   automations: AutomationRow[] = [];
   /** What `worktree current` reports for any cwd (the checkout `install` and `doctor` run from). */
-  current = { repoId: "repo-self", worktreeId: "wt-self", path: "/wt/self" };
+  current: { repoId: string; worktreeId: string; path: string; head: string | null } = {
+    repoId: "repo-self",
+    worktreeId: "wt-self",
+    path: "/wt/self",
+    head: null,
+  };
   /**
    * Where a new worktree really starts (makeWorld hands it to FakeGit as that worktree's HEAD) and, unless `shownHead` says otherwise,
    * what `worktree show` reports as its `head`. FakeGit resolves every base ref to `basesha`, so an honest create starts there; F7

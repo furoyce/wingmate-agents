@@ -214,15 +214,22 @@ async function automationPresent(ctx: Ctx): Promise<{ ok: boolean; detail: strin
     : { ok: true, detail: `${a.id} enabled=${a.enabled}` };
 }
 
-async function defaultProbe(
+/** The live probes. R34: each probe's crash is its own failed result, so one probe never hides the other's verdict. */
+export async function defaultProbe(
   ctx: Ctx,
   exec: Runner,
   cwd: string,
   codexInstalled: boolean,
 ): Promise<ProbeOutcome> {
+  const failed = (e: unknown) => ({ ok: false, detail: `probe failed to run: ${errorCode(e)}` });
   return withCanary(join(ctx.dirs.config, "credentials.json"), async () => ({
-    claude: await claudeProbe(ctx, { exec, cwd }),
-    codex: codexInstalled ? await codexProbe(ctx, { exec }) : null,
+    claude: await claudeProbe(ctx, { exec, cwd }).catch((e: unknown) => ({
+      ...failed(e),
+      orcaReachable: null,
+    })),
+    codex: codexInstalled
+      ? await codexProbe(ctx, { exec }).catch((e: unknown) => ({ ...failed(e), readsBlocked: null }))
+      : null,
   }));
 }
 

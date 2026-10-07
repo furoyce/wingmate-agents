@@ -259,6 +259,7 @@ describe("Task 12: worktree current, automations and the dispatcher worktree", (
       worktreeId:
         "1f1e7f87-e283-4432-beaf-92efba56ddb9::/Users/owner/orca/workspaces/wingmate-agents/orca-linear-wingmate-agents",
       path: "/Users/owner/orca/workspaces/wingmate-agents/orca-linear-wingmate-agents",
+      head: null, // the scrubbed capture's head is abbreviated: only a full commit id is reported (R34)
     });
     // a fake orca that answers with the envelope and the cwd it ran in: the client passes cwd and parses the nested row
     const dir = mkdtempSync(join(tmpdir(), "wm-orca-current-"));
@@ -273,7 +274,19 @@ describe("Task 12: worktree current, automations and the dispatcher worktree", (
       repoId: "r1",
       worktreeId: `r1::${real}`,
       path: real,
+      head: null,
     });
+  });
+  test("R34: worktreeCurrent reports head only as a full commit id (as Orca 1.4.220 lists it live), else null", () => {
+    const sha1 = "ddfb2bf3a729d18115b278435a578c12f4e49136";
+    const sha256 = "a".repeat(64);
+    const at = (head: unknown) =>
+      OrcaClient.mapWorktreeCurrent({ worktree: { ...SPIKE_CURRENT.worktree, head } }).head;
+    expect(at(sha1)).toBe(sha1);
+    expect(at(sha1.toUpperCase())).toBeNull();
+    expect(at(sha256)).toBe(sha256);
+    for (const bad of ["4856101c0ffee", "", "HEAD", "origin/main", `${sha1} `, 42, null, undefined])
+      expect(at(bad)).toBeNull();
   });
   test("worktreeCurrent refuses a row without id, repoId or path (orca_shape), never a silent default", () => {
     for (const missing of ["id", "repoId", "path"] as const) {
