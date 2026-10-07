@@ -161,8 +161,14 @@ async function ask(x: Run, i: Of<"ask">): Promise<void> {
   });
   if (q?.commentId) {
     await w.editComment(r, q.commentId, body);
-    q.askedAt = ctx.now();
-    q.status = "open";
+    // F6: a re-opened question starts its answers afresh (§7.1 step 4: at most two attempts per answer, not per question)
+    Object.assign(q, {
+      askedAt: ctx.now(),
+      status: "open",
+      answerCommentId: null,
+      answeredAt: null,
+      resumeAttempts: 0,
+    });
   } else {
     const commentId = await w.postComment(r, issue, body, { key: `ask:${i.id}` });
     const known = r.questions.find((y) => y.id === i.id);

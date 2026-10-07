@@ -20,7 +20,7 @@ export interface Advance {
   evs: Event[];
   /** The coordinator's liveness at reconcile time; stale once this tick (re)launched it. */
   live: Liveness | undefined;
-  /** §6.7 reconcile-only: bookkeeping, but nothing that starts an agent. */
+  /** §6.7 reconcile-only (the tick's, or its project paused, F3): bookkeeping, but nothing that starts an agent. */
   ro: boolean;
   /** A (re)launch, resume or handoff happened this tick: liveness and timers are not judged on the stale snapshot. */
   launched: boolean;

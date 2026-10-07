@@ -274,7 +274,7 @@ async function advanceOne(ctx: Ctx, rec: Reconciled, r0: WRecord, s: TickSummary
     project,
     evs: rec.events.filter((e) => e.identifier === identifier),
     live: rec.liveness.get(identifier),
-    ro: s.reconcileOnly,
+    ro: s.reconcileOnly || rec.pausedScopes.includes(r.project), // F3: `pause --project` makes its records reconcile-only (§13.3 i, §6.7)
     launched: false,
     dirty: false,
   };

@@ -55,6 +55,8 @@ export class FakeOrca implements OrcaPort {
   nextBlockedReason: string | null = null;
   /** When set to a verb, the next call of that verb throws once (crash/replay tests). */
   failNext: string | null = null;
+  /** When set to a verb, the next call of that verb takes effect and then throws once (orca_timeout: the effect is real). */
+  failAfter: string | null = null;
   /** Awaited after a call is recorded and before it acts: tests reach "into" a tick (lock reclaimed, stop requested). */
   onCall: ((verb: string, args: unknown) => void | Promise<void>) | null = null;
   /** Real worktrees live under `<root>/wt`, their repos under `<root>/repos/<repoId>` (null: paths only, nothing on disk). */
@@ -67,6 +69,12 @@ export class FakeOrca implements OrcaPort {
   removed: string[] = [];
   previews = new Map<string, string>();
   private seq = 0;
+
+  private tookEffect(verb: string) {
+    if (this.failAfter !== verb) return;
+    this.failAfter = null;
+    throw new OrcaError("orca_timeout", `fake orca: ${verb} took effect, then timed out`);
+  }
 
   private async rec(verb: string, args: unknown) {
     this.calls.push({ verb, args });
@@ -154,6 +162,7 @@ export class FakeOrca implements OrcaPort {
     this.removed.push(id);
     this.rows.delete(id);
     this.terminals.delete(id);
+    this.tookEffect("worktreeRm");
   }
   async terminalCreate(wt: string, title: string, command: string) {
     await this.rec("terminalCreate", { wt, title, command });
@@ -178,6 +187,7 @@ export class FakeOrca implements OrcaPort {
         updatedAt: null,
       });
     }
+    this.tookEffect("terminalCreate");
     return { handle: t.handle, tabId: t.tabId, leafId: t.leafId };
   }
   async terminalWait(h: string, f: string, ms: number) {

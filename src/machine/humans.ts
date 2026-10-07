@@ -154,6 +154,8 @@ export async function comments(a: Advance): Promise<StepOut> {
     if (seen === "defer") advance = false;
     if (advance) r.linear.lastSeenCommentAt = e.at;
     if (r.stage !== stage) break; // the rest were classified for the old stage: read them again next tick
+    // F6: one answer delivery per tick — later answers wait for the next tick, which re-reads the pane first (§7.1 step 4)
+    if (e.type === "answer" && seen === "defer") break;
   }
   return "next";
 }

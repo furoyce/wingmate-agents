@@ -238,29 +238,41 @@ async function installAndSetup(
   return true;
 }
 
-/** §5.4 step 5: the coordinator terminal (never a second one while a handle is recorded). */
+/**
+ * §5.4 step 5: the coordinator terminal (never a second one while a handle is recorded). F5 (§6.6, Appendix D): a `terminal create`
+ * that took effect but reported a failure (a timeout, an unparseable receipt) is never repeated — `terminal list` proves the effect,
+ * and the worktree's terminal titled `wingmate <identifier>` is adopted with the argv and session the failed attempt recorded.
+ */
 async function createCoordinator(ctx: Ctx, r: WRecord, tier: Tier): Promise<void> {
   const wt = r.worktree;
   if (!wt) throw new WingmateError("kit_no_worktree", `${r.identifier} has no worktree`);
   await prepareLaunch(ctx, r);
   const kitDir = ctx.kitDirFor(r.identifier);
-  const sessionId = newUuid();
-  const argv = coordinatorArgv({
-    provider: r.provider,
-    model: tier.model,
-    effort: tier.effort,
-    sessionId,
-    kitDir,
-    worktreePath: wt.path,
-  });
-  r.coordinator.argv = argv;
-  r.coordinator.sessionId = r.provider === "claude" ? sessionId : null;
-  r.coordinator.startedAt = ctx.now();
-  const term = await ctx.orca.terminalCreate(
-    wt.id,
-    `wingmate ${r.identifier}`,
-    launchCommand(argv, agentEnv(kitDir)),
-  );
+  const title = `wingmate ${r.identifier}`;
+  const prior = (await ctx.orca.terminalList(wt.id)).find((t) => t.title === title);
+  if (!prior || !r.coordinator.argv.length) {
+    const sessionId = newUuid();
+    r.coordinator.argv = coordinatorArgv({
+      provider: r.provider,
+      model: tier.model,
+      effort: tier.effort,
+      sessionId,
+      kitDir,
+      worktreePath: wt.path,
+    });
+    r.coordinator.sessionId = r.provider === "claude" ? sessionId : null;
+  }
+  if (prior)
+    await ctx.ledger.append({
+      at: ctx.now(),
+      issue: r.identifier,
+      type: "terminal_adopted",
+      data: { handle: prior.handle },
+    });
+  else r.coordinator.startedAt = ctx.now();
+  const term = prior
+    ? { handle: prior.handle, tabId: prior.tabId, leafId: prior.leafId }
+    : await ctx.orca.terminalCreate(wt.id, title, launchCommand(r.coordinator.argv, agentEnv(kitDir)));
   r.coordinator.terminalHandle = term.handle;
   r.coordinator.paneKey = `${term.tabId}:${term.leafId}`;
   await saveRecord(ctx, r);

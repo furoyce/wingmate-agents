@@ -71,6 +71,65 @@ describe("§7.1 step 4: an answer whose turn is not confirmed", () => {
     expect((await rec(w)).history.at(-1)?.cause).toBe("resume_failed");
   });
 
+  test("F6: two verified answers in one tick get one delivery attempt, never two; the next tick re-reads the pane first", async () => {
+    const w = await world();
+    await claimed(w);
+    const p = await parked(w);
+    const thread = p.questions[0]?.commentId ?? null;
+    advance(w, 5);
+    w.linear.humanComment("i1", "a", OWNER, w.ctx.now(), thread);
+    advance(w, 1);
+    w.linear.humanComment("i1", "b", OWNER, w.ctx.now(), thread);
+    w.orca.nextSendStage = "input_accepted";
+    advance(w, 5);
+    const n = sends(w);
+    const s = await runTick(w);
+    expect(s.blocked).toEqual([]);
+    expect(sends(w)).toBe(n + 1);
+    const r = await rec(w);
+    expect(r).toMatchObject({ stage: "awaiting-human" });
+    expect(r.questions[0]?.resumeAttempts).toBe(1);
+    expect(r.attention).toContain("resume_unconfirmed");
+  });
+
+  test("F6: a re-asked question starts its answers afresh: the next unconfirmed delivery is attempt one, not a block", async () => {
+    const w = await world();
+    await claimed(w);
+    const p = await parked(w);
+    const thread = p.questions[0]?.commentId ?? null;
+    advance(w, 5);
+    w.linear.humanComment("i1", "maybe", OWNER, w.ctx.now(), thread);
+    advance(w, 5);
+    expect((await runTick(w)).resumes).toEqual(["JRF-501"]);
+    const r1 = await rec(w);
+    expect(r1.questions[0]?.resumeAttempts).toBe(1);
+    idleNow(w, r1); // the coordinator judged it no answer and re-asks (`ask --reask <questionId>`)
+    writeFileSync(join(r1.worktree?.path ?? "", ".wingmate", "q.md"), "Which scoring rule, exactly?");
+    await writeIntent(r1.worktree?.path ?? "", {
+      issue: "JRF-501",
+      kind: "ask",
+      payload: {
+        questionFile: ".wingmate/q.md",
+        options: ["a", "b"],
+        recommend: 1,
+        append: null,
+        reask: r1.questions[0]?.id ?? null,
+      },
+    });
+    advance(w, 5);
+    expect((await runTick(w)).parked).toEqual(["JRF-501"]);
+    const r2 = await rec(w);
+    expect(r2.questions).toHaveLength(1);
+    expect(r2.questions[0]).toMatchObject({ status: "open", resumeAttempts: 0, answerCommentId: null });
+    advance(w, 5);
+    w.linear.humanComment("i1", "rule b", OWNER, w.ctx.now(), thread);
+    w.orca.nextSendStage = "input_accepted";
+    advance(w, 5);
+    const s = await runTick(w);
+    expect(s.blocked).toEqual([]);
+    expect((await rec(w)).questions[0]?.resumeAttempts).toBe(1);
+  });
+
   test("a pane that shows the coordinator working settles it without sending again", async () => {
     const w = await world();
     await claimed(w);

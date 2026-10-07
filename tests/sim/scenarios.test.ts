@@ -275,6 +275,25 @@ describe("simulation", () => {
     expect(statusCount(w)).toBe(1);
   });
 
+  test("S7d terminal create takes effect but reports a failure → the replay adopts that terminal (one coordinator terminal, never two)", async () => {
+    const w = await world();
+    labeledByOwner(w, todo("i1", "JRF-501"));
+    w.orca.failAfter = "terminalCreate";
+    const s1 = await runTick(w);
+    expect(s1.attention).toContainEqual({ identifier: "JRF-501", code: "claim_failed" });
+    expect((await rec(w)).coordinator.terminalHandle).toBeNull();
+    advance(w, 5);
+    const s2 = await runTick(w);
+    expect(s2.resumes).toEqual(["JRF-501"]);
+    expect(w.orca.calls.filter((c) => c.verb === "terminalCreate")).toHaveLength(1);
+    const r = await rec(w);
+    expect(r.stage).toBe("working");
+    expect(r.coordinator.terminalHandle).toBe("term_1");
+    expect(
+      (w.orca.terminals.get(wtOf(r).id) ?? []).filter((t) => t.title === "wingmate JRF-501"),
+    ).toHaveLength(1);
+  });
+
   test("F4: a re-queued issue's new cycle replays its own claim entry, never the stuck one of the previous cycle", async () => {
     const w = await world();
     labeledByOwner(w, todo("i1", "JRF-501"));

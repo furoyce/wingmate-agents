@@ -380,6 +380,47 @@ describe("§6.7 reconcile-only ticks defer resumes without losing them", () => {
     advance(w, 5);
     expect((await runTick(w)).resumes).toEqual(["JRF-501"]);
   });
+
+  test("F3: a project pause makes that project's records reconcile-only — an answer, grace expiry and an exited coordinator wait; overrides still run", async () => {
+    const w = await world();
+    await claimed(w);
+    const p = await parked(w);
+    const pause = () => writeFileSync(join(w.dirs.state, "pause.json"), JSON.stringify(["bouncr"]));
+    const count = (verb: string) => w.orca.calls.filter((c) => c.verb === verb).length;
+    pause();
+    advance(w, 5);
+    w.linear.humanComment("i1", "b", OWNER, w.ctx.now(), p.questions[0]?.commentId ?? null);
+    advance(w, 5);
+    const sent = count("terminalSend");
+    let s = await runTick(w);
+    expect(s).toMatchObject({ reconcileOnly: false, resumes: [] });
+    expect(s.outcome).not.toBe("paused");
+    expect(count("terminalSend")).toBe(sent);
+    expect((await rec(w)).stage).toBe("awaiting-human");
+    rmSync(join(w.dirs.state, "pause.json"));
+    advance(w, 5);
+    expect((await runTick(w)).resumes).toEqual(["JRF-501"]);
+    pause();
+    const idle = await rec(w);
+    idle.timers.nudges = 2;
+    idle.timers.graceEndsAt = new Date(Date.parse(w.ctx.now()) - 60_000).toISOString();
+    idle.timers.lastActivityAt = new Date(Date.parse(w.ctx.now()) - 120 * 60_000).toISOString();
+    await writeRecord(w.dirs, idle);
+    advance(w, 5);
+    s = await runTick(w);
+    expect([...s.handoffs, ...s.blocked, ...s.relaunches]).toEqual([]); // grace expired, but the project is paused
+    const cur = await rec(w);
+    w.orca.killTerminal(cur.worktree?.id ?? "", cur.coordinator.terminalHandle ?? "");
+    const created = count("terminalCreate");
+    advance(w, 5);
+    s = await runTick(w);
+    expect([...s.handoffs, ...s.blocked, ...s.relaunches]).toEqual([]); // exited, but not relaunched while paused
+    expect(count("terminalCreate")).toBe(created);
+    advance(w, 5);
+    w.linear.setLabels("i1", ["agent-ready", "In-Agent", "human"], OWNER, w.ctx.now());
+    advance(w, 5);
+    expect((await runTick(w)).released).toEqual(["JRF-501"]);
+  });
 });
 
 describe("scan (plan only)", () => {
