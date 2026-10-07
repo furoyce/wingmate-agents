@@ -129,7 +129,7 @@ orchestrator in `ehr-dispatch`, and the Linear multi-agent conventions — and r
 | D11 | Budgets notify, never block, by default; optional per-project caps; the owner controls spend via the number of labeled issues |
 | D12 | Provider quota gating stays: no new start above 80 % of any weekly-class window / 90 % of a session window, evaluated at claim and at every worker launch |
 | D13 | The **Wingmate Console** is in scope: Linear-like, high-performance, with a human-input inbox, delivered as a loopback-only local web app usable inside Orca's embedded browser |
-|| D14 || **Trust boundary risk acceptance.** Coordinators, verifiers and workers run unattended as the owner's macOS user; until phase-2 isolation (separate user/VM), file permissions protect nothing from a compromised agent and prompt rules are advisory. The pilot accepts the residual risk because the Linear team has one member, an issue reaches an agent only after the owner labels it, and the enforced controls in §13.3 reduce the blast radius of an injected ticket, comment, web page or dependency. Residuals recorded 2026-10-06 from the Task 0/9 verification: Codex sandboxes do not block reads outside the worktree (Codex stays reviewer-only in the pilot; `verifyCross: false` excludes it); Claude pins the `--settings` file at launch, so deny lists refreshed for later sibling worktrees apply only at the agent's next launch; and while the `orca` CLI is reachable from inside the sandbox an agent can start processes outside it through Orca (the deny rules for those verbs are advisory) — `doctor` reports reachability and the phase-2 remedy is a dispatcher-executed spawn with Orca unreachable from agents |
+|| D14 || **Trust boundary risk acceptance.** Coordinators, verifiers and workers run unattended as the owner's macOS user; until phase-2 isolation (separate user/VM), file permissions protect nothing from a compromised agent and prompt rules are advisory. The pilot accepts the residual risk because the Linear team has one member, an issue reaches an agent only after the owner labels it, and the enforced controls in §13.3 reduce the blast radius of an injected ticket, comment, web page or dependency. Residuals recorded 2026-10-06 from the Task 0/9 verification: Codex sandboxes do not block reads outside the worktree (Codex stays reviewer-only in the pilot; `verifyCross: false` excludes it); Claude pins the `--settings` file at launch, so deny lists refreshed for later sibling worktrees apply only at the agent's next launch; and while the `orca` CLI is reachable from inside the sandbox an agent can start processes outside it through Orca (the deny rules for those verbs are advisory) — `doctor` reports reachability and the phase-2 remedy is a dispatcher-executed spawn with Orca unreachable from agents; and the shared git common dir stays writable for every agent of a repository, so a compromised agent can race a claim in the sub-second window between the dispatcher's base check and Orca's checkout (`install` sets `core.useReplaceRefs=false` in each pilot repo so replace refs cannot redirect that checkout; a ref named like the base commit remains the residual) |
 || D15 || **The dispatcher never runs an LLM.** The Orca automation's precheck command *is* the tick; it always exits non-zero so Orca never starts the automation's agent; the tick summary lives in the run record's precheck output and in local state |
 || D16 || **The coordinator is an ordinary Orca terminal agent** launched by the dispatcher with explicit argv (model, effort, session id, sandbox and deny settings), not a supervised Dispatch; it owns one orchestration Run for its verifiers and workers, which are started only through `wingmate issue spawn` |
 || D17 || **Agents never hold credentials and never publish.** `issue` verbs write intents to a per-worktree outbox; the dispatcher performs every Linear and GitHub write after deterministic guards (path guard without a lift mechanism in the pilot, secret scan, dependency policy) |
@@ -315,7 +315,7 @@ Rules:
 | From → to | Cause (section) |
 |---|---|
 | `claimed → working` | brief accepted, `turn_started` (§5.4 step 5) |
-| `claimed → blocked` | `launch_failed`, `setup_failed`, `launch_not_ready` twice (§5.4); also `kit_tampered`, `cascade_exhausted`, `provider_unavailable`, `grace_expired_no_cascade` before the first turn (amended 2026-10-06) |
+| `claimed → blocked` | `launch_failed`, `setup_failed`, `launch_not_ready` twice (§5.4); also `kit_tampered`, `cascade_exhausted`, `provider_unavailable`, `grace_expired_no_cascade`, `base_mismatch` before the first turn (amended 2026-10-06) |
 | `working → awaiting-human` | `ask` intent executed (§6.3 step 2) |
 | `working → review` | `finish` intent published (§13.3 d) |
 | `working → claimed` | handoff (§9.4) or reroute (§10.3): same worktree, next attempt |
@@ -342,7 +342,10 @@ matters. Every skip reason is recorded in `queue.json` with the next evaluation 
 
 ### 5.4 Claim and launch sequence (one journal entry with ordered steps; replayed as a unit)
 1. Exclusive create of the record (`O_EXCL`); `cycle` set; routing resolved (§10.3); provider and tier resolved
-   (§9.1–9.2); `baseSha` read from the repo's base ref.
+   (§9.1–9.2); `baseSha` is GitHub's tip of the base branch (`git ls-remote <configured URL>`, fetched if missing) and
+   must equal the main checkout's qualified base ref, which holds no replace ref and no ref named like that commit —
+   otherwise the claim is refused with `base_mismatch` (stale vs diverged); the worktree is created from that commit and
+   its HEAD is re-read with the dispatcher's own pinned git after the create (amended 2026-10-06).
 2. Linear (as Wingmate, pre-write re-read): record `linear.lifecycleLabelAtClaim`, state → In Progress, Lifecycle
    → `In-Agent`, subscribe the owner, create the status comment (or reuse the existing one).
 3. `orca worktree create --repo id:<orcaRepo> --name wm-<identifier-lowercase> --no-parent --base-branch
@@ -785,9 +788,9 @@ labels:   # names are canonical; group names resolve to group ids; every member 
   allowDeps: allow-deps
 defaults:
   timezone: <IANA tz>                        # passed to the automation; `install` defaults it from the Mac's system timezone
-  sandbox: { allowedDomains: [] }            # agents' network allowlist: `doctor` adds the package registries named in
-                                             # packageRoots' lockfiles and the provider API hosts; never GitHub, GitLab,
-                                             # Vercel, Supabase or Neon hosts (the dispatcher owns every fetch and push)
+  sandbox: { allowedDomains: [] }            # agents' network allowlist (pilot: registry.npmjs.org, registry.yarnpkg.com;
+                                             # per-repo additions are the owner's call); never GitHub, GitLab, Vercel,
+                                             # Supabase or Neon hosts (the dispatcher owns every fetch and push)
   providers: { default: claude, coordinatorCascade: [claude, codex], workers: [claude, codex, cursor, antigravity], verifyCross: true }
   autonomy: ask-first
   done: review                               # review | merge | deploy
@@ -844,8 +847,10 @@ as a handoff) and removes the unused worktree. Bouncr rules: `[ios, mobile, expo
 
 ### 11.1 Identity and auth
 The owner creates the OAuth application **"Wingmate"** once (workspace admin; scopes `read`, `write`,
-`comments:create`, `issues:create`; no redirect needed for `client_credentials`). `wingmate install` stores the
-client id/secret; the `linear` client caches the 30-day app-actor token with its expiry and mints a new one via
+`comments:create`, `issues:create`; no redirect needed for `client_credentials`). `wingmate install --client-id <id>
+--client-secret -` stores the client id and the secret read from stdin (never on argv or in chat); a personal API key
+in `~/.config/wingmate/linear-token` (mode 0600) may serve read-only contexts (`scan`, `tick --dry-run`, `status`)
+before the app exists, and is never passed to a child process (amended 2026-10-06); the `linear` client caches the 30-day app-actor token with its expiry and mints a new one via
 `client_credentials` when fewer than 24 h remain or a request returns 401 — never per run (Linear caps live tokens
 per app). All Wingmate reads and writes use the app token (one 5,000 req/h budget). `scan` exits 2 and `doctor`
 fails when minting fails.
@@ -1078,7 +1083,7 @@ are advisory; the controls below are enforced in code and verified by `wingmate 
   dir itself, so `denyWrite` is the effective restriction there); `denyWrite`: `<common>/config`, `<common>/hooks/**`,
   `<common>/info/**`, the common dir's top-level `HEAD`, `index`, `MERGE_HEAD`, `ORIG_HEAD` and `FETCH_HEAD`,
   `<common>/refs/heads/<base branch>*`, `<common>/refs/remotes/**`, `<common>/remotes/**`, `<common>/branches/**`,
-  `<common>/modules/**/hooks/**`, `<common>/modules/**/config`, every other worktree's gitdir and branch ref by name
+  `<common>/modules/**/hooks/**`, `<common>/modules/**/config`, `<common>/refs/replace/**`, every other worktree's gitdir and branch ref by name
   (enumerated by the dispatcher and refreshed before each launch, because Claude pins the settings file at launch),
   `~/.local/share/wingmate/**`, `~/.config/wingmate/**`, `~/.claude/**`, `~/.codex/**`,
   `~/.gitconfig`, `~/.ssh/**`; **network:** `sandbox.network.allowedDomains` = `defaults.sandbox.allowedDomains` ∪
@@ -1135,7 +1140,7 @@ are advisory; the controls below are enforced in code and verified by `wingmate 
   `github_pat_`, JWTs, `AKIA`, private-key blocks, `postgres(ql)?://…:…@`, Supabase/Neon strings, `xox[abp]-`,
   high-entropy ≥ 32-char tokens) → **dependency policy** (below) → `git push -u <the configured
   GitHub URL> <sha>:refs/heads/<worktree.branch>` (the exact commit the guards checked; a truncated guard read refuses
-  with `diff_too_large`, a non-fast-forward rejection with `push_rejected`) → `gh pr create --head <worktree.branch>` (never `--web`; body from the
+  with `diff_too_large`, a non-fast-forward rejection with `push_rejected`) → `gh pr create --repo <repo.github> --head <worktree.branch>`, run outside any worktree (never `--web`; body from the
   template; `--draft` on request) → attach, complete — all from the dispatcher process with the owner's `gh`
   session; no agent environment holds GitHub credentials (b). Any guard failure follows §8.1 `finish` (finding
   delivered, nothing pushed). Four of five pilot repos have no branch protection today, which is exactly why the
@@ -1255,7 +1260,7 @@ reconcile-only; S12 quota flips to unavailable between claim and spawn → worke
    drills, v1.1 Console items.
 
 ### 15.2 Owner tasks before slice 2
-Create the OAuth app (admin) and hand the client id/secret to `install`; confirm the pinned gates for each pilot;
+Create the OAuth app (admin) and hand the client id to `install` with the secret on stdin (`--client-secret -`); confirm the pinned gates for each pilot;
 favorite the two views and subscribe to "Needs you"; enable personal Slack/push for mentions; approve D14–D18.
 
 ### 15.3 Operating controls
@@ -1313,7 +1318,7 @@ wingmate issue <id> ui-smoke --recipe <file>
 wingmate issue <id> log | show
 wingmate status [--json|--md] [--cost] [--project <key>]
 wingmate config validate | show
-wingmate install [--enable] | uninstall
+wingmate install [--enable] [--client-id <id> --client-secret -] | uninstall
 wingmate doctor [--notify-test] [--rotate]
 wingmate pause [--project <key>] | resume [--project <key>]
 wingmate stop [--issue <id>|--project <key>|--all] [--reason …]
