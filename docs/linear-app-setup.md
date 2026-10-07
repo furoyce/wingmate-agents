@@ -57,6 +57,12 @@ text shows on screen, but it is not stored in `ps` or in the shell history. If y
 - It creates the `wingmate-dispatcher` worktree, or reuses it.
 - It builds `~/.local/share/wingmate/bin/wingmate-<version>` and points `~/.local/bin/wingmate` at it.
 - It writes the Orca automation `wingmate-dispatcher` **disabled**.
+- It sets `core.useReplaceRefs=false` in the repository config of each pilot repository's main checkout, as
+  `git -C <main checkout> config core.useReplaceRefs false` would. This is a deliberate setting, so leave it in place:
+  Orca's own git, which creates every issue worktree as you and outside the sandbox, then follows no replace ref an
+  agent could plant in the repository's shared `.git` (D14). Install lists each repository as `set`, `unchanged` or
+  `NOT SET (<reason>)`. It needs each pilot repository's main checkout in Orca, as a plain clone whose `.git` is a
+  directory.
 - It creates the two saved views as the app and prints their URLs (step 6).
 
 While the automation is disabled, its output ends with the line "next: `wingmate doctor`, then
@@ -108,6 +114,9 @@ If another check fails:
 
 - `linear_auth`: the app or its secret is wrong. Redo steps 1 and 2.
 - `linear_meta`: the detail names the missing labels or states (steps 3 and 4).
+- `replace_refs_disabled`: a pilot repository does not have `core.useReplaceRefs=false` (step 2). The detail names the
+  repository and why: `NOT off` means re-run `wingmate install`; a missing or unusable main checkout must be fixed in
+  Orca first.
 - Anything else: see [runbook.md](runbook.md), Incidents.
 
 ## 6. Finish the two saved views
