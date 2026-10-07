@@ -13,6 +13,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
+import { blankedEnv } from "../../../src/kit/settings";
 import { TOKEN_ENV } from "../../../src/linear/envToken";
 import {
   CLASSIFY,
@@ -45,6 +46,8 @@ const PATHS = {
   blockedHost: "pypi.org",
   identifier: PROBE_ID,
   home: "/h",
+  // N1: what the kit blanks for every agent — its fixed names plus a user-level Claude env key — and what probe 13 fails on
+  blanked: Object.keys(blankedEnv(["LANGFUSE_SECRET_KEY"])),
 };
 const PROBES = claudeProbes(PATHS);
 /** What a holding sandbox prints (spike §3.4/§3.4a): each must-fail probe blocked for its own reason, each must-succeed one fine. */
@@ -444,41 +447,60 @@ describe("probe scripts (real sh, temp files only)", () => {
       expect(probeLines(out).get(n)).toEqual([{ exit: 0, sig: o === "Some Other Text" ? "other" : o }]);
     }
   });
-  test("SEC-1: probe 13 names every non-empty credential-named variable it can see (never a value), except Claude's own auth and Orca's", async () => {
+  /** Probe 13's script run by real `sh` under `env -i` with only PATH and `vars`: its output, as the tool result would carry it. */
+  const probe13In = async (vars: string[]) => {
     const probe = PROBES.find((x) => x.n === 13);
     if (!probe) throw new Error("no probe 13");
     expect(probe.name).toBe("credential_env_empty");
-    const inEnv = async (vars: string[]) =>
-      (
-        await run(
-          [
-            "env",
-            "-i",
-            `PATH=${process.env.PATH ?? "/usr/bin:/bin"}`,
-            ...vars,
-            "sh",
-            "-c",
-            probeScript(probe),
-          ],
-          {},
-        )
-      ).stdout.trim();
-    const clean = await inEnv([
+    const argv = ["env", "-i", `PATH=${process.env.PATH ?? "/usr/bin:/bin"}`, ...vars];
+    return (await run([...argv, "sh", "-c", probeScript(probe)], {})).stdout.trim();
+  };
+  /** What an Orca terminal running Claude Code puts in every agent shell (names seen on the owner's host; the values are made up). */
+  const ORCA_CLAUDE_ENV = [
+    "GIT_CONFIG_COUNT=2",
+    "GIT_CONFIG_KEY_0=credential.interactive",
+    "GIT_CONFIG_VALUE_0=never",
+    "GIT_CONFIG_KEY_1=credential.guiPrompt",
+    "GIT_CONFIG_VALUE_1=false",
+    "ORCA_TERMINAL_HANDLE=term_value",
+    "ORCA_AGENT_TOKEN=pane-value",
+    "CLAUDECODE=1",
+    "CLAUDE_CODE_ENTRYPOINT=cli",
+    "CLAUDE_CODE_MESSAGING_TOKEN=msg-value",
+    "CLAUDE_CODE_SSE_PORT=50123",
+    "ANTHROPIC_API_KEY=sk-ant-value",
+  ];
+  /** The kit's blanks as an agent shell has them: every name probe 13 fails on, set but empty. */
+  const BLANKED_EMPTY = PATHS.blanked.map((n) => `${n}=`);
+  test("N1 (R32): probe 13 passes in an Orca terminal running Claude Code — their own variables (Orca's, Claude Code's, GIT_CONFIG_KEY_n) are named in a note, never a failure, never valued", async () => {
+    const out = await probe13In([...ORCA_CLAUDE_ENV, ...BLANKED_EMPTY]);
+    expect(probeLines(out).get(13)).toEqual([{ exit: 0, sig: "unset" }]);
+    expect(out).not.toContain("CREDENV");
+    expect(out).toContain(
+      "CREDNOTE ANTHROPIC_API_KEY CLAUDE_CODE_MESSAGING_TOKEN GIT_CONFIG_KEY_0 GIT_CONFIG_KEY_1 ORCA_AGENT_TOKEN",
+    );
+    expect(out).not.toContain("value");
+  });
+  test("N1 (R32): a non-empty GITHUB_TOKEN — or any variable the kit blanks, a user-level Claude env key included — fails probe 13, named, never valued; a credential-named variable the kit does not blank is only noted", async () => {
+    const github = await probe13In([...ORCA_CLAUDE_ENV, ...BLANKED_EMPTY, "GITHUB_TOKEN=ghp_value"]);
+    expect(probeLines(github).get(13)).toEqual([{ exit: 1, sig: "set" }]);
+    expect(github).toContain("CREDENV GITHUB_TOKEN");
+    expect(github).not.toContain("value");
+    const user = await probe13In([
       "GH_TOKEN=",
-      "GITHUB_TOKEN=",
-      "ANTHROPIC_API_KEY=sk-ant-own",
-      "ORCA_AGENT_TOKEN=pane",
-    ]);
-    expect(probeLines(clean).get(13)).toEqual([{ exit: 0, sig: "unset" }]);
-    const leaked = await inEnv([
-      "GH_TOKEN=",
-      "GITHUB_PERSONAL_ACCESS_TOKEN=ghp_value_never_printed",
+      "LANGFUSE_SECRET_KEY=sk-lf-value",
+      "GITHUB_PERSONAL_ACCESS_TOKEN=ghp_value",
       "langfuse_secret_key=sk-lf-value",
+      "OPENAI_API_KEY=sk-value",
       "PATHLIKE=1",
     ]);
-    expect(probeLines(leaked).get(13)).toEqual([{ exit: 1, sig: "set" }]);
-    expect(leaked).toContain("CREDENV GITHUB_PERSONAL_ACCESS_TOKEN langfuse_secret_key");
-    expect(leaked).not.toContain("value");
+    expect(probeLines(user).get(13)).toEqual([{ exit: 1, sig: "set" }]);
+    expect(user).toContain("CREDENV GITHUB_PERSONAL_ACCESS_TOKEN LANGFUSE_SECRET_KEY");
+    expect(user).toContain("CREDNOTE OPENAI_API_KEY langfuse_secret_key");
+    expect(user).not.toContain("value");
+    const other = await probe13In(["OPENAI_API_KEY=sk-value", ...BLANKED_EMPTY]);
+    expect(probeLines(other).get(13)).toEqual([{ exit: 0, sig: "unset" }]);
+    expect(other).toContain("CREDNOTE OPENAI_API_KEY");
   });
   test("the token probe never echoes a token, and the credentials probe discards what it reads", () => {
     const token = PROBES.find((x) => x.name === "credential_env_empty");
@@ -585,8 +607,10 @@ describe("claudeProbe (a real wm-doctor worktree; the agent simulated)", () => {
       JSON.stringify({ model: "claude-fable-5-1[1m]", env: { LANGFUSE_SECRET_KEY: "sk-lf-x", DEBUG: "1" } }),
     );
     const seen: Seen[] = [];
+    let script13 = "";
     const exec = fakeClaude(async (cwd, kit) => {
       await commit(cwd);
+      script13 = readFileSync(SCRIPT(13, kit), "utf8");
       const leak = { n: 13, text: "CREDENV LANGFUSE_SECRET_KEY \nPROBE 13 exit=1 sig=set" };
       return streamOf(
         callsExcept({ 13: leak }).map((c) => ({ ...c, command: `sh ${SCRIPT(c.n, kit)}` })),
@@ -601,9 +625,34 @@ describe("claudeProbe (a real wm-doctor worktree; the agent simulated)", () => {
       GITHUB_PERSONAL_ACCESS_TOKEN: "",
     });
     expect(s.opts.env).toMatchObject({ LANGFUSE_SECRET_KEY: "", GITHUB_PERSONAL_ACCESS_TOKEN: "" });
+    // N1: probe 13 fails on exactly what the kit blanks — the user-level key included — and on nothing else
+    expect(script13).toContain("LANGFUSE_SECRET_KEY");
+    expect(script13).not.toContain("DEBUG");
     expect(r.ok).toBe(false);
-    expect(r.detail).toContain("credential_env_empty: visible to agents: LANGFUSE_SECRET_KEY");
+    expect(r.detail).toContain(
+      "credential_env_empty: still set for agents although the kit blanks them: LANGFUSE_SECRET_KEY",
+    );
     expect(r.detail).not.toContain("sk-lf-x");
+  });
+
+  test("N1 (R32): credential-named variables the kit does not blank (Orca's, Claude Code's own) pass the probe and are named in its detail as a note", async () => {
+    const w = await world();
+    const exec = fakeClaude(async (cwd, kit) => {
+      await commit(cwd);
+      const noted = {
+        n: 13,
+        text: "CREDNOTE CLAUDE_CODE_MESSAGING_TOKEN GIT_CONFIG_KEY_0 \nPROBE 13 exit=0 sig=unset",
+      };
+      return streamOf(
+        callsExcept({ 13: noted }).map((c) => ({ ...c, command: `sh ${SCRIPT(c.n, kit)}` })),
+        {},
+      );
+    }, []);
+    const r = await claudeProbe(w.ctx, { exec: exec.exec, cwd: "/wt/self" });
+    expect(r.ok).toBe(true);
+    expect(r.detail).toContain(
+      "note: credential-named variables agents can see, not blanked by the kit: CLAUDE_CODE_MESSAGING_TOKEN, GIT_CONFIG_KEY_0",
+    );
   });
 
   test("a broken sandbox fails on the lines and on disk, and the files its writes created are removed", async () => {

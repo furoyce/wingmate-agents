@@ -1133,7 +1133,9 @@ are advisory; the controls below are enforced in code and verified by `wingmate 
   `~/.config/wingmate/credentials.json`, a write to
   `<common>/hooks/pre-commit`, a write to another worktree's gitdir and an HTTPS request to a host outside the
   allowlist, and must succeed at `git commit`, `wingmate issue <id> show`, a request to an allowlisted registry and
-  seeing no non-empty credential-named variable outside the exemptions above (amended 2026-10-07) —
+  seeing none of the variables the kit blanks set to a non-empty value (amended 2026-10-07); any other
+  credential-named variable it sees (Orca's and Claude Code's own per-terminal variables are in every agent shell) is
+  named in a note, never failed (amended 2026-10-07, R32) —
   any inverted result is a `doctor` failure. `doctor` also reports whether the `orca` CLI is reachable from inside
   the sandbox (see D14).
 - **(c) Codex sessions** run `codex -C <worktree> --model <id> -c model_reasoning_effort=<e> -c

@@ -610,9 +610,15 @@ These are the D14 residuals: places where the agent trust boundary is weaker tha
   key there whose name says credential (`TOKEN`, `SECRET`, `PASSWORD`, `API_KEY`, `_KEY`, `CREDENTIAL`) and the GitHub
   and Linear token variables. Wingmate reads only the names, never the values, and refreshes the list before each
   launch. Claude's own `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` and `CLAUDE_CODE_OAUTH_TOKEN` are left alone.
-  doctor's sandbox probe names any credential variable still visible inside the sandbox
-  (`credential_env_empty: visible to agents: …`) and refuses `install --enable` then. If it names some, move those keys
-  out of the user-level `env`, for example into the settings of a project that is not a pilot repository.
+  doctor's sandbox probe fails when a variable the kit blanks is still set inside the sandbox
+  (`credential_env_empty: still set for agents although the kit blanks them: …`) and refuses `install --enable` then.
+  The likely sources are an `export` in your shell configuration that the agents' shells pick up, or a Claude Code that
+  did not apply the kit's `env` block. Remove the export, or move the key out of the user-level `env`, for example
+  into the settings of a project that is not a pilot repository. Any other variable whose name looks like a
+  credential is listed as a note (`note: credential-named variables agents can see, not blanked by the kit: …`) and
+  does not fail the check. When doctor runs from an Orca terminal, the note lists Orca's and Claude Code's own
+  per-terminal variables (`ORCA_…`, `CLAUDE_CODE_…`, `GIT_CONFIG_KEY_0`). Agents can read every name in the note: if
+  one is a real secret (exported by your shell), remove it from the shell agents start in.
 - **Your git hooks do not run on the dispatcher's push.** For example, Git LFS `pre-push` does not run, so LFS objects
   are not uploaded. Push them yourself, or keep LFS files out of agent work.
 - **PRs are not opened while paused.** A `finish` waits for a tick that may resume work.

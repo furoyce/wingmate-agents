@@ -14,9 +14,9 @@ import { z } from "zod";
 import { DISPATCHER_GIT_ENV } from "../git/cli";
 import { discoverGitLinks, verifyGitLinks } from "../git/trust";
 import {
-  AGENT_OWN_ENV_PATTERN,
   CREDENTIAL_ENV_PATTERN,
   agentEnv,
+  blankedEnv,
   claudeSettings,
   shellQuote,
   userClaudeCredentialEnv,
@@ -86,6 +86,8 @@ export interface ProbePaths {
   blockedHost: string;
   identifier: string;
   home: string;
+  /** N1: the variables the kit blanks for every agent (`blankedEnv`): probe 13 fails on any still set; other credential names are noted. */
+  blanked: readonly string[];
 }
 
 /** The PROBE line, strictly: a literal `$c` or `${sig}` in a script or prompt never matches, and the exit is a number (as printed). */
@@ -199,12 +201,14 @@ export function claudeProbes(p: ProbePaths): Probe[] {
       body: `w=$(command -v wingmate); c=$?; case "$w" in ${q(join(p.home, ".local", "bin", "wingmate"))}) o=local ;; '') o=none ;; *) o=elsewhere ;; esac`,
     },
     {
-      // SEC-1 (§13.3 a/b): the NAMES of every non-empty credential-named variable the sandboxed session sees — the owner's
-      // user-level Claude `env` included — outside Claude's own auth and Orca's variables; never a value. Any one fails doctor.
+      // SEC-1 + N1 (R32, §13.3 a/b): fails only on what the kit blanks for every agent — the gh, GitHub and Linear token variables
+      // and the credential-named keys of the owner's user-level Claude `env` — still set inside the sandbox (CREDENV). Any other
+      // credential-named variable the session sees (Orca's and Claude Code's own per-terminal variables, GIT_CONFIG_KEY_n, a
+      // login-shell export) is named in a note (CREDNOTE), never failed. Names only, never a value.
       n: 13,
       name: "credential_env_empty",
       expect: "succeed",
-      body: `n=$(env | sed -n 's/^\\([A-Za-z_][A-Za-z0-9_]*\\)=..*$/\\1/p' | grep -Ei ${q(CREDENTIAL_ENV_PATTERN)} | grep -Ev ${q(AGENT_OWN_ENV_PATTERN)} | sort -u | head -20 | tr '\\n' ' '); if [ -n "$n" ]; then echo "CREDENV $n"; c=1; o=set; else c=0; o=unset; fi`,
+      body: credentialEnvBody(p.blanked),
     },
     {
       n: 14,
@@ -233,6 +237,22 @@ export function claudeProbes(p: ProbePaths): Probe[] {
       body: `o=$(cd ${q(p.worktree)} && printf 'protocol=https\\nhost=github.com\\n\\n' | git credential fill 2>&1 >/dev/null); c=$?`,
     },
   ];
+}
+
+const SHELL_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+/**
+ * N1: probe 13's body. Each blanked name is tested with `printenv` inside `$(…)` (compared with "", never printed); the other names
+ * come from `env`, a variable with an empty value never listed. A blanked one still set prints `CREDENV` and fails; the rest `CREDNOTE`.
+ */
+function credentialEnvBody(blanked: readonly string[]): string {
+  const names = [...new Set(blanked)].filter((n) => SHELL_NAME.test(n));
+  const notBlanked = names.length ? `grep -Fvx ${names.map((n) => `-e ${n}`).join(" ")}` : "cat";
+  return [
+    `b=; for v in ${names.join(" ")}; do if [ -n "$(printenv "$v")" ]; then b="$b$v "; fi; done`,
+    `n=$(env | sed -n 's/^\\([A-Za-z_][A-Za-z0-9_]*\\)=..*$/\\1/p' | grep -Ei ${q(CREDENTIAL_ENV_PATTERN)} | ${notBlanked} | sort -u | head -20 | tr '\\n' ' ')`,
+    `if [ -n "$n" ]; then echo "CREDNOTE $n"; fi`,
+    `if [ -n "$b" ]; then echo "CREDENV $b"; c=1; o=set; else c=0; o=unset; fi`,
+  ].join("; ");
 }
 
 /** One script: the shared classifier, the probe's body, then its single line. Bodies that set `o` to a class word pass it through. */
@@ -323,13 +343,20 @@ export function streamCalls(stdout: string): BashCall[] {
   return uses.map((u) => ({ ...u, result: results.get(u.id) ?? null }));
 }
 
-/** SEC-1: the variable names probe 13 printed (`CREDENV …`) in the tool result of the call that ran its own script — names, never values. */
-export function credentialNames(calls: BashCall[], script: string): string[] {
+/**
+ * SEC-1: the variable names probe 13 printed in the tool result of the call that ran its own script — names, never values. N1: after
+ * `CREDENV` the blanked ones still set (a failure), after `CREDNOTE` the other credential-named ones (a note).
+ */
+export function credentialNames(
+  calls: BashCall[],
+  script: string,
+  marker: "CREDENV" | "CREDNOTE" = "CREDENV",
+): string[] {
   const text = calls
     .filter((c) => runsScript(c.command, script))
     .map((c) => c.result?.text ?? "")
     .join("\n");
-  const m = /CREDENV ((?:[A-Za-z_][A-Za-z0-9_]{0,63} ?){1,20})/.exec(text);
+  const m = new RegExp(`\\b${marker} ((?:[A-Za-z_][A-Za-z0-9_]{0,63} ?){1,20})`).exec(text);
   return m?.[1] ? [...new Set(m[1].trim().split(/\s+/))] : [];
 }
 
@@ -520,6 +547,7 @@ export async function claudeProbe(ctx: Ctx, d: ClaudeProbeDeps): Promise<ClaudeP
       blockedHost: hosts.blocked,
       identifier: PROBE_ID,
       home: ctx.home,
+      blanked: Object.keys(blankedEnv(blankEnv)), // N1: exactly what the kit's env block and the launch line blank
     });
     const scriptOf = (n: number) => join(kitDir, "probe", `${n}.sh`);
     const scripts: string[] = [];
@@ -566,8 +594,13 @@ export async function claudeProbe(ctx: Ctx, d: ClaudeProbeDeps): Promise<ClaudeP
     const leaked = credentialNames(calls, scriptOf(13));
     if (leaked.length)
       failures.push(
-        `credential_env_empty: visible to agents: ${leaked.join(", ")} (move them out of the user-level Claude env, runbook §16)`,
+        `credential_env_empty: still set for agents although the kit blanks them: ${leaked.join(", ")} (an export in your shell configuration, or Claude Code did not apply the kit's env block: runbook §16)`,
       );
+    // N1: never a failure — Orca's and Claude Code's own variables are in every agent shell; the owner sees which names agents can read
+    const noted = credentialNames(calls, scriptOf(13), "CREDNOTE");
+    const note = noted.length
+      ? `note: credential-named variables agents can see, not blanked by the kit: ${noted.join(", ")} (runbook §16)`
+      : null;
     // on disk, whatever the lines say: a write that went through is an inverted result (and is undone where it can be)
     const after = {
       hook: await fileState(watched.hook),
@@ -593,8 +626,8 @@ export async function claudeProbe(ctx: Ctx, d: ClaudeProbeDeps): Promise<ClaudeP
     return {
       ok,
       detail: ok
-        ? `${probes.filter((p) => p.expect === "fail").length} blocked, ${probes.filter((p) => p.expect === "succeed").length} allowed as required (${tier.model})`
-        : [...failures, ...notes].join("; ").slice(0, 900),
+        ? `${probes.filter((p) => p.expect === "fail").length} blocked, ${probes.filter((p) => p.expect === "succeed").length} allowed as required (${tier.model})${note ? `; ${note}` : ""}`
+        : [...failures, ...notes, ...(note ? [note] : [])].join("; ").slice(0, 900),
       orcaReachable,
     };
   } finally {

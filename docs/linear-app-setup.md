@@ -121,8 +121,12 @@ If another check fails:
   holds a credential setting. The detail names the repository and the keys, never the values: a `credential.*`
   setting, or a remote URL or `insteadOf` rewrite with a credential in it. Move it to your global git config, or drop the
   token from the URL, then run doctor again.
-- `sandbox_probe` naming `credential_env_empty: visible to agents: …`: those variables of your user-level Claude `env`
-  (`~/.claude/settings.json`) still reach agent sessions. Move them out of that file (runbook section 16).
+- `sandbox_probe` naming `credential_env_empty: still set for agents although the kit blanks them: …`: those variables
+  (the GitHub and Linear token variables, or keys of your user-level Claude `env` in `~/.claude/settings.json`) still
+  reach agent sessions. Remove their `export` from your shell configuration, or move them out of that file (runbook
+  section 16). A `note: credential-named variables agents can see …` in a passing `sandbox_probe` is not a failure: it lists
+  other names that look like credentials, such as Orca's and Claude Code's own variables when doctor runs from an Orca
+  terminal.
 - `sandbox_probe` naming `gh_stored_token` or `git_credential_fill`: gh or git handed a GitHub credential to the
   sandboxed session. Find where it came from (`gh auth status`, `git config --show-origin --get-all credential.helper`)
   and make it unreachable before you enable the automation (runbook section 16).

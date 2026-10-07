@@ -37,10 +37,11 @@ export interface SettingsInput {
  * SEC-1 (§13.3 a/b): credential-bearing variables, by name only — never by value. Claude Code applies the owner's user-level `env`
  * (`~/.claude/settings.json`) to every session and its Bash subprocesses, under the kit's own settings; the kit's `--settings` file
  * loads at `policy` precedence (spike §3.4b: `sandbox status` reports its keys from source `policy`), so its `env` block setting each
- * such name to "" wins. The doctor probe fails while any is still visible inside the sandbox (probe 13).
+ * such name to "" wins. The doctor probe fails while any blanked name is still set inside the sandbox (probe 13); N1 (R32): any other
+ * credential-named variable there (Orca's and Claude Code's own per-terminal variables, `GIT_CONFIG_KEY_n`) is only named in a note.
  */
 export const CREDENTIAL_ENV_PATTERN = "TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|_KEY|CREDENTIAL";
-/** Never blanked, never flagged: Claude Code's own model access (the session holds it by design, D14) and Orca's agent-integration variables. */
+/** Never blanked: Claude Code's own model access (the session holds it by design, D14) and Orca's agent-integration variables. */
 export const AGENT_OWN_ENV_PATTERN =
   "^(ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN|CLAUDE_CODE_OAUTH_TOKEN|ORCA_[A-Za-z0-9_]*)$";
 const CREDENTIAL_ENV = new RegExp(CREDENTIAL_ENV_PATTERN, "i");
