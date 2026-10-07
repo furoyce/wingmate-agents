@@ -35,12 +35,23 @@ export function assertWaitBudget(ctx: Ctx): void {
  * §4.4 wait with Claude's folder-trust dialog handled (spike 2026-10-06 §3.2, Ruling R6): Orca reports `blockedReason:
  * "agent-trust-workspace"`; the dialog's default is "No, exit", so answer Down then Enter once — never the brief — and wait again;
  * still not ready → one more wait with the longer timeout. REL-1: every wait is clamped to the tick's deadline, and one that no longer
- * fits is not started — the launch is not ready this tick, and the next tick waits again (§4.4).
+ * fits is not started — the launch is not ready this tick, and the next tick waits again (§4.4). N2 (R32): `beforeWait` runs once,
+ * just before the first wait starts (a claim replay counts itself there), never when no wait is started.
  */
-export async function waitForTui(ctx: Ctx, r: WRecord, handle: string): Promise<boolean> {
+export async function waitForTui(
+  ctx: Ctx,
+  r: WRecord,
+  handle: string,
+  beforeWait?: () => Promise<void>,
+): Promise<boolean> {
+  let before = beforeWait;
   const wait = async (cap: number) => {
     const ms = waitBudget(ctx, cap);
-    return ms === null ? null : ctx.orca.terminalWait(handle, "tui-idle", ms);
+    if (ms === null) return null;
+    const first = before;
+    before = undefined;
+    await first?.();
+    return ctx.orca.terminalWait(handle, "tui-idle", ms);
   };
   let w = await wait(120_000);
   if (!w) return false;

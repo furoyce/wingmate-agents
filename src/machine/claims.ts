@@ -25,9 +25,9 @@ import type { TickOptions, TickSummary } from "./tick";
 type Pick = { provider: Coordinator } | { reason: SkipReason; detail: string };
 /**
  * REL-1 (§4.3): a claim starts only while this much of the tick is left — its steps and one launch wait; an eligible issue that does not
- * fit waits for the next tick (`tick_budget`, like `claims_per_tick`).
+ * fit waits for the next tick (`tick_budget`, like `claims_per_tick`). N2 (R32): so does a claim's replay (`advance.ts` replayClaim).
  */
-const CLAIM_RESERVE_MS = 90_000;
+export const CLAIM_RESERVE_MS = 90_000;
 const isCoordinator = (p: string): p is Coordinator => p === "claude" || p === "codex";
 
 const unavailable = (a: Exclude<Availability, { available: true }>, p: string): Pick =>

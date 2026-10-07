@@ -10,7 +10,8 @@ import { errorCode, errorText } from "../shared/errors";
 import { stopRequested } from "../state/heartbeat";
 import type { WRecord } from "../state/records";
 import { claimLinear, launchProven, openClaimEntry, provisionAndLaunch } from "./claim";
-import type { Ctx } from "./context";
+import { CLAIM_RESERVE_MS } from "./claims";
+import { type Ctx, remainingMs } from "./context";
 import { allowDepsGrant } from "./grants";
 import { isRecordAbort, isTickAbort, recordCtx } from "./guard";
 import { doHandoff, doReroute } from "./handoff";
@@ -176,8 +177,10 @@ async function startedByItself(a: Advance): Promise<string | null> {
  * §6.6 replay of the record's own unfinished claim (or reroute) entry — F4: keyed to its current cycle and attempt, never a stale
  * one — the same steps again, at most once; a second failure blocks (`launch_failed`; `block` closes the entry once the record is
  * `blocked`). REL-1: a coordinator already working is started, never waited on or blocked (its brief went out in a tick that ended
- * before the record was written). The retry counts itself (`launchRetries`) before it starts, so an open entry after a retry is the
- * second failure however that retry ended — a journaled step failure, a throw, or the precheck killing it mid-wait.
+ * before the record was written). N2 (R32): a replay the tick has no time for (less than a claim's reserve left) waits for the next
+ * tick untouched (`tick_budget`); the retry counts itself (`launchRetries`) as its first launch wait begins, so an open entry after a
+ * retry that waited is the second failure however that retry ended — a journaled step failure, a throw, or the precheck killing it
+ * mid-wait — while one cut off before it waited is no attempt.
  */
 async function replayClaim(a: Advance): Promise<StepOut> {
   const { ctx, r } = a;
@@ -206,6 +209,10 @@ async function replayClaim(a: Advance): Promise<StepOut> {
     return "stop";
   }
   if (a.budget.resumes <= 0) return "stop";
+  if (remainingMs(ctx) < CLAIM_RESERVE_MS) {
+    a.s.skipped.push({ identifier: r.identifier, reason: "tick_budget" }); // N2: deferred, nothing spent or counted
+    return "stop";
+  }
   const l = r.coordinator.launch;
   const tier =
     l.model && l.effort
@@ -216,12 +223,15 @@ async function replayClaim(a: Advance): Promise<StepOut> {
     return "stop";
   }
   a.budget.resumes -= 1;
-  r.coordinator.launchRetries += 1; // REL-1: the retry counts before anything can fail or the precheck kill it
-  await saveRecord(ctx, r);
+  // N2 + REL-1: counted (and saved) as the first launch wait begins, so a kill during that wait cannot erase it
+  const attempt = async () => {
+    r.coordinator.launchRetries += 1;
+    await saveRecord(ctx, r);
+  };
   try {
     if (open.steps.find((x) => x.name === "linear")?.state === "pending")
       await claimLinear(ctx, r, a.issue, open.id);
-    await provisionAndLaunch(ctx, r, a.issue, a.project, open.id, tier);
+    await provisionAndLaunch(ctx, r, a.issue, a.project, open.id, tier, attempt);
     if (stageOf(r) === "working") a.s.resumes.push(r.identifier);
   } catch (e) {
     if (isTickAbort(e)) throw e;

@@ -237,7 +237,7 @@ first line is just `continue`. The issue then resumes in place.
 | Reason | Meaning | What to do |
 |---|---|---|
 | `owner_stop` | `wingmate stop` blocked it. | Re-queue it when you want the work to continue. |
-| `launch_failed` | The coordinator never started: a claim step failed twice (a launch attempt cut off by the tick's deadline counts), or the brief and one start nudge got no turn. | Look at the coordinator terminal in Orca (a dialog, an error), then re-queue. |
+| `launch_failed` | The coordinator never started: a claim step failed twice (a launch attempt cut off by the tick's deadline during its wait counts; one cut off before it began to wait does not), or the brief and one start nudge got no turn. | Look at the coordinator terminal in Orca (a dialog, an error), then re-queue. |
 | `setup_failed` | The repository's `setup` command failed. The comment shows only the exit code. A setup cut off by the tick's time is not a failure: it is retried once (attention `setup_timed_out`). | Fix `setup` in `config/projects.yaml` or in the repository, then re-queue. |
 | `base_mismatch` | The base did not verify as GitHub's base commit. A new claim checks it in the repository's main checkout before Orca creates the worktree, so nothing was created or run. A re-queue that reuses a worktree checks it there, before anything runs. The comment names both commits and says which case it is: **behind GitHub** (a stale clone, attention `base_mismatch`); **not in the history of GitHub's** base, does not resolve, or a ref named after that commit or a replace ref (`refs/replace/…`) exists (possibly rewritten, attention `base_diverged`); or it **cannot be verified** (no such branch on GitHub, no usable main checkout in Orca). | Behind GitHub: run `git fetch origin` in the main checkout, then re-queue. Possibly rewritten: do not fetch first. Section 12 keeps the evidence. Cannot be verified: fix `repos.<name>.base` or the repository's main checkout in Orca, then re-queue. |
 | `kit_tampered` | A kit file changed, the worktree's `.git` file or `commondir` was redirected (`git_dir_tampered`), or a new worktree did not start at the verified commit (its HEAD read with Wingmate's own git), its HEAD or the replace refs could not be read, or a replace ref appeared while Orca created it. | Section 12. Treat it as a possible escape. |
@@ -376,7 +376,8 @@ the pilot projects either `eligible` or one of these reasons. Most reasons carry
 The tick summary's `skipped` list adds five more reasons that never reach the queue file:
 
 - `claims_per_tick`: an eligible issue waits for the next tick;
-- `tick_budget`: an eligible issue waits for the next tick because less than 90 s of this tick were left;
+- `tick_budget`: an eligible issue, or the retry of a claim that has not started its coordinator yet, waits for the
+  next tick because less than 90 s of this tick were left (a retry deferred this way is not counted);
 - `reconcile_only`: a reconcile-only tick claims nothing;
 - `stop_requested`: a stop covers the issue;
 - `record_changed`: another writer, such as `wingmate stop`, changed the record during the tick.
@@ -420,8 +421,10 @@ To fix it:
 
 **A tick ran out of time (`tick_deadline`).** `status` shows `tick error (tick_deadline)` and the precheck exited 2.
 The tick passed its deadline (the precheck timeout less 60 s) and stopped before its next external action, after
-writing its heartbeat. What it was doing resumes next tick: a launch cut short counts as one of its two attempts, so a
-launch that never gets its screen ready blocks `launch_failed` on the next tick but one.
+writing its heartbeat. What it was doing resumes next tick: a launch cut short while it waited for the coordinator's
+screen counts as one of its two attempts, so a launch that never gets its screen ready blocks `launch_failed` on the
+next tick but one. A launch cut short before it began to wait does not count, and a retry that a tick has less than
+90 s left for waits for the next tick (`tick_budget` in the summary), also uncounted.
 
 - Once, after a slow tick (a cold `pnpm install` in a repository setup, a slow Linear or Orca): nothing to do.
 - Every tick: look at the issue in `claimed` with the oldest timers (`wingmate status`) and its `ledger/<ID>.jsonl`.

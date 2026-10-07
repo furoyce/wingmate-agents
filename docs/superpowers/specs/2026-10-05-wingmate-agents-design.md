@@ -206,7 +206,8 @@ Linear (control plane)                            Orca (execution plane)
 - Work per tick is bounded so the tick finishes in ≤ 180 s: at most 2 claims, 3 resumes/relaunches, 1 handoff,
   and the outbox items of all issues; anything left waits for the next tick. The bound is enforced (amended
   2026-10-07): the tick's deadline is the precheck timeout less 60 s, counted from the process start; no wait runs past
-  it, no claim starts with less than 90 s left (`tick_budget`), and an external action after it ends the tick with
+  it, no claim and no replay of one starts with less than 90 s left (`tick_budget`; the replay amended 2026-10-07, R32),
+  and an external action after it ends the tick with
   outcome `error`, reason `tick_deadline` (exit 2, heartbeat written). `doctor` re-hashes the binary and
   diffs the live automation (prompt, precheck, workspace mode) against `install.json` on every run.
 - Why not a tiny agent session: it would put an LLM in bypass mode in the dispatcher every five minutes and make
@@ -381,9 +382,10 @@ matters. Every skip reason is recorded in `queue.json` with the next evaluation 
    show` proves it is an unused shell.
 6. `orca worktree set --worktree id:<wt> --workspace-status in-progress --comment "<pipelineStage>"`.
 A step that fails is recorded with Orca's receipt; `coordinator.launchRetries` increments and the same step is
-retried next tick at most once (the retry is counted when it starts, so one cut off mid-wait by the precheck timeout
-counts too; a coordinator whose pane already shows it working, or whose own `stage.json` exists, is `working` without a
-retry; amended 2026-10-07); a second failure → `blocked` (`launch_failed`), with `In-Agent` removed so the
+retried next tick at most once (the retry is counted when its first launch wait begins, so one cut off mid-wait by the
+precheck timeout counts too, while one cut off before it waited, or deferred for want of time, does not — amended
+2026-10-07, R32; a coordinator whose pane already shows it working, or whose own `stage.json` exists, is `working`
+without a retry; amended 2026-10-07); a second failure → `blocked` (`launch_failed`), with `In-Agent` removed so the
 issue is visibly stuck, and the retained worktree named in the blocked comment.
 
 ### 5.5 Coordinator liveness (one function in `machine/liveness.ts`, evaluated each tick)

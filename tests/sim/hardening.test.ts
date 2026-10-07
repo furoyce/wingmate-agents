@@ -446,3 +446,103 @@ describe("REL-1: a tick never outlives its precheck timeout, and a launch killed
     expect((await rec(w)).history.at(-1)).toMatchObject({ cause: "turn_started", evidence: "stage_json" });
   });
 });
+
+describe("N2 (R32): a claim replay is the one retry only once its launch wait began; one the tick has no time for waits a tick, untouched", () => {
+  /** A wall clock the tick's deadline is read with (as in REL-1); a test moves it as Orca's calls would take time. */
+  const wallClock = () => {
+    let at = Date.parse("2026-10-06T12:00:00Z");
+    return {
+      now: () => at,
+      advance: (ms: number) => {
+        at += ms;
+      },
+    };
+  };
+  const waitsOf = (w: World) => w.orca.calls.filter((c) => c.verb === "terminalWait").length;
+
+  test("after a launch that was not ready, a replay reached with the tick's time spent is deferred (tick_budget): uncounted, nothing waited or sent; the next tick launches the coordinator", async () => {
+    const w = await world();
+    labeledByOwner(w, todo("i1", "JRF-501"));
+    w.orca.nextWaitSatisfied = false;
+    expect((await runTick(w)).claims).toEqual(["JRF-501"]); // launch_not_ready: the claim entry stays open
+    w.orca.nextWaitSatisfied = true; // the coordinator's screen is ready from now on
+    const waits = waitsOf(w);
+    const n = sends(w);
+    const wall = wallClock();
+    advance(w, 5);
+    const late = await runTick(w, { deadline: { at: wall.now() + 3_000, now: wall.now }, allowErrors: true });
+    expect(late.skipped).toContainEqual({ identifier: "JRF-501", reason: "tick_budget" });
+    expect(waitsOf(w)).toBe(waits);
+    expect(sends(w)).toBe(n);
+    expect((await rec(w)).coordinator.launchRetries).toBe(0);
+    advance(w, 5);
+    const s = await runTick(w);
+    expect(s.blocked).toEqual([]);
+    expect(s.resumes).toEqual(["JRF-501"]);
+    expect((await rec(w)).stage).toBe("working");
+  });
+
+  test("after a claim cut off before its first wait (uncounted), a replay reached past the deadline is deferred too: neither counts, and the next tick launches the coordinator", async () => {
+    const w = await world();
+    labeledByOwner(w, todo("i1", "JRF-501"));
+    const wall = wallClock();
+    w.orca.onCall = (verb) => {
+      if (verb === "terminalCreate") wall.advance(200_000); // the tick's time runs out as the coordinator starts
+    };
+    const first = await runTick(w, {
+      deadline: { at: wall.now() + 180_000, now: wall.now },
+      allowErrors: true,
+    });
+    w.orca.onCall = null;
+    expect(first).toMatchObject({ outcome: "error", reason: "tick_deadline" });
+    const cut = await rec(w);
+    expect(cut.coordinator.terminalHandle).not.toBeNull();
+    expect(cut.coordinator.launchRetries).toBe(0);
+    expect(waitsOf(w)).toBe(0);
+    advance(w, 5);
+    const late = await runTick(w, { deadline: { at: wall.now() - 1, now: wall.now }, allowErrors: true });
+    expect(late.skipped).toContainEqual({ identifier: "JRF-501", reason: "tick_budget" });
+    expect(waitsOf(w)).toBe(0);
+    expect((await rec(w)).coordinator.launchRetries).toBe(0);
+    advance(w, 5);
+    const s = await runTick(w);
+    expect(s.blocked).toEqual([]);
+    expect((await rec(w)).stage).toBe("working");
+  });
+
+  test("a replay that starts in time but runs out of it before its first wait (it created the coordinator's terminal) is not counted; the next tick launches the coordinator", async () => {
+    const w = await world();
+    labeledByOwner(w, todo("i1", "JRF-501"));
+    const wall = wallClock();
+    w.orca.onCall = (verb) => {
+      if (verb === "worktreeCreate") wall.advance(200_000); // the claim's time runs out once its worktree exists
+    };
+    const first = await runTick(w, {
+      deadline: { at: wall.now() + 180_000, now: wall.now },
+      allowErrors: true,
+    });
+    expect(first).toMatchObject({ outcome: "error", reason: "tick_deadline" });
+    const half = await rec(w);
+    expect(half.worktree).not.toBeNull();
+    expect(half.coordinator.terminalHandle).toBeNull();
+    advance(w, 5);
+    w.orca.onCall = (verb) => {
+      if (verb === "terminalCreate") wall.advance(200_000); // the replay's time runs out as its coordinator starts
+    };
+    const second = await runTick(w, {
+      deadline: { at: wall.now() + 180_000, now: wall.now },
+      allowErrors: true,
+    });
+    w.orca.onCall = null;
+    expect(second).toMatchObject({ outcome: "error", reason: "tick_deadline" });
+    const replayed = await rec(w);
+    expect(replayed.coordinator.terminalHandle).not.toBeNull();
+    expect(replayed.coordinator.launchRetries).toBe(0); // it never waited: no launch attempt
+    expect(waitsOf(w)).toBe(0);
+    advance(w, 5);
+    const s = await runTick(w);
+    expect(s.blocked).toEqual([]);
+    expect((await rec(w)).stage).toBe("working");
+    expect(waitsOf(w)).toBe(1);
+  });
+});

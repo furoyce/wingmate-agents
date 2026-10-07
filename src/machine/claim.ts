@@ -700,8 +700,9 @@ export async function launchProven(ctx: Ctx, r: WRecord, entryId: string, how: s
 /**
  * Steps worktree → kit → launch → orcaMeta of §5.4. Each step is skipped when the record already proves it happened, so a crashed
  * claim replays without a second worktree or terminal (S7). A launch that never reaches tui-idle leaves the record `claimed` with
- * the failure journaled; the next tick waits on the same handle again. REL-1: its waits never run past the tick's deadline, and a
- * replay counts itself (`launchRetries`) before it starts, so one the precheck killed mid-wait counts all the same.
+ * the failure journaled; the next tick waits on the same handle again. REL-1: its waits never run past the tick's deadline. N2 (R32):
+ * `onAttempt` runs just before the first launch wait starts — a replay counts itself (`launchRetries`) there, so one cut off before it
+ * waited is no attempt, and one the precheck killed mid-wait counts all the same.
  */
 export async function provisionAndLaunch(
   ctx: Ctx,
@@ -710,6 +711,7 @@ export async function provisionAndLaunch(
   project: ProjectConfig,
   entryId: string,
   tier: Tier,
+  onAttempt?: () => Promise<void>,
 ): Promise<void> {
   const repo = repoFor(project, r.repo);
   if (!r.worktree && !(await provisionWorktree(ctx, r, issue, repo, entryId))) return;
@@ -723,7 +725,7 @@ export async function provisionAndLaunch(
   if (!wt || !handle)
     throw new WingmateError("launch_failed", `${r.identifier}: no worktree or terminal after provisioning`);
   assertWaitBudget(ctx);
-  if (!(await waitForTui(ctx, r, handle))) {
+  if (!(await waitForTui(ctx, r, handle, onAttempt))) {
     addAttention(r, "launch_not_ready");
     await saveRecord(ctx, r);
     await ctx.journal.failed(entryId, "launch_not_ready");
