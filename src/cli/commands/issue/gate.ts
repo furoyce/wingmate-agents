@@ -2,6 +2,7 @@
 // validate/security are computed by the CLI, and proven verdicts of validate/security/ui go STALE once HEAD moves.
 import { createHash } from "node:crypto";
 import { join } from "node:path";
+import { GitCli } from "../../../git/cli";
 import { parseAddedLines } from "../../../git/diff";
 import { writeIntent } from "../../../kit/intents";
 import {
@@ -14,7 +15,9 @@ import {
 } from "../../../kit/local";
 import { depsPolicy } from "../../../policy/deps";
 import { violations } from "../../../policy/pathguard";
-import { scanAddedLines } from "../../../policy/secrets";
+import { type Finding, scanAddedLines, scanText } from "../../../policy/secrets";
+import type { BranchHistory } from "../../../ports";
+import { errorCode } from "../../../shared/errors";
 import { type RunResult, run } from "../../../shared/exec";
 import { writeAtomic } from "../../../state/fs";
 import type { Argv } from "../../index";
@@ -114,7 +117,16 @@ async function validateReport(cwd: string, launch: Launch): Promise<{ ok: boolea
   return { ok, lines };
 }
 
-/** Secret scan over added lines, path guard and dependency policy over the committed diff from the base (§8.2 stage 6). */
+const IN_HISTORY = " (in the branch history)";
+/** F4: with every secret or path finding — the commit that made it is pushed too, also once a later commit removed it from HEAD. */
+const REWRITE =
+  "history: the push sends every commit since the base, so do not commit a fix on top: rewrite the unpushed commits (amend or squash them) until none of them contains a finding";
+
+/**
+ * Secret scan over added lines, path guard and dependency policy over the committed diff from the base (§8.2 stage 6); the secret
+ * scan and the path guard also over every commit since the base and its message, read as publish reads them (F3, F4), so a fix
+ * committed on top fails here as it would be refused there.
+ */
 async function securityReport(cwd: string, launch: Launch): Promise<{ ok: boolean; lines: string[] }> {
   const base = await diffBase(cwd, launch);
   if (!base)
@@ -129,8 +141,24 @@ async function securityReport(cwd: string, launch: Launch): Promise<{ ok: boolea
   });
   if (names === null || diff.code !== 0)
     return { ok: false, lines: [`diff: git diff ${base}...HEAD failed`] };
-  const secrets = scanAddedLines(parseAddedLines(diff.stdout));
-  const vio = violations(names, launch.forbiddenPaths);
+  let history: BranchHistory;
+  try {
+    history = await new GitCli().historyChanges(cwd, base, "HEAD");
+  } catch (e) {
+    return { ok: false, lines: [`diff: git log ${base}..HEAD failed (${errorCode(e)})`] };
+  }
+  const place = (s: Finding) => `${s.pattern} ${s.path ?? ""}`; // never the matched text
+  const head = scanAddedLines(parseAddedLines(diff.stdout)).map(place);
+  const shown = new Set(head);
+  const earlier = [...new Set(scanAddedLines(history.added).map(place))].filter((p) => !shown.has(p));
+  const messages = [...new Set(scanText(history.messages).map((s) => s.pattern))];
+  const secrets = [
+    ...head,
+    ...earlier.map((p) => `${p}${IN_HISTORY}`),
+    ...messages.map((p) => `${p} (in a commit message)`),
+  ];
+  const atHead = new Set(names);
+  const vio = violations([...new Set([...names, ...history.paths])], launch.forbiddenPaths);
   const deps = depsPolicy(names, launch.allowDeps);
   return {
     ok: !secrets.length && !vio.length && deps.ok,
@@ -138,10 +166,11 @@ async function securityReport(cwd: string, launch: Launch): Promise<{ ok: boolea
       `base: ${base}`,
       `changed: ${names.length}`,
       `secrets: ${secrets.length}`,
-      ...secrets.map((s) => `  ${s.pattern} ${s.path ?? ""}`), // never the matched text
+      ...secrets.map((s) => `  ${s}`),
       `pathguard: ${vio.length}`,
-      ...vio.map((v) => `  ${v.path} ~ ${v.pattern}`),
+      ...vio.map((v) => `  ${v.path} ~ ${v.pattern}${atHead.has(v.path) ? "" : IN_HISTORY}`),
       `deps: ${deps.ok ? "ok" : deps.reason}`,
+      ...(secrets.length || vio.length ? [REWRITE] : []),
     ],
   };
 }

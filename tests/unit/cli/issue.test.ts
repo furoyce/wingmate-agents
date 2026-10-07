@@ -360,6 +360,46 @@ describe("wingmate issue", () => {
     expect(JSON.parse((await runVerb(clean, ["gate", "security"])).out)).toMatchObject({ verdict: "PASS" });
   });
 
+  test("F4: security reads every commit since the base, as publish does: a fix committed on top fails until the commits are rewritten", async () => {
+    const wt = await worktree({ git: true });
+    const base = await headOf(wt);
+    writeLaunch(wt, { baseSha: base });
+    const security = async () => {
+      await passGates(wt, await headOf(wt), ["intake", "plan", "planVerify", "implement", "validate", "ui"]);
+      const out = JSON.parse((await runVerb(wt, ["gate", "security"])).out) as { verdict: string };
+      const report = readFileSync(join(wt, ".wingmate", "evidence", "security", "report.txt"), "utf8");
+      return { verdict: out.verdict, report };
+    };
+    const secret = `sk-ant-api03-${"Q".repeat(32)}`;
+    await commit(wt, {
+      "src/config.ts": `export const k = "${secret}";\n`,
+      ".github/workflows/ci.yml": "on: push\n",
+    });
+    // the agent's fix goes on top: HEAD is clean, the commit under it is not, and the push sends both
+    await git(wt, "rm", "-q", "--", ".github/workflows/ci.yml");
+    await commit(wt, { "src/config.ts": "export const k = process.env.KEY;\n" });
+    const onTop = await security();
+    expect(onTop.verdict).toBe("FAIL");
+    expect(onTop.report).toContain("secrets: 1\n  anthropic src/config.ts (in the branch history)\n");
+    expect(onTop.report).toContain(
+      "pathguard: 1\n  .github/workflows/ci.yml ~ .github/** (in the branch history)\n",
+    );
+    expect(onTop.report).toContain("do not commit a fix on top: rewrite the unpushed commits");
+    expect(onTop.report).not.toContain(secret.slice(0, 12));
+    // squashed onto the base: no commit holds either any more
+    await git(wt, "reset", "-q", "--soft", base);
+    await git(wt, "commit", "-q", "-m", "read the key from the environment");
+    const squashed = await security();
+    expect(squashed.verdict).toBe("PASS");
+    expect(squashed.report).not.toContain("rewrite");
+    // the push sends the commit messages too
+    await git(wt, "commit", "-q", "--allow-empty", "-m", `rotate GH_TOKEN=ghp_${"A".repeat(36)}`);
+    const message = await security();
+    expect(message.verdict).toBe("FAIL");
+    expect(message.report).toContain("secrets: 1\n  github (in a commit message)\n");
+    expect(message.report).not.toContain("ghp_AAAA");
+  });
+
   test("a HEAD change makes validate/security PASS and ui PASS/NA stale: later gates and finish refuse until re-gated", async () => {
     const wt = await worktree({ git: true });
     writeFileSync(join(wt, ".wingmate", "s.md"), "summary");

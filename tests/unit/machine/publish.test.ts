@@ -154,6 +154,10 @@ describe("publish guards (§13.3 d)", () => {
     expect(await call(w, identifier)).toBe(false);
     expect(w.git.pushed).toEqual([]);
     expect((await rec(w, identifier)).gates.security.note).toBe("publish_guard:secret_detected");
+    // F4: no commit holds it, so the refusal asks for no history rewrite
+    const finding = readFileSync(join(path, ".wingmate", "inbox", inboxFiles(path)[0] ?? ""), "utf8");
+    expect(finding).toContain("- postgres_url in the PR or completion text (value withheld)\n");
+    expect(finding).not.toContain("rewrite the unpushed commits");
   });
 
   test("the PR title is scanned too: a token in --title refuses, and the finding withholds it", async () => {
@@ -222,6 +226,7 @@ describe("publish guards (§13.3 d)", () => {
     expect((await rec(w, identifier)).gates.security.note).toBe("publish_guard:secret_detected");
     const finding = readFileSync(join(path, ".wingmate", "inbox", inboxFiles(path)[0] ?? ""), "utf8");
     expect(finding).toContain("- postgres_url in src/db.ts (in the branch history; value withheld)\n");
+    expect(finding).toContain("rewrite the unpushed commits");
     expect(finding).not.toContain("S3cretPassw0rd");
   });
 
@@ -236,10 +241,11 @@ describe("publish guards (§13.3 d)", () => {
     expect(w.git.pushed).toEqual([]);
     const finding = readFileSync(join(path, ".wingmate", "inbox", inboxFiles(path)[0] ?? ""), "utf8");
     expect(finding).toContain("- github in a commit message (value withheld)\n");
+    expect(finding).toContain("rewrite the unpushed commits");
     expect(finding).not.toContain("ghij12");
   });
 
-  test("F3: a secret both at HEAD and in its commit is reported once, as at HEAD", async () => {
+  test("F4: a secret both at HEAD and in its commit is reported once, as both, and the first refusal says to rewrite the unpushed commits", async () => {
     const { w, identifier, path } = await setup();
     const line = { path: "src/db.ts", line: "const k = 'AKIAIOSFODNN7EXAMPLE';" };
     w.git.added.set(path, [line]);
@@ -247,8 +253,43 @@ describe("publish guards (§13.3 d)", () => {
     expect(await call(w, identifier)).toBe(false);
     const finding = readFileSync(join(path, ".wingmate", "inbox", inboxFiles(path)[0] ?? ""), "utf8");
     expect(finding.match(/aws in src\/db\.ts/g)).toEqual(["aws in src/db.ts"]);
-    expect(finding).toContain("- aws in src/db.ts (value withheld)\n");
-    expect(finding).not.toContain("rewrite the unpushed commits");
+    expect(finding).toContain("- aws in src/db.ts (at HEAD and in the branch history; value withheld)\n");
+    // a fix committed on top would clear HEAD and its gate, and the history copy would refuse the retry: rewrite instead
+    expect(finding).toContain("do not commit a fix on top: rewrite the unpushed commits");
+    expect(finding).not.toContain("Fix the findings and commit");
+  });
+
+  test("F4: a forbidden path at HEAD is in its commit too: the first refusal says to rewrite, and the rewritten branch publishes", async () => {
+    const { w, identifier, path } = await setup();
+    w.git.changed.set(path, [".github/workflows/ci.yml", "src/a.ts"]);
+    w.git.history.set(path, {
+      paths: [".github/workflows/ci.yml", "src/a.ts"],
+      added: [],
+      messages: "ci and code\n",
+    });
+    expect(await call(w, identifier)).toBe(false);
+    const finding = readFileSync(join(path, ".wingmate", "inbox", inboxFiles(path)[0] ?? ""), "utf8");
+    expect(finding).toContain(
+      "- .github/workflows/ci.yml matches the forbidden pattern .github/** (at HEAD and in the branch history)\n",
+    );
+    expect(finding).toContain("do not commit a fix on top: rewrite the unpushed commits");
+    // the agent drops the change from its commits instead of reverting it on top: neither HEAD nor any commit touches it
+    w.git.changed.set(path, ["src/a.ts"]);
+    w.git.history.set(path, { paths: ["src/a.ts"], added: [], messages: "code\n" });
+    w.git.revParse = async (_c: string, ref: string) => (ref === "HEAD" ? "headsha2" : "basesha");
+    await readyToFinish(w, identifier);
+    expect(await call(w, identifier)).toBe(true); // within the one retry of §8.1
+    expect(w.git.remoteSha.get(worktreeOf(await rec(w, identifier)).branch)).toBe("headsha2");
+  });
+
+  test("F4: a finding the history read did not show is still committed: it is named at HEAD and the refusal says to rewrite", async () => {
+    const { w, identifier, path } = await setup();
+    w.git.changed.set(path, ["src/db.ts"]);
+    w.git.added.set(path, [{ path: "src/db.ts", line: "const k = 'AKIAIOSFODNN7EXAMPLE';" }]);
+    expect(await call(w, identifier)).toBe(false);
+    const finding = readFileSync(join(path, ".wingmate", "inbox", inboxFiles(path)[0] ?? ""), "utf8");
+    expect(finding).toContain("- aws in src/db.ts (at HEAD; value withheld)\n");
+    expect(finding).toContain("do not commit a fix on top: rewrite the unpushed commits");
   });
 
   test("manifest change without allow-deps → dependency_policy; granted before claim by the owner → passes", async () => {
