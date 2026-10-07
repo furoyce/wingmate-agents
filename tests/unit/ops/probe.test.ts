@@ -844,9 +844,17 @@ describe("claudeProbe setup (R34: its first live run met a repository without or
     }
   });
 
-  test("a create that fails after Orca made the worktree still removes it, found by its name", async () => {
+  test("a create that fails after Orca made the worktree still removes it, found by its name, and no other worktree", async () => {
     const w = await world();
     const create = w.orca.worktreeCreate.bind(w.orca);
+    // the operator's own checkout of the same repository: the cleanup must match the scratch worktree's name, never the repo alone
+    const sibling = await create({
+      repoId: w.orca.current.repoId,
+      name: "wingmate-dispatcher",
+      baseBranch: "origin/main",
+      linearIssue: "",
+      comment: "",
+    });
     w.orca.worktreeCreate = async (a) => {
       await create(a); // Orca made it, then the reply timed out
       throw new OrcaError("orca_timeout", "no reply in 120 s");
@@ -858,6 +866,8 @@ describe("claudeProbe setup (R34: its first live run met a repository without or
     expect(exec.calls.length).toBe(0);
     expect(w.orca.removed.length).toBe(1);
     expect(basename(w.orca.removed[0] ?? "")).toMatch(/^wm-doctor-[0-9a-z]{26}$/);
+    expect(w.orca.removed).not.toContain(sibling.id);
+    expect(existsSync(sibling.path)).toBe(true);
   });
 });
 
