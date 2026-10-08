@@ -1,5 +1,6 @@
 // tests/fakes/fakeGit.ts — in-memory GitPort/GhPort; push records the commit it was given and PR creation reuses an open PR per head (Ruling R2)
 import { basename } from "node:path";
+import { GitCli } from "../../src/git/cli";
 import { verifyGitLinks } from "../../src/git/trust";
 import type { GhPort, GitPort, GitTarget } from "../../src/ports";
 
@@ -66,6 +67,10 @@ export class FakeGit implements GitPort {
     if (this.missing.has(sha))
       throw new Error(`git rev-parse failed (128): fatal: ${ref}: bad object ${sha}`);
     return sha;
+  }
+  /** Role review cleanliness is checked on the real fixture worktree/index, rather than inferred from fake committed diffs. */
+  async hasTrackedChanges(at: GitAt): Promise<boolean> {
+    return new GitCli().hasTrackedChanges(at);
   }
   /** Test helpers (no longer on the port: the claim reads the git dirs from the worktree's own links, C22). */
   async commonDir(cwd: string) {

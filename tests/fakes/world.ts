@@ -62,7 +62,10 @@ export async function makeWorld(startIso = "2026-10-06T10:00:00Z") {
   cfg.defaults.providers.coordinatorCascade = ["claude", "codex"]; // the pilot yaml pins [claude]; tests cover the handoff path
   // F1/F2: every configured repo's main checkout is in the fleet, where a claim verifies its base before creating a worktree
   for (const p of Object.values(cfg.projects))
-    for (const repo of Object.values(p.repos)) orca.mains.add(repo.orcaRepo);
+    for (const repo of Object.values(p.repos)) {
+      orca.mains.add(repo.orcaRepo);
+      repo.setup = "none"; // Fake worktrees have no package manifests; setup tests opt into their own commands.
+    }
   const ctx: Ctx = await buildCtx({
     cfg,
     dirs,

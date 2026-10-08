@@ -66,6 +66,47 @@ async function linkedTarget(): Promise<{ dir: string; base: string; t: GitTarget
 }
 
 describe("GitCli", () => {
+  test("review cleanliness checks both tracked worktree edits and staged edits even when the worktree matches HEAD", async () => {
+    const { t } = await linkedTarget();
+    const g = new GitCli();
+    expect(await g.hasTrackedChanges(t)).toBe(false);
+    const original = "one\ntwo\n";
+    writeFileSync(join(t.path, "a.txt"), "uncommitted edit\n");
+    expect(await g.hasTrackedChanges(t)).toBe(true);
+    await git(["-C", t.path, "add", "a.txt"]);
+    writeFileSync(join(t.path, "a.txt"), original); // net HEAD/worktree diff is empty, but the index is still changed
+    expect(await g.hasTrackedChanges(t)).toBe(true);
+    await git(["-C", t.path, "reset", "-q", "HEAD", "--", "a.txt"]);
+    expect(await g.hasTrackedChanges(t)).toBe(false);
+  });
+  test("review cleanliness allows only root .wingmate bookkeeping and rejects hidden tracked index entries", async () => {
+    const { t } = await linkedTarget();
+    const g = new GitCli();
+    mkdirSync(join(t.path, ".wingmate"));
+    writeFileSync(join(t.path, ".wingmate/plan.md"), "plan\n");
+    await git(["-C", t.path, "add", ".wingmate/plan.md"]);
+    expect(await g.hasTrackedChanges(t)).toBe(false);
+    mkdirSync(join(t.path, "nested/.wingmate"), { recursive: true });
+    writeFileSync(join(t.path, "nested/.wingmate/source.ts"), "source\n");
+    await git(["-C", t.path, "add", "nested/.wingmate/source.ts"]);
+    expect(await g.hasTrackedChanges(t)).toBe(true);
+    await git(["-C", t.path, "reset", "-q", "HEAD", "--", "nested/.wingmate/source.ts"]);
+    for (const flag of ["assume-unchanged", "skip-worktree"]) {
+      await git(["-C", t.path, "update-index", `--${flag}`, "a.txt"]);
+      writeFileSync(join(t.path, "a.txt"), "hidden edit\n");
+      expect(await g.hasTrackedChanges(t)).toBe(true);
+      await git(["-C", t.path, "update-index", `--no-${flag}`, "a.txt"]);
+      await git(["-C", t.path, "restore", "a.txt"]);
+    }
+    expect(await g.hasTrackedChanges(t)).toBe(false);
+  });
+  test("review cleanliness fails closed when git cannot inspect the source/index", async () => {
+    const { t } = await linkedTarget();
+    for (const failure of [{ code: 128 }, { timedOut: true }, { truncated: true }]) {
+      const runner: Runner = async (argv) => (argv.includes("diff") ? { ...ok(""), ...failure } : ok(""));
+      await expect(new GitCli(runner).hasTrackedChanges(t)).rejects.toMatchObject({ code: "git_failed" });
+    }
+  });
   test("changedPaths, addedLines, commitsAhead, revParse, commonDir and gitDir", async () => {
     const { dir, base } = await repo();
     const g = new GitCli();

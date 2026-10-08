@@ -452,7 +452,7 @@ describe("upsertViews (§11.5, as the app)", () => {
       },
     };
   };
-  test("creates both shared views for team JRF with the owner, then updates them by name; URLs from urlKey and slugId", async () => {
+  test("creates both shared views for team JRF as the app, then updates them by name; URLs from urlKey and slugId", async () => {
     const w = await world();
     const fresh = gql([]);
     expect(await upsertViews(w.cfg, fresh.g)).toEqual([
@@ -466,10 +466,10 @@ describe("upsertViews (§11.5, as the app)", () => {
     ]);
     expect(creates[0]?.variables.input).toMatchObject({
       teamId: "team-jrf",
-      ownerId: w.cfg.workspace.owner,
       shared: true,
       filterData: viewDefinitions(w.cfg)[0]?.filterData,
     });
+    expect(creates.every((c) => !Object.hasOwn(c.variables.input as object, "ownerId"))).toBe(true);
     const again = gql([
       { id: "v1", name: "Wingmate", slugId: "s1", shared: true, team: { id: "team-jrf" } },
       { id: "v2", name: "Wingmate · Needs you", slugId: "s2", shared: true, team: { id: "team-jrf" } },

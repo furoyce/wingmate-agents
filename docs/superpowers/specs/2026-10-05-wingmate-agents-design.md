@@ -828,7 +828,7 @@ projects:
   <key>:
     linearProject: <uuid>
     repos:
-      <name>: { orcaRepo: <uuid>, github: <owner/repo>, base: origin/main, setup: <argv|none>,
+      <name>: { orcaRepo: <uuid>, github: <owner/repo>, base: origin/main, setup: <argv|argv sequence|none>,
                 gates: [<argv array>...],          # non-empty; schema refuses an empty list
                 requiredCheck: <ci check name|none>,
                 ui: { kind: web|ios|none, paths: [...], dev: <argv>, url: <url>, smokeRoutes: [...] },
@@ -839,6 +839,8 @@ projects:
     coexist: { prReview: existing-orca-automation|none, githubIssues: leave-to-agent-fix|none }   # informational for the brief
     autonomy / done / budgets / concurrency / timers   # overrides
 ```
+Setup commands run sequentially without a shell, stop on the first failure, and share the ten-minute setup cap and
+the tick's thirty-second launch reserve. A tick cutoff replays the sequence, so setup must tolerate retries.
 Secrets live in `~/.config/wingmate/credentials.json` (0600): Linear client id/secret and the cached app token.
 `config/tiers.yaml` (optional): `{ best: { claude?: {model, effort}, codex?: {model, effort} }, standard: { claude?:
 {model}, codex?: {model} } }`; a project may override `standard` under `projects.<key>.tiers.standard`.
@@ -898,7 +900,9 @@ Question comments @mention `workspace.owner` (and the assignee when different) u
 verified in §16; until verified, the subscription is the primary delivery path and the display name is written in
 plain text.
 
-### 11.5 Saved views (created/updated idempotently by `install`, `shared: true`, team JRF, owner = workspace owner)
+### 11.5 Saved views (created/updated idempotently by `install`, `shared: true`, team JRF, owned by Wingmate)
+Live validation on 2026-10-07 found that Linear requires the creator to own a new view. Install therefore omits
+`ownerId` and lets Linear assign the app actor; sharing keeps both views available to the workspace owner.
 - **Wingmate** — project ∈ pilots ∧ Lifecycle label set ∧ state type ∉ {completed, canceled}; display: board, grouped
   by the Lifecycle label group, ordered by priority (columns In-Agent / Needs-Human / Review-Ready / Blocked).
 - **Wingmate · Needs you** — same scope ∧ label ∈ {Needs-Human, Blocked, Review-Ready}; list, grouped by label,
@@ -1352,10 +1356,17 @@ and resumes an idle coordinator when the wave settles, within the resume budget.
 not start roles. At most four requests are pending per issue; quota and dependency waits are uncounted backpressure.
 Stop/release/handoff retain the existing bulk close and process sweep for all issue processes.
 
+Pending review waves defer coordinator notes, idle nudges and stage recovery; owner overrides, integrity and hard
+budgets remain active. A trusted exit receipt settles launch uncertainty even when the create response was lost.
+Hard token caps compare the measured lower bound when aggregate usage is unknown.
+
 `gate planVerify --request <id>` derives its verdict from the verifier. Code/security reviewers run before
 `gate validate|security --request <id>`, which also runs the pinned deterministic commands. The dispatcher checks PASS
 against its protected result at HEAD (and the plan digest for planVerify), rather than an agent-written mirror. Publish
-checks code/security reviews again at the exact pushed HEAD. Modified report evidence requires a fresh review.
+checks code/security reviews again at the exact pushed HEAD. Code/security review launch, settlement and gate acceptance
+require clean committed tracked source/index outside `.wingmate`. Modified report evidence requires a fresh review.
+These checkpoints do not prevent a concurrent writer from modifying and restoring source between checks; an immutable
+review snapshot or separate isolation is needed to eliminate that shared-worktree residual.
 Measured role tokens/dollars and sampled coordinator minutes are recorded per session with provenance; incomplete totals
 remain null. Status and completion comments show this provenance. Web/iOS UI execution and live pilot acceptance remain
 subject to the existing §16 checks; this relay does not grant agent access to the Orca browser or runtime.

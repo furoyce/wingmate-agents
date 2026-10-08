@@ -26,11 +26,11 @@ import { block, finishBlock, release, stopAgents } from "./release";
 import { deliver } from "./resume";
 import { collectRoles } from "./roles";
 import { readTracked, saveRecord } from "./save";
-import { addAttention, dropAttention, stageOf } from "./states";
+import { addAttention, dropAttention, enterPipelineStage, stageOf } from "./states";
 import { addNote, flushNotes, syncStatus } from "./status";
 import { type Advance, type StepOut, WORKING } from "./step";
 import type { Budget, TickSummary } from "./tick";
-import { timers, agentProgressed, budgets, integrity, liveness } from "./watch";
+import { timers, agentProgressed, budgets, integrity, liveness, roleWavePending } from "./watch";
 
 const ACTIVE = new Set(["claimed", "working", "awaiting-human", "review", "blocked"]);
 /** §7.4: the active records an owner's Blocked (or Needs-Human) label pauses. */
@@ -341,11 +341,21 @@ async function notifyRoleJobs(a: Advance): Promise<StepOut> {
   const text = `Dispatcher role results (terminal jobs):\n${fresh.map((j) => `${j.id} ${j.role}: ${j.verdict ?? "FAIL"}; report: ${j.reportPath ?? "unavailable"}`).join("\n")}\nRead .wingmate/roles.json and the reports before continuing. Use --request <id> to bind a review gate. A FAIL requires a fix and a fresh review; never invent a passing result.`;
   if ((await deliver(a.ctx, r, "note", text, "idle", r.pipelineStage)) === "turn_started") {
     for (const j of fresh) j.notified = true;
+    enterPipelineStage(a.ctx, r, r.pipelineStage);
     a.budget.resumes -= 1;
     a.s.resumes.push(r.identifier);
     a.launched = true;
   }
   return "next";
+}
+
+/** Pending reviews defer notes and recovery, while integrity, budget and liveness errors remain visible. */
+async function waitForRoleJobs(a: Advance): Promise<StepOut> {
+  if (!(await roleWavePending(a))) return "next";
+  await liveness(a);
+  await integrity(a);
+  await budgets(a);
+  return "stop";
 }
 
 /** F2: a block whose Linear writes failed is finished first (the record is `blocked` on disk already). */
@@ -365,6 +375,7 @@ const STEPS = [
   outbox,
   notifyRoleJobs,
   allowDepsGrant,
+  waitForRoleJobs,
   comments,
   liveness,
   timers,

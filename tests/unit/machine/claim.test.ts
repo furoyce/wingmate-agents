@@ -14,7 +14,7 @@ import {
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { LaunchSchema } from "../../../src/kit/local";
-import { claimIssue, provisionAndLaunch } from "../../../src/machine/claim";
+import { claimIssue, provisionAndLaunch, setupCommandBudget } from "../../../src/machine/claim";
 import { refreshRepoSiblings } from "../../../src/machine/launch";
 import { block, release } from "../../../src/machine/release";
 import { deliver, relaunch } from "../../../src/machine/resume";
@@ -77,6 +77,7 @@ describe("claimIssue (§5.4)", () => {
     });
     const kit = (await w.ctx.ledger.readIssue("JRF-501")).find((e) => e.type === "kit_installed");
     expect(kit?.data.courtesySettings).toBe("written");
+    expect((await w.ctx.ledger.readIssue("JRF-501")).some((e) => e.type.startsWith("setup"))).toBe(false);
     const kitDir = w.ctx.kitDirFor("JRF-501");
     const [cmd] = commands(w);
     expect(cmd).toContain(`--settings ${join(kitDir, "claude-settings.json")}`);
@@ -153,11 +154,15 @@ describe("claimIssue (§5.4)", () => {
     expect(verbs(w).filter((x) => x === "worktreeCreate")).toHaveLength(1);
   });
 
-  test("a failing setup command blocks (setup_failed): Blocked, one blocked comment naming only the exit code, no terminal", async () => {
+  test("a failing setup sequence short circuits (setup_failed): prior commands run, later commands and the terminal do not", async () => {
     const w = await makeWorld();
     const repo = bouncr(w).repos.api;
     if (!repo) throw new Error("api repo missing");
-    repo.setup = ["sh", "-c", "echo do-not-post-this >&2; exit 3"];
+    repo.setup = [
+      ["sh", "-c", "touch .setup-first"],
+      ["sh", "-c", "echo do-not-post-this >&2; exit 3"],
+      ["sh", "-c", "touch .setup-last"],
+    ];
     const r = await claim(w);
     expect(r.stage).toBe("blocked");
     expect(r.history.at(-1)?.cause).toBe("setup_failed");
@@ -165,7 +170,15 @@ describe("claimIssue (§5.4)", () => {
     const blocked = w.linear.comments.filter((c) => c.body.startsWith("<!-- wingmate:blocked -->"));
     expect(blocked).toHaveLength(1);
     expect(blocked[0]?.body).toContain("exited 3");
+    expect(blocked[0]?.body).toContain("command 2/3");
     expect(blocked[0]?.body).not.toContain("do-not-post-this");
+    expect(existsSync(join(r.worktree?.path ?? "", ".setup-first"))).toBe(true);
+    expect(existsSync(join(r.worktree?.path ?? "", ".setup-last"))).toBe(false);
+    const setup = (await w.ctx.ledger.readIssue("JRF-501")).filter((e) => e.type === "setup");
+    expect(setup.map((e) => [e.data.command, e.data.code])).toEqual([
+      [1, 0],
+      [2, 3],
+    ]);
     expect(verbs(w)).not.toContain("terminalCreate");
     expect((await w.ctx.journal.all()).find((e) => e.kind === "claim")?.state).toBe("abandoned");
   });
@@ -174,9 +187,13 @@ describe("claimIssue (§5.4)", () => {
     const w = await makeWorld();
     const repo = bouncr(w).repos.api;
     if (!repo) throw new Error("api repo missing");
-    repo.setup = ["sh", "-c", "sleep 20"];
+    repo.setup = [
+      ["sh", "-c", "sleep 1"],
+      ["sh", "-c", "sleep 20"],
+      ["sh", "-c", "touch .setup-last"],
+    ];
     addLabeledByOwner(w.linear, todo("i1", "JRF-501"));
-    const at = Date.now() + 35_500; // 5.5 s of setup time before the reserve for the terminal and its first wait
+    const at = Date.now() + 38_500; // 8.5 s total for both commands before the terminal's reserve
     const ctx = { ...w.ctx, deadline: { at, now: Date.now } };
     const started = Date.now();
     const r = await claimIssue(ctx, {
@@ -191,10 +208,12 @@ describe("claimIssue (§5.4)", () => {
     expect(r.attention).toContain("setup_timed_out");
     expect(verbs(w)).not.toContain("terminalCreate");
     const setup = (await w.ctx.ledger.readIssue("JRF-501")).filter((e) => e.type === "setup");
-    expect(setup.map((e) => e.data.timedOut)).toEqual([true]);
+    expect(setup.map((e) => e.data.timedOut)).toEqual([false, true]);
+    expect(Number(setup[1]?.data.timeoutMs)).toBeLessThan(Number(setup[0]?.data.timeoutMs) - 900);
+    expect(existsSync(join(r.worktree?.path ?? "", ".setup-last"))).toBe(false);
     const [entry] = (await w.ctx.journal.all()).filter((e) => e.kind === "claim");
     expect(entry).toMatchObject({ state: "intent", attempts: 1 });
-    repo.setup = ["sh", "-c", "exit 0"];
+    repo.setup = [["sh", "-c", "exit 0"]];
     if (!entry) throw new Error("entry missing");
     await provisionAndLaunch(w.ctx, r, await issueOf(w, "i1"), bouncr(w), entry.id, {
       model: "claude-fable-5-1[1m]",
@@ -203,14 +222,62 @@ describe("claimIssue (§5.4)", () => {
     expect(r.stage).toBe("working");
     expect(r.attention).not.toContain("setup_timed_out");
     const ran = (await w.ctx.ledger.readIssue("JRF-501")).filter((e) => e.type === "setup");
-    expect(ran.map((e) => e.data.timedOut)).toEqual([true, false]); // the replay ran the setup again: a worktree this claim created
+    expect(ran.map((e) => e.data.timedOut)).toEqual([false, true, false]); // the replay ran setup again: a worktree this claim created
   }, 30_000);
+
+  test("setup sequence runs argv literally and in order before launching the coordinator", async () => {
+    const w = await makeWorld();
+    const repo = bouncr(w).repos.api;
+    if (!repo) throw new Error("api repo missing");
+    const literal = "first; $(touch .setup-injected)";
+    repo.setup = [
+      [process.execPath, "-e", 'require("node:fs").writeFileSync(".setup-order", process.argv[1])', literal],
+      [
+        process.execPath,
+        "-e",
+        'const f = require("node:fs"); if (f.readFileSync(".setup-order", "utf8") !== process.argv[1]) process.exit(3); f.appendFileSync(".setup-order", "\\nsecond");',
+        literal,
+      ],
+    ];
+    const r = await claim(w);
+    expect(r.stage).toBe("working");
+    expect(readFileSync(join(r.worktree?.path ?? "", ".setup-order"), "utf8")).toBe(`${literal}\nsecond`);
+    expect(existsSync(join(r.worktree?.path ?? "", ".setup-injected"))).toBe(false);
+    const setup = (await w.ctx.ledger.readIssue("JRF-501")).filter((e) => e.type === "setup");
+    expect(setup.map((e) => [e.data.command, e.data.commands, e.data.code])).toEqual([
+      [1, 2, 0],
+      [2, 2, 0],
+    ]);
+    expect(verbs(w)).toContain("terminalCreate");
+  });
+
+  test("setup commands share one 10-minute cap, distinguish tick cutoff, and reserve terminal time", async () => {
+    const w = await makeWorld();
+    const startedAt = 1000;
+    let now = startedAt;
+    expect(setupCommandBudget(w.ctx, startedAt, () => now)).toEqual({
+      timeoutMs: 600_000,
+      tickLimited: false,
+    });
+    now += 590_000;
+    expect(setupCommandBudget(w.ctx, startedAt, () => now)).toEqual({
+      timeoutMs: 10_000,
+      tickLimited: false,
+    });
+    now += 6000;
+    expect(setupCommandBudget(w.ctx, startedAt, () => now)).toEqual({ timeoutMs: null, tickLimited: false });
+    now = startedAt;
+    const ctx = { ...w.ctx, deadline: { at: now + 40_000, now: () => now } };
+    expect(setupCommandBudget(ctx, startedAt, () => now)).toEqual({ timeoutMs: 10_000, tickLimited: true });
+    now += 6000;
+    expect(setupCommandBudget(ctx, startedAt, () => now)).toEqual({ timeoutMs: null, tickLimited: true });
+  });
 
   test("REL-2: a crash between worktree create and its journal step — the replay knows this claim created it: the start check reads its HEAD and the setup runs", async () => {
     const w = await makeWorld();
     const repo = bouncr(w).repos.api;
     if (!repo) throw new Error("api repo missing");
-    repo.setup = ["sh", "-c", "touch .setup-ran"];
+    repo.setup = [["sh", "-c", "touch .setup-ran"]];
     w.orca.failNext = "worktreeShow";
     await expect(claim(w)).rejects.toThrow(/fake orca failure/);
     const r = await readRecord(w.dirs, "JRF-501");
@@ -254,7 +321,7 @@ describe("claimIssue (§5.4)", () => {
     );
     const repo = bouncr(w).repos.api;
     if (!repo) throw new Error("api repo missing");
-    repo.setup = ["sh", "-c", 'test -z "$LANGFUSE_SECRET_KEY" && test -z "$GITHUB_PERSONAL_ACCESS_TOKEN"'];
+    repo.setup = [["sh", "-c", 'test -z "$LANGFUSE_SECRET_KEY" && test -z "$GITHUB_PERSONAL_ACCESS_TOKEN"']];
     const saved = process.env.LANGFUSE_SECRET_KEY;
     process.env.LANGFUSE_SECRET_KEY = "sk-lf-dispatcher"; // as if the dispatcher's own environment carried it
     let r: WRecord;

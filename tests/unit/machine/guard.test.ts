@@ -48,6 +48,7 @@ const ORCA: Record<keyof OrcaPort, Kind> = {
 };
 const GIT: Record<keyof GitPort, Kind> = {
   revParse: "read",
+  hasTrackedChanges: "read",
   changedPaths: "read",
   addedLines: "read",
   commitsAhead: "read",

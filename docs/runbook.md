@@ -654,7 +654,10 @@ These are the D14 residuals: places where the agent trust boundary is weaker tha
 - **Your git hooks do not run on the dispatcher's push.** For example, Git LFS `pre-push` does not run, so LFS objects
   are not uploaded. Push them yourself, or keep LFS files out of agent work.
 - **PRs are not opened while paused.** A `finish` waits for a tick that may resume work.
-- **Setup runs only in worktrees the claim created, and within one tick.** The repository's `setup` command never runs
+- **Setup runs only in worktrees the claim created, and within one tick.** `setup` accepts `none`, one argv array,
+  or a nonempty list of argv arrays. Commands run sequentially without shell interpolation, stop at the first failure,
+  and share one ten-minute cap. A retry replays the whole sequence, so setup commands must tolerate retries.
+  Bouncr installs the API and mobile dependencies separately with `npm ci`. The repository's setup never runs
   in a reused worktree (a re-queue). A replay of the claim that created the worktree runs it, even after a crash right
   after the create. Its timeout ends 30 s before the tick's deadline, so it gets about one to two minutes. A setup cut
   off there twice blocks the issue `launch_failed` (attention `setup_timed_out`). Before the pilot, warm each

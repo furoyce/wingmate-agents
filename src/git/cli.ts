@@ -119,6 +119,35 @@ export class GitCli implements GitPort {
   async revParse(at: GitAt, ref: string): Promise<string> {
     return (await this.g(at, ["rev-parse", "--verify", "--end-of-options", `${ref}^{commit}`])).trim();
   }
+  /**
+   * Reviews run against committed source. Check index and worktree separately: a staged edit followed by restoring the worktree to
+   * HEAD still has an unreviewed index. Protocol files are deliberately mutable. Hidden index entries fail closed too because git
+   * diff may otherwise ignore changes to assume-unchanged/skip-worktree files. This is a checkpoint, not an immutable snapshot.
+   */
+  async hasTrackedChanges(at: GitAt): Promise<boolean> {
+    const paths = ["--", ".", ":(top,exclude).wingmate"];
+    const entries = await this.g(at, ["ls-files", "-v", "-z", ...paths]);
+    if (entries.split("\0").some((entry) => entry && /^[a-zS] /.test(entry))) return true;
+    for (const compare of [["--cached", "HEAD"], []]) {
+      const r = await this.run(
+        at,
+        [
+          "diff",
+          "--quiet",
+          "--no-ext-diff",
+          "--no-textconv",
+          "--ignore-submodules=none",
+          ...compare,
+          ...paths,
+        ],
+        60_000,
+      );
+      if (r.timedOut || r.truncated || (r.code !== 0 && r.code !== 1))
+        throw new WingmateError("git_failed", "git diff could not verify committed review inputs");
+      if (r.code === 1) return true;
+    }
+    return false;
+  }
   async commonDir(at: GitAt): Promise<string> {
     return (await this.g(at, ["rev-parse", "--path-format=absolute", "--git-common-dir"])).trim();
   }

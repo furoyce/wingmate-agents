@@ -11,6 +11,17 @@ describe("loadConfig", () => {
       "smart-dispatcher",
     ]);
     expect(cfg.projects.bouncr?.routing.default).toBe("api");
+    expect(cfg.projects.bouncr?.repos.api?.setup).toEqual([
+      ["npm", "ci", "--prefix", "api"],
+      ["npm", "ci", "--prefix", "mobile"],
+    ]);
+    expect(cfg.projects.bouncr?.repos.api?.gates).toContainEqual([
+      "npm",
+      "--prefix",
+      "api",
+      "run",
+      "typecheck",
+    ]);
     expect(cfg.projects["smart-dispatcher"]?.repos.main?.requiredCheck).toBe("Smoke (typecheck + lint)");
   });
   test("C3: the pilot keeps Codex to verifier and reviewer roles (§13.3 c, D14 extension pending)", async () => {

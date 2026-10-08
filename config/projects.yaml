@@ -29,10 +29,12 @@ projects:
         orcaRepo: 7b0ddfa8-7ef0-4be6-b4ef-38013c099fb8
         github: furoyce/bouncr.lol
         base: origin/main
-        setup: none
+        setup:
+          - [npm, ci, --prefix, api]
+          - [npm, ci, --prefix, mobile]
         gates:
           - [npm, --prefix, api, test]
-          - [npx, --prefix, api, tsc, --noEmit]
+          - [npm, --prefix, api, run, typecheck]
           - [npm, --prefix, mobile, run, verify]
         ui: { kind: ios, paths: [mobile/], dev: [npm, --prefix, mobile, run, ios] }
         packageRoots: [api, mobile]

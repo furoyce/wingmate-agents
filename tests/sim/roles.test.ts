@@ -6,7 +6,7 @@ import { parseArgv } from "../../src/cli/index";
 import { listIntents, writeIntent } from "../../src/kit/intents";
 import { readLocal, writeLocal } from "../../src/kit/local";
 import { readRoleJobs } from "../../src/kit/roles";
-import { roleJobDir, verifyRoleGate } from "../../src/machine/roles";
+import { roleJobDir, startRole, verifyRoleGate } from "../../src/machine/roles";
 import { run } from "../../src/shared/exec";
 import { readRecord, writeRecord } from "../../src/state/records";
 import { type World, advance, labeledByOwner, runTick, todo, world } from "./harness";
@@ -34,7 +34,7 @@ async function setup() {
   return { w, r, wt: required(r.worktree).path };
 }
 async function request(wt: string, role = "plan-verifier", deps: string[] = []) {
-  return writeIntent(wt, {
+  const intent = await writeIntent(wt, {
     issue: ID,
     kind: "spawn",
     payload: {
@@ -44,6 +44,8 @@ async function request(wt: string, role = "plan-verifier", deps: string[] = []) 
       deps,
     },
   });
+  if (intent.kind !== "spawn") throw new Error("spawn fixture required");
+  return intent;
 }
 function done(w: World, r: Awaited<ReturnType<typeof record>>, id: string, verdict = "PASS") {
   const j = required(r.roleJobs.find((j) => j.id === id));
@@ -72,7 +74,101 @@ function done(w: World, r: Awaited<ReturnType<typeof record>>, id: string, verdi
 }
 const creates = (w: World) => w.orca.calls.filter((c) => c.verb === "terminalCreate");
 
+async function fixtureGit(wt: string, args: string[]) {
+  const result = await run(["git", "-C", wt, ...args], {
+    env: { GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" },
+  });
+  if (result.code !== 0) throw new Error(`fixture git failed: ${result.stderr}`);
+  return result.stdout.trim();
+}
+
+async function committedSource(w: World, wt: string) {
+  writeFileSync(join(wt, "source.ts"), "export const value = 1;\n");
+  await fixtureGit(wt, ["add", "source.ts"]);
+  await fixtureGit(wt, [
+    "-c",
+    "user.name=fixture",
+    "-c",
+    "user.email=fixture@example.invalid",
+    "-c",
+    "commit.gpgsign=false",
+    "commit",
+    "-q",
+    "-m",
+    "source fixture",
+  ]);
+  w.git.heads.set(wt, await fixtureGit(wt, ["rev-parse", "HEAD"]));
+}
+
 describe("slice 2 dispatcher role relay", () => {
+  for (const role of ["code-reviewer", "security-reviewer"]) {
+    test(`${role} refuses uncommitted tracked source before creating a terminal`, async () => {
+      const { w, r, wt } = await setup();
+      await committedSource(w, wt);
+      writeFileSync(join(wt, "source.ts"), "export const value = 2;\n");
+      const intent = await request(wt, role);
+      await expect(startRole(w.ctx, r, intent)).rejects.toMatchObject({ code: "review_source_dirty" });
+      expect(r.roleJobs).toEqual([]);
+      expect(creates(w)).toHaveLength(1);
+    });
+
+    test(`${role} cannot accept a PASS captured while tracked source/index is dirty`, async () => {
+      const { w, wt } = await setup();
+      await committedSource(w, wt);
+      const intent = await request(wt, role);
+      advance(w, 5);
+      await runTick(w);
+      let r = await record(w);
+      expect(r.roleJobs[0]?.status).toBe("running");
+      writeFileSync(join(wt, "source.ts"), "export const value = 2;\n");
+      await fixtureGit(wt, ["add", "source.ts"]);
+      writeFileSync(join(wt, "source.ts"), "export const value = 1;\n"); // index only differs from the pinned commit
+      done(w, r, intent.id);
+      advance(w, 5);
+      await runTick(w);
+      r = await record(w);
+      expect(r.roleJobs[0]).toMatchObject({ status: "failed", verdict: "FAIL", launchUncertain: false });
+      expect(readFileSync(join(wt, required(r.roleJobs[0]?.reportPath)), "utf8")).toContain(
+        "Tracked source or index changed",
+      );
+      await fixtureGit(wt, ["reset", "-q", "HEAD", "--", "source.ts"]);
+      await expect(
+        verifyRoleGate(
+          w.ctx,
+          r,
+          role === "code-reviewer" ? "validate" : "security",
+          intent.id,
+          r.roleJobs[0]?.headSha ?? null,
+        ),
+      ).rejects.toMatchObject({ code: "review_required" }); // restoring clean source cannot resurrect the rejected result
+    });
+
+    test(`${role} requires clean tracked source/index again at gate and pinned publish verification`, async () => {
+      const { w, wt } = await setup();
+      await committedSource(w, wt);
+      const intent = await request(wt, role);
+      advance(w, 5);
+      await runTick(w);
+      let r = await record(w);
+      done(w, r, intent.id);
+      advance(w, 5);
+      await runTick(w);
+      r = await record(w);
+      const head = required(r.roleJobs[0]).headSha;
+      const stage = role === "code-reviewer" ? "validate" : "security";
+      await verifyRoleGate(w.ctx, r, stage, intent.id, head);
+      writeFileSync(join(wt, "source.ts"), "export const value = 2;\n");
+      await expect(verifyRoleGate(w.ctx, r, stage, intent.id, head)).rejects.toMatchObject({
+        code: "review_source_dirty",
+      });
+      await fixtureGit(wt, ["add", "source.ts"]);
+      writeFileSync(join(wt, "source.ts"), "export const value = 1;\n");
+      await expect(verifyRoleGate(w.ctx, r, stage, intent.id, head, head)).rejects.toMatchObject({
+        code: "review_source_dirty",
+      });
+    });
+  }
+
   test("spawn enqueues without Orca; dispatcher launches once, captures the final result, and resumes once", async () => {
     const { w, wt } = await setup();
     writeFileSync(join(wt, ".wingmate/spec.md"), "Verify the plan.");
@@ -301,6 +397,53 @@ describe("slice 2 dispatcher role relay", () => {
     await runTick(w);
     expect((await record(w)).coordinator.terminalHandle).toBe(old);
     expect((await w.ctx.ledger.readIssue(ID)).filter((e) => e.type === "handle_rebound")).toEqual([]);
+  });
+
+  test("a trusted exit settles an uncertain create and permits later coordinator recovery", async () => {
+    const { w, wt } = await setup();
+    const intent = await request(wt);
+    w.orca.failAfter = "terminalCreate";
+    advance(w, 5);
+    await runTick(w);
+    let r = await record(w);
+    expect(r.roleJobs[0]).toMatchObject({ launchUncertain: true, terminalHandle: null });
+    done(w, r, intent.id);
+    advance(w, 5);
+    await runTick(w);
+    r = await record(w);
+    expect(r.roleJobs[0]).toMatchObject({ status: "succeeded", launchUncertain: false });
+    const wid = required(r.worktree).id;
+    // The headless role exited and the old coordinator vanished. Only the replacement is a live agent.
+    w.orca.terminals.set(
+      wid,
+      required(w.orca.terminals.get(wid)).filter((t) => t.handle !== r.coordinator.terminalHandle),
+    );
+    required(w.orca.rows.get(wid)).agents = [];
+    const replacement = await w.orca.terminalCreate(wid, "replacement coordinator", "claude");
+    w.orca.setAgentState(wid, `${replacement.tabId}:${replacement.leafId}`, "working", w.ctx.now());
+    advance(w, 5);
+    await runTick(w);
+    expect((await record(w)).coordinator.terminalHandle).toBe(replacement.handle);
+    expect(creates(w)).toHaveLength(3); // original, uncertain role, replacement; no duplicate recovery launch
+  });
+
+  test("measured review tokens enforce the hard cap even when coordinator usage is unknown", async () => {
+    const { w, wt } = await setup();
+    const intent = await request(wt);
+    advance(w, 5);
+    await runTick(w);
+    let r = await record(w);
+    r.budget.hardTokens = 8;
+    await writeRecord(w.dirs, r);
+    done(w, r, intent.id); // measured 16 tokens, plus an unknown coordinator total
+    advance(w, 5);
+    expect((await runTick(w)).blocked).toEqual([ID]);
+    r = await record(w);
+    expect(r.stage).toBe("blocked");
+    expect(r.history.at(-1)?.cause).toBe("budget");
+    expect(r.usage.tokens).toBeNull(); // presentation remains honest about the complete total
+    expect(r.usage.bySession.find((s) => s.sessionRef === intent.id)?.tokens).toBe(16);
+    expect(r.usage.bySession.some((s) => s.role === "coordinator" && s.tokens === null)).toBe(true);
   });
 
   test("missing final output fails closed, and replacing a captured report cannot pass a gate", async () => {

@@ -20,8 +20,8 @@ is in [runbook.md](runbook.md).
 stdin, or to a file with mode 0600. Never put them on a command line (`ps` and the shell history show it). Never paste
 them into a chat, including a chat with an agent. Never put them in the repository or in an `.env` file.
 
-Linear's settings pages move. The menu names below were current on 2026-10-06. The client-credentials screens have not
-been checked against a live app yet (spike results §1 row 6). In the end, `wingmate doctor` is the check that counts.
+Linear's settings pages move. The client-credentials application form and token exchange were checked live on
+2026-10-07. In the end, `wingmate doctor` is the check that counts.
 
 ## 1. Create the OAuth application
 
@@ -137,7 +137,8 @@ If another check fails:
 ## 6. Finish the two saved views
 
 `install` printed two URLs: **Wingmate** and **Wingmate · Needs you**. Both are shared views in team JRF, owned by
-you. Linear's API sets only their filters, so set the display by hand:
+the Wingmate app. Linear requires a newly created view's owner to match the authenticated actor; the shared views
+remain visible and favoritable by you. Set their display in Linear:
 
 | View | Layout | Grouping | Ordering |
 |---|---|---|---|

@@ -102,6 +102,16 @@ const PROMPT: Record<RoleJob["role"], keyof typeof PROMPTS> = {
   "ui-reviewer": "uiReviewer",
   worker: "worker",
 };
+const committedSourceRole = (role: RoleJob["role"]): boolean =>
+  role === "code-reviewer" || role === "security-reviewer";
+
+async function assertCommittedSource(ctx: Ctx, r: WRecord): Promise<void> {
+  if (r.worktree && (await ctx.git.hasTrackedChanges(gitTarget(r.worktree))))
+    throw new WingmateError(
+      "review_source_dirty",
+      "code/security reviews require committed source and a clean tracked worktree/index outside .wingmate; commit or discard source changes, then request a fresh review",
+    );
+}
 export const roleJobDir = (ctx: Ctx, r: WRecord, id: string): string =>
   join(ctx.kitDirFor(r.identifier), "roles", id);
 export async function planHash(wt: string): Promise<string | null> {
@@ -163,6 +173,7 @@ export async function startRole(
       "no configured role provider has quota and a resolved tier",
     );
   await prepareLaunch(ctx, r);
+  if (committedSourceRole(intent.payload.role)) await assertCommittedSource(ctx, r);
   const headSha = await ctx.git.revParse(gitTarget(r.worktree), "HEAD");
   const job: RoleJob = {
     id: intent.id,
@@ -268,8 +279,11 @@ export async function collectRoles(ctx: Ctx, r: WRecord, rec: Reconciled): Promi
     const stdout =
       size <= MAX_OUTPUT ? (await readNoFollow(join(dir, "stdout"), MAX_OUTPUT + 1)).toString("utf8") : "";
     const result = /^\d+\s*$/.test(exit) ? parseRoleOutput(job.provider, stdout, Number(exit)) : null;
-    job.status = result ? "succeeded" : "failed";
-    job.verdict = result?.verdict ?? "FAIL";
+    const dirtySource =
+      committedSourceRole(job.role) && (await ctx.git.hasTrackedChanges(gitTarget(r.worktree)));
+    job.status = result && !dirtySource ? "succeeded" : "failed";
+    job.launchUncertain = false; // the trusted runner's exit receipt settles an ambiguous create too
+    job.verdict = dirtySource ? "FAIL" : (result?.verdict ?? "FAIL");
     const completed = (await readText(join(dir, "completed-at")))?.trim();
     const validTime =
       completed &&
@@ -278,9 +292,10 @@ export async function collectRoles(ctx: Ctx, r: WRecord, rec: Reconciled): Promi
       Date.parse(completed) <= Date.parse(ctx.now());
     job.completedAt = validTime ? new Date(completed).toISOString() : ctx.now();
     job.reportPath = `.wingmate/evidence/role-${job.id}.md`;
-    const text =
-      result?.text ??
-      "FAIL\nThe role process failed or produced an invalid or oversized final response. Inspect the dispatcher-owned role logs.";
+    const text = dirtySource
+      ? "FAIL\nTracked source or index changed during review. Commit or discard source changes and request a fresh review; the captured result cannot prove review of the pinned commit."
+      : (result?.text ??
+        "FAIL\nThe role process failed or produced an invalid or oversized final response. Inspect the dispatcher-owned role logs.");
     job.reportHash = createHash("sha256").update(text).digest("hex");
     const evidence = await worktreeDir(r.worktree.path, ".wingmate/evidence", true);
     await writeInWorktree(evidence, `role-${job.id}.md`, text);
@@ -368,6 +383,7 @@ export async function verifyRoleGate(
   );
   if (!job || job.status !== "succeeded" || job.verdict !== "PASS")
     throw new WingmateError("review_required", `${stage} requires a settled PASS from ${role}`);
+  if (committedSourceRole(role)) await assertCommittedSource(ctx, r);
   const report = job.reportPath
     ? await worktreeFile(r.worktree.path, job.reportPath, ".wingmate/evidence")
     : null;

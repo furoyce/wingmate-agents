@@ -106,7 +106,7 @@ function tracedSetup(w: World): string {
   const runs = join(w.root, "setup-runs.txt");
   const api = w.cfg.projects.bouncr?.repos.api;
   if (!api) throw new Error("api repo missing");
-  api.setup = ["sh", "-c", `echo ran >> ${runs}`];
+  api.setup = [["sh", "-c", `echo ran >> ${runs}`]];
   return runs;
 }
 const blockedComment = (w: World) =>
@@ -543,7 +543,7 @@ describe("C27: the repo setup runs only in a worktree this claim created (§5.4 
     const runs = join(w.root, "setup-runs.txt");
     const api = w.cfg.projects.bouncr?.repos.api;
     if (!api) throw new Error("api repo missing");
-    api.setup = ["sh", "-c", `echo ran >> ${runs}`];
+    api.setup = [["sh", "-c", `echo ran >> ${runs}`]];
     const r = await claimed(w);
     expect(readFileSync(runs, "utf8")).toBe("ran\n");
     await released(w, r);
@@ -562,7 +562,7 @@ describe("C27: the repo setup runs only in a worktree this claim created (§5.4 
     const runs = join(w.root, "setup-runs.txt");
     const web = w.cfg.projects.bouncr?.repos.web;
     if (!web) throw new Error("web repo missing");
-    web.setup = ["sh", "-c", `echo ran >> ${runs}`];
+    web.setup = [["sh", "-c", `echo ran >> ${runs}`]];
     const r = await claimed(w);
     await writeIntent(wtOf(r).path, {
       issue: "JRF-501",

@@ -236,6 +236,8 @@ export interface GitTarget {
 }
 export interface GitPort {
   revParse(t: GitTarget, ref: string): Promise<string>;
+  /** Tracked worktree or index changes outside root `.wingmate/`; index flags hiding source changes also count as dirty. */
+  hasTrackedChanges(t: GitTarget): Promise<boolean>;
   /** Paths changed from `baseSha` to `head` (default `HEAD`), both sides of a rename, deletions and type changes included (§13.3 d). */
   changedPaths(t: GitTarget, baseSha: string, head?: string): Promise<string[]>;
   addedLines(t: GitTarget, baseSha: string, head?: string): Promise<{ path: string; line: string }[]>;

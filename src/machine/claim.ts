@@ -507,12 +507,18 @@ const SETUP_CAP_MS = 10 * 60_000;
 /** REL-2: what a setup leaves of the tick for the coordinator's terminal and its first launch wait. */
 const SETUP_RESERVE_MS = 30_000;
 /**
- * REL-2 (§4.3): the setup's timeout — its 10-minute cap, ending SETUP_RESERVE_MS before the tick's deadline (run() kills the setup's
- * process group at it, so nothing outlives the tick); null when that leaves no useful time.
+ * REL-2 (§4.3): each setup command shares the sequence's 10-minute cap and ends SETUP_RESERVE_MS before the tick's deadline.
+ * run() kills the command's process group at its remaining budget; null when that leaves no useful time.
  */
-function setupTimeoutMs(ctx: Ctx): number | null {
-  const ms = Math.min(SETUP_CAP_MS, remainingMs(ctx) - SETUP_RESERVE_MS);
-  return ms < MIN_WAIT_MS ? null : Math.floor(ms);
+export function setupCommandBudget(
+  ctx: Ctx,
+  startedAt: number,
+  now: () => number = Date.now,
+): { timeoutMs: number | null; tickLimited: boolean } {
+  const setupLeft = SETUP_CAP_MS - (now() - startedAt);
+  const tickLeft = remainingMs(ctx) - SETUP_RESERVE_MS;
+  const ms = Math.min(setupLeft, tickLeft);
+  return { timeoutMs: ms < MIN_WAIT_MS ? null : Math.floor(ms), tickLimited: tickLeft < setupLeft };
 }
 /**
  * C27 (§5.4 step 4, amended): the repo setup runs outside the sandbox, so only in a worktree this claim created — never in one it
@@ -590,38 +596,62 @@ async function installAndSetup(
       data: { reason: skip },
     });
   else if (repo.setup !== "none") {
-    const timeoutMs = setupTimeoutMs(ctx);
-    if (timeoutMs === null) throw new TickAbort("error", "tick_deadline"); // no time for it in this tick: the next tick replays it
+    const startedAt = Date.now();
     // SEC-1: the owner's credential variables are blank for the setup too (it runs outside the sandbox, as the owner)
     const env = agentEnv(kitDir, "coordinator", userClaudeCredentialEnv(ctx.home));
-    const s = await run(repo.setup, { cwd: wt.path, timeoutMs, env });
-    await ctx.ledger.append({
-      at: ctx.now(),
-      issue: r.identifier,
-      type: "setup",
-      data: { code: s.code, timedOut: s.timedOut, timeoutMs },
-    });
-    if (s.timedOut && timeoutMs < SETUP_CAP_MS) {
-      // REL-2: cut off by the tick's budget, not failed: the claim step fails (journaled) and the next tick replays it once
-      addAttention(r, "setup_timed_out");
-      await saveRecord(ctx, r);
-      await ctx.journal.failed(entryId, "setup_timed_out");
-      return false;
+    for (const [index, argv] of repo.setup.entries()) {
+      const { timeoutMs, tickLimited } = setupCommandBudget(ctx, startedAt);
+      // No useful tick time: defer the whole sequence to the next replay, just as for a single setup command.
+      if (timeoutMs === null && tickLimited) throw new TickAbort("error", "tick_deadline");
+      if (timeoutMs === null) {
+        dropAttention(r, "setup_timed_out");
+        await block(
+          ctx,
+          r,
+          issue,
+          "setup_failed",
+          `the repository setup has too little time left in its 10-minute budget to start command ${index + 1}/${repo.setup.length}`,
+          "fix the setup commands in config/projects.yaml or the repo, then move the issue back to Todo to re-queue",
+        );
+        await ctx.journal.abandon(entryId, "setup_failed");
+        return false;
+      }
+      const s = await run(argv, { cwd: wt.path, timeoutMs, env });
+      await ctx.ledger.append({
+        at: ctx.now(),
+        issue: r.identifier,
+        type: "setup",
+        data: {
+          code: s.code,
+          timedOut: s.timedOut,
+          timeoutMs,
+          command: index + 1,
+          commands: repo.setup.length,
+        },
+      });
+      if (s.timedOut && tickLimited) {
+        // REL-2: the tick cut it off. The next tick replays the sequence; no later command runs now.
+        addAttention(r, "setup_timed_out");
+        await saveRecord(ctx, r);
+        await ctx.journal.failed(entryId, "setup_timed_out");
+        return false;
+      }
+      if (s.code !== 0) {
+        dropAttention(r, "setup_timed_out");
+        // The command's output can carry secrets: the blocked comment names only its index and exit code.
+        await block(
+          ctx,
+          r,
+          issue,
+          "setup_failed",
+          `the repository setup command ${index + 1}/${repo.setup.length} exited ${s.code}${s.timedOut ? " (timeout)" : ""}`,
+          "fix the setup command in config/projects.yaml or the repo, then move the issue back to Todo to re-queue",
+        );
+        await ctx.journal.abandon(entryId, "setup_failed");
+        return false;
+      }
     }
     dropAttention(r, "setup_timed_out");
-    if (s.code !== 0) {
-      // the command's output can carry secrets: the blocked comment names only the exit code
-      await block(
-        ctx,
-        r,
-        issue,
-        "setup_failed",
-        `the repository setup command exited ${s.code}${s.timedOut ? " (timeout)" : ""}`,
-        "fix the setup command in config/projects.yaml or the repo, then move the issue back to Todo to re-queue",
-      );
-      await ctx.journal.abandon(entryId, "setup_failed");
-      return false;
-    }
   }
   await ctx.journal.stepDone(entryId, "kit", { nonce });
   return true;

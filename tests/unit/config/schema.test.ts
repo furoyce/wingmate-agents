@@ -53,6 +53,38 @@ describe("ConfigSchema", () => {
     bad.projects.bouncr.repos.api.gates = [];
     expect(() => ConfigSchema.parse(bad)).toThrow(/gates/);
   });
+  test("normalizes legacy setup argv and accepts an explicit sequence or none", () => {
+    const repo = minimal.projects.bouncr.repos.api;
+    const configured = (setup: unknown) =>
+      ConfigSchema.parse({
+        ...minimal,
+        projects: {
+          bouncr: { ...minimal.projects.bouncr, repos: { api: { ...repo, setup } } },
+        },
+      }).projects.bouncr?.repos.api?.setup;
+    expect(configured(["npm", "ci"])).toEqual([["npm", "ci"]]);
+    expect(
+      configured([
+        ["npm", "ci", "--prefix", "api"],
+        ["npm", "ci", "--prefix", "mobile"],
+      ]),
+    ).toEqual([
+      ["npm", "ci", "--prefix", "api"],
+      ["npm", "ci", "--prefix", "mobile"],
+    ]);
+    expect(configured("none")).toBe("none");
+    expect(configured(undefined)).toBe("none");
+    for (const setup of [
+      [],
+      [[]],
+      [["npm", "ci"], []],
+      ["npm", ""],
+      [["npm", ""]],
+      "npm ci",
+      ["npm", ["ci"]],
+    ])
+      expect(() => configured(setup)).toThrow();
+  });
   test("rejects a routing default that is not a repo", () => {
     const bad = structuredClone(minimal);
     bad.projects.bouncr.routing.default = "web";

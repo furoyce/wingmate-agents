@@ -1,8 +1,8 @@
 # Slice 2: pilot operations
 
 The owner requested slice-1 validation and continuation into slice 2 on 2026-10-07.
-Baseline at `92b4e07`: 803 tests pass; TypeScript and Biome pass. The live Linear queue comparison,
-OAuth metadata and notification acceptance remain pending credentials and the owner's queue confirmation.
+Baseline at `92b4e07`: 803 tests pass; TypeScript and Biome pass. OAuth authentication and live metadata now work.
+The live queue comparison found no eligible Todo issues; notification receipt still needs the owner's confirmation.
 
 ## Engineering sequence
 
@@ -41,13 +41,40 @@ Live acceptance cannot be reported complete from simulations or missing credenti
   role CLI execution and parsing, not a live Orca launch or Linear workflow.
 - Existing publish regression verifies reviewers against the exact commit selected for pushing, even if local HEAD
   moves during the guard reads. Review checks now use that same pinned commit.
-- OAuth credentials are still absent. No live Linear write, notification test, issue pilot, automation enable,
-  GitHub push or merge has been performed for slice 2.
+- OAuth credentials were transferred from the owner's local file without printing their values, and stored in
+  `~/.config/wingmate/credentials.json` with mode 0600. The original file is mode 0600 and locally excluded from Git.
+  The app actor is Wingmate in the configured JRF workspace. The baseline dispatcher installed successfully disabled;
+  all five pilot repositories now have `core.useReplaceRefs=false`, with no unsafe repository credential settings.
+- Live saved-view creation exposed Linear's requirement that the creator own a new view. Install now leaves ownership
+  with the app. Both shared views were created, favorited, and their board/list defaults configured; the owner is
+  subscribed to issue additions in "Wingmate · Needs you".
+- Missing ungrouped `allow-deps` was created in team JRF through the signed-in Linear interface and verified through
+  the app API. Required workflow types and project IDs match the config. Doctor metadata now passes.
+- Baseline full doctor sandbox probes passed: Claude blocked all ten denied probes and allowed the five required ones;
+  Codex network isolation passed with the previously accepted outside-worktree read residual. Orca is unreachable from
+  the kit sandbox. Bouncr web folder trust and the initial heartbeat remain warnings.
+- Live scan and an independent Orca read agreed: the pilot queues contain no eligible Todo issues. Bouncr has JRF-403
+  in Todo without an Agent label; the other three projects have no Todo issues. Legacy JRF-401/402/404 remain outside
+  Todo and were not claimed.
+- Notification fixture JRF-416 was created as the app, the owner subscribed, and doctor posted its notification test
+  and set Needs-Human. Receipt confirmation remains pending. No issue pilot or automation enable has been completed.
 
 ## Current state
 
-Engineering work is implemented on `wingmate-slice-2`. Final validation: `bun test` passed 813 tests with zero failures
-(70 files, 12,717 assertions); `bunx tsc --noEmit`, `bunx biome check .`, `git diff --check`, compiled build and binary
-`--help` passed. New kits use dispatcher-owned reviewers and method loop; legacy kits remain compatible. The feature
-branch has not been pushed, merged or installed. OAuth setup is the next operational step; then run doctor and the
+Engineering validation: `bun test` passed 839 tests with zero failures (73 files, 13,838 assertions);
+`bunx tsc --noEmit`, `bunx biome check .`, `git diff --check`, compiled build and binary `config validate` passed.
+New kits use dispatcher-owned reviewers and method loop; legacy kits remain compatible. The owner requested PR and
+merge of these changes. The disabled baseline install has been validated live; install this code before running the
 pilot acceptance checklist above. Do not enable the automation merely because the engineering checks are green.
+
+## Parallel validation fixes
+
+- Pending reviewer waves defer coordinator notes, nudges and stage recovery while preserving owner overrides,
+  integrity and hard-budget checks. Settled results reset stage timers. Trusted exit receipts clear launch uncertainty.
+- A hard token budget uses the measured lower bound when aggregate usage is incomplete; display totals remain unknown.
+- Dispatcher reviewer requests reject `--prefer` synchronously because review policy selects the provider.
+- Setup accepts one argv or a sequence; commands stop on failure and share the setup/tick deadline. Bouncr installs
+  both packages with `npm ci`, then runs API typecheck through its package script in the correct working directory.
+- Code/security reviews require clean committed tracked source/index at launch, settlement and gate verification.
+  These checks are checkpoints, not an immutable snapshot: concurrent edits restored between checks remain a residual
+  of sharing the worktree. Immutable review snapshots or separate isolation are needed to eliminate that race.
