@@ -1,0 +1,15 @@
+# Dispatcher gate acknowledgements
+
+In dispatcher mode, `wingmate issue <id> gate …` queues a gate and returns `pending: true`, its exact `intentId`, and an instruction to end the turn. It does not optimistically advance local gates or the pipeline. Keep HEAD, tracked source, the index and `.wingmate/plan.md` unchanged until the dispatcher acknowledges that intent. This applies to every gated stage, including FAIL and UI NA verdicts.
+
+The dispatcher applies the existing prerequisite, independent review, report hash, HEAD and plan checks. It saves the canonical decision and a protected pending delivery receipt before writing the advisory inbox acknowledgement or sending its pointer. Canonical gates are then mirrored locally on both acceptance and refusal, correcting any stale advisory verdict. An independent PASS report alone is not gate acceptance.
+
+The receipt correlates the exact intent ID and full intent digest, cycle and coordinator attempt. An accepted receipt also binds the canonical gate digest. Notification retries only deliver this recorded decision; they never execute or restore an accepted gate. A changed intent or canonical decision produces a refusal. Refused intents retain their evidence in `outbox/failed/` after their actionable pointer is accepted. Deferred waits, failed sends and exited coordinators leave delivery pending; the existing resume budget and bounded liveness recovery apply. No replacement coordinator is launched by gate delivery.
+
+Partial or unverifiable snapshots do not start acknowledgement turns. A durable `delivered` event correlates the gate inbox ID, intent digest, cycle and attempt with an actual `input_accepted` or `turn_started` transport receipt. Recovery after that proof finishes bookkeeping without resending. If transport accepted a pointer but failed before its receipt could be persisted, the outcome remains unknown; this does not promise exactly-once delivery across that external boundary.
+
+While a gate or its acknowledgement is pending, unrelated notifications, owner notes, idle nudges and stage timer handoffs wait. Integrity and hard-budget checks remain active, and exited coordinators retain the existing bounded recovery. A hard-budget block still permits authenticated owner `continue`. A valid queued gate also proves coordinator activity after an initially unconfirmed launch, without granting the requested gate or advancing its local pipeline.
+
+Read `.wingmate/inbox/gate-<intentId>.md`, then continue from its named canonical stage. An accepted FAIL still requires correction; after two failures, ask the owner. A refusal requires a fresh gate or review as described in the acknowledgement. Do not edit gate receipts or manufacture a PASS.
+
+Existing intents without the optional acknowledgement flag keep their previous behavior. Sealed legacy kits are not silently rewritten: the operator must provide explicit gate-wait guidance during recovery or requeue through the supported workflow to receive a newly generated protocol. No live kit or protected gate is repaired by this source change.

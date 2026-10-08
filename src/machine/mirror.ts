@@ -1,9 +1,22 @@
 // src/machine/mirror.ts — refreshes the agent-readable mirror in `.wingmate/` from the record (§8.0) after every tick that touched it.
 import { readIntentFiles } from "../kit/intents";
-import { readMirrorQuestions, worktreeDir, writeMirror } from "../kit/local";
+import { readMirrorQuestions, worktreeDir, writeInWorktree, writeMirror } from "../kit/local";
 import { errorCode } from "../shared/errors";
 import type { WRecord } from "../state/records";
 import { mirrorNativeJobs } from "./nativeUi";
+
+/** Mirror canonical decisions after acceptance or refusal; a queued local verdict never grants a gate. */
+export async function mirrorCanonicalGates(r: WRecord): Promise<void> {
+  if (!r.worktree) return;
+  const dir = await worktreeDir(r.worktree.path, ".wingmate");
+  const gates = Object.fromEntries(
+    Object.entries(r.gates).map(([stage, gate]) => [
+      stage,
+      { ...gate, method: stage === "intake" ? r.method : null },
+    ]),
+  );
+  await writeInWorktree(dir, "gates.json", JSON.stringify(gates, null, 2));
+}
 
 /** The pending `ask` intents; none when the outbox is unsafe (F7: it is never read then). */
 async function pendingAsks(wt: string): Promise<Set<string>> {

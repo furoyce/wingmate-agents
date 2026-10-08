@@ -46,15 +46,23 @@ async function started(a: Advance, how: string): Promise<void> {
   a.dirty = true;
 }
 
-/** Whether the agent itself wrote `.wingmate/stage.json` (a verb did; the dispatcher's own deliveries say `via: dispatcher`). */
+/** Agent-written stage progress or a new queued ACK gate proves that an unconfirmed coordinator actually started. */
 export async function agentProgressed(wt: string): Promise<boolean> {
+  if (!existsSync(wt)) return false;
   const t = await readText(join(wt, ".wingmate", "stage.json"));
-  if (!t) return false;
+  if (t) {
+    try {
+      const via = (JSON.parse(t) as { via?: unknown }).via;
+      if (via === "gate" || via === "ask" || via === "native-ui") return true;
+    } catch {
+      // A valid pending gate below is still proof of activity; it does not grant its requested verdict.
+    }
+  }
   try {
-    const via = (JSON.parse(t) as { via?: unknown }).via;
-    return via === "gate" || via === "ask" || via === "native-ui";
-  } catch {
-    return false;
+    return (await readIntentFiles(wt, false)).intents.some((i) => i.kind === "gate" && i.payload.acknowledge);
+  } catch (e) {
+    if (errorCode(e) === "outbox_unsafe") return false;
+    throw e;
   }
 }
 

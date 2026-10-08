@@ -27,7 +27,14 @@ import { block, finishBlock, release, stopAgents } from "./release";
 import { deliver } from "./resume";
 import { collectRoles } from "./roles";
 import { readTracked, saveRecord } from "./save";
-import { addAttention, dropAttention, enterPipelineStage, stageOf } from "./states";
+import {
+  addAttention,
+  dropAttention,
+  ensureAttempt,
+  enterPipelineStage,
+  stageOf,
+  transition,
+} from "./states";
 import { addNote, flushNotes, syncStatus } from "./status";
 import { type Advance, type StepOut, WORKING } from "./step";
 import type { Budget, TickSummary } from "./tick";
@@ -192,8 +199,17 @@ async function replayClaim(a: Advance): Promise<StepOut> {
   const { ctx, r } = a;
   if (r.stage !== "claimed" || a.ro) return "next";
   const open = await openClaimEntry(ctx, r);
-  if (!open) return "next";
   const how = await startedByItself(a);
+  if (!open) {
+    // The initial send may be input_accepted with a confirmed journal. Record real agent progress before consuming its gate.
+    if (how) {
+      await transition(ctx, r, "working", "turn_started", how);
+      ensureAttempt(ctx, r);
+      dropAttention(r, "launch_unconfirmed");
+      a.dirty = true;
+    }
+    return "next";
+  }
   if (how) {
     await launchProven(ctx, r, open.id, how);
     a.dirty = true;
@@ -283,6 +299,28 @@ async function outbox(a: Advance): Promise<StepOut> {
     return "stop";
   }
   return o.parked || o.finished || !WORKING.has(r.stage) ? "stop" : "next";
+}
+
+/** Gate-wait is intentional idle time, not permission for another note, review notification, nudge or timer handoff. */
+async function waitForGateAck(a: Advance): Promise<StepOut> {
+  const { r } = a;
+  if (!WORKING.has(r.stage)) return "next"; // a pending receipt must not hide owner continue/answer recovery
+  let pending = !!r.gateDelivery;
+  if (!pending && r.worktree && existsSync(r.worktree.path)) {
+    try {
+      pending = (await readIntentFiles(r.worktree.path)).intents.some(
+        (i) => i.issue === r.identifier && i.kind === "gate" && i.payload.acknowledge,
+      );
+    } catch (e) {
+      if (errorCode(e) !== "outbox_unsafe") throw e;
+    }
+  }
+  if (!pending) return "next";
+  // Retain uncertainty reporting and the existing bounded exited-coordinator recovery, never an unrelated idle turn.
+  if (a.live === "exited" || a.live === "unverifiable") await liveness(a);
+  await integrity(a);
+  await budgets(a);
+  return "stop";
 }
 
 /**
@@ -415,6 +453,7 @@ const STEPS = [
   replayClaim,
   collectRoleJobs,
   outbox,
+  waitForGateAck,
   notifyNativeUi,
   notifyRoleJobs,
   allowDepsGrant,
