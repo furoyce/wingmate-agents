@@ -19,6 +19,7 @@ import type { LinearIssue } from "../../../src/ports";
 import { type WRecord, readRecord, writeRecord } from "../../../src/state/records";
 import { addLabeledByOwner, todo } from "../../fakes/issues";
 import { type World, makeWorld, stubPublish } from "../../fakes/world";
+import { readyToFinish } from "../../sim/harness";
 
 const ID = "JRF-501";
 async function issueOf(w: World): Promise<LinearIssue> {
@@ -328,6 +329,126 @@ describe("executeOutbox: agent-named files go through worktreeFile()", () => {
     const { r, res } = await drain(w);
     expect(res).toMatchObject({ executed: 1, finished: true });
     expect(r.stage).toBe("review");
+  });
+
+  test("an oversized queued finish delivers a correction without publication, then a corrected finish succeeds", async () => {
+    const { w, wt } = await claimed();
+    const ready = await readyToFinish(w, ID);
+    file(wt, ".wingmate/s.md", "a".repeat(4001));
+    const intent = await writeIntent(wt, {
+      issue: ID,
+      kind: "finish",
+      payload: { summaryFile: ".wingmate/s.md", title: null, draft: false, repos: [] },
+    });
+    const calls = w.orca.calls.length;
+    const linear = w.linear.writes.length;
+    // An exhausted resume budget leaves both the intent and coordinator untouched.
+    expect((await drain(w, { canHandoff: true, canResume: false })).res).toMatchObject({
+      failed: 0,
+      resumed: false,
+    });
+    expect(outbox(wt)).toEqual([`${intent.id}.json`]);
+    expect(w.orca.calls.slice(calls).filter((c) => c.verb === "terminalSend")).toEqual([]);
+    const { r, res } = await drain(w);
+    expect(res).toMatchObject({ failed: 1, executed: 0, quarantined: 0, finished: false, resumed: true });
+    expect(r.gates).toEqual(ready.gates);
+    expect(r.pipelineStage).toBe(ready.pipelineStage);
+    expect(outbox(wt)).toEqual([]);
+    expect(outbox(wt, "done")).toEqual([`${intent.id}.json`]);
+    expect(outbox(wt, "failed")).toEqual([]);
+    expect(w.git.pushed).toEqual([]);
+    expect(w.gh.prs).toEqual([]);
+    // Only status bookkeeping may be edited; no attachment/completion/state publication happens.
+    expect(w.linear.writes.slice(linear).every((x) => x.kind === "commentUpdate")).toBe(true);
+    const note = readdirSync(join(wt, ".wingmate/inbox")).find((n) => n.startsWith("note-"));
+    const text = readFileSync(join(wt, ".wingmate/inbox", note ?? ""), "utf8");
+    expect(text).toContain("finish summary is 4001 characters; maximum is 4000");
+    expect(text).toContain("shorten .wingmate/s.md to at most 4000 characters and retry finish");
+    expect(w.orca.calls.slice(calls).filter((c) => c.verb === "terminalSend")).toHaveLength(1);
+    const failure = (await w.ctx.ledger.readIssue(ID)).find(
+      (e) => e.type === "intent_failed" && e.data.id === intent.id,
+    );
+    expect(failure?.data).toMatchObject({ code: "summary_too_long", counted: false });
+    file(wt, ".wingmate/s.md", "Implemented the scoped tests; validation passed.");
+    await writeIntent(wt, {
+      issue: ID,
+      kind: "finish",
+      payload: { summaryFile: ".wingmate/s.md", title: null, draft: false, repos: [] },
+    });
+    expect((await drain(w)).res).toMatchObject({ executed: 1, failed: 0, finished: true });
+    expect(w.git.pushed).toHaveLength(1);
+    expect(w.gh.prs).toHaveLength(1);
+  });
+
+  test("an oversized finish stays pending when its correction cannot be persisted or sent", async () => {
+    const { w, wt } = await claimed();
+    await readyToFinish(w, ID);
+    file(wt, ".wingmate/s.md", "a".repeat(4001));
+    const intent = await writeIntent(wt, {
+      issue: ID,
+      kind: "finish",
+      payload: { summaryFile: ".wingmate/s.md", title: null, draft: false, repos: [] },
+    });
+    const inbox = join(wt, ".wingmate/inbox");
+    const outside = join(w.root, "outside-inbox");
+    mkdirSync(outside);
+    rmSync(inbox, { recursive: true });
+    symlinkSync(outside, inbox);
+    expect((await drain(w)).res).toMatchObject({ failed: 1, resumed: false, quarantined: 0 });
+    expect(outbox(wt)).toEqual([`${intent.id}.json`]);
+    expect(readdirSync(outside)).toEqual([]);
+    rmSync(inbox);
+    mkdirSync(inbox);
+    const calls = w.orca.calls.length;
+    w.orca.nextWaitSatisfied = false;
+    expect((await drain(w)).res).toMatchObject({ failed: 1, resumed: false, quarantined: 0 });
+    expect(w.orca.calls.slice(calls).filter((c) => c.verb === "terminalSend")).toEqual([]);
+    expect(outbox(wt)).toEqual([`${intent.id}.json`]);
+    expect(outbox(wt, "done")).toEqual([]);
+    w.orca.nextWaitSatisfied = true;
+    const send = w.orca.terminalSend.bind(w.orca);
+    w.orca.terminalSend = async () => {
+      throw new Error("correction pointer unavailable");
+    };
+    await expect(drain(w)).rejects.toThrow("correction pointer unavailable");
+    expect(outbox(wt)).toEqual([`${intent.id}.json`]);
+    expect(outbox(wt, "done")).toEqual([]);
+    expect(readdirSync(inbox).some((n) => n.startsWith("note-"))).toBe(true);
+    expect(w.git.pushed).toEqual([]);
+    expect(w.gh.prs).toEqual([]);
+    w.orca.terminalSend = send;
+    w.orca.nextSendStage = "input_accepted"; // a real accepted send is distinct from the wait-only deferral
+    expect((await drain(w)).res).toMatchObject({ failed: 1, resumed: true, quarantined: 0 });
+    expect(outbox(wt)).toEqual([]);
+  });
+
+  test("an exited coordinator with its relaunch spent keeps the correction pending without a false resume or successor", async () => {
+    const { w, wt } = await claimed();
+    const r = await readyToFinish(w, ID);
+    r.coordinator.terminalHandle = null;
+    r.coordinator.relaunches = 1;
+    file(wt, ".wingmate/s.md", "a".repeat(4001));
+    const intent = await writeIntent(wt, {
+      issue: ID,
+      kind: "finish",
+      payload: { summaryFile: ".wingmate/s.md", title: null, draft: false, repos: [] },
+    });
+    const reconciled = await reconcile(w.ctx);
+    reconciled.liveness.set(ID, "exited");
+    const calls = w.orca.calls.length;
+    const gates = structuredClone(r.gates);
+    const res = await executeOutbox(w.ctx, r, await issueOf(w), reconciled);
+    expect(res).toMatchObject({ failed: 1, resumed: false, quarantined: 0, finished: false });
+    expect(outbox(wt)).toEqual([`${intent.id}.json`]);
+    expect(outbox(wt, "done")).toEqual([]);
+    expect(r.coordinator.relaunches).toBe(1);
+    expect(r.gates).toEqual(gates);
+    expect(
+      w.orca.calls.slice(calls).filter((c) => c.verb === "terminalCreate" || c.verb === "terminalSend"),
+    ).toEqual([]);
+    expect(readdirSync(join(wt, ".wingmate/inbox")).some((n) => n.startsWith("note-"))).toBe(true);
+    expect(w.git.pushed).toEqual([]);
+    expect(w.gh.prs).toEqual([]);
   });
 });
 

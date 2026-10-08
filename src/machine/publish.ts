@@ -8,6 +8,7 @@ import { githubUrl, remoteBranch } from "../git/remote";
 import { gitTarget } from "../git/trust";
 import type { Intent } from "../kit/intents";
 import { readNoFollow, worktreeFile } from "../kit/local";
+import { readFinishSummary, summaryExcerpt } from "../kit/summary";
 import { MARK } from "../linear/markers";
 import { REQUEST_CHANGES, renderCompletion } from "../linear/templates";
 import { depsChanged, depsPolicy } from "../policy/deps";
@@ -58,7 +59,7 @@ interface Cleared {
   head: string;
   title: string;
   body: string;
-  summary: string;
+  completionSummary: string;
   draft: boolean;
   limitations: string[];
 }
@@ -67,10 +68,8 @@ const EPOCH = "1970-01-01T00:00:00.000Z";
 const STEPS = ["push", "pr", "attach", "complete", "linear"];
 /** Where `gate validate` writes its report (§8.2 stage 4). */
 const VALIDATE_REPORT = ".wingmate/evidence/validate/report.txt";
-const SUMMARY_MAX_BYTES = 64 * 1024;
 const REPORT_MAX_BYTES = 1024 * 1024;
-const SUMMARY_MAX = 4000;
-/** The completion comment's summary: a prefix of the PR body's. */
+/** The completion comment's visibly shortened, whole-word excerpt of the PR summary. */
 const COMPLETION_SUMMARY_MAX = 1500;
 const TITLE_MAX = 120;
 const FINDINGS_SHOWN = 50;
@@ -84,13 +83,6 @@ function projectOf(ctx: Ctx, r: WRecord): ProjectConfig {
   if (!p)
     throw new WingmateError("unknown_project", `${r.identifier}: project ${r.project} is not configured`);
   return p;
-}
-
-/** An agent-named file, read only through `worktreeFile` (inside the worktree, not a symlink) and without following a symlink. */
-async function agentText(wt: string, rel: string): Promise<string> {
-  const f = await worktreeFile(wt, rel);
-  if (!f.ok) throw new WingmateError("file_invalid", f.error);
-  return (await readNoFollow(f.abs, SUMMARY_MAX_BYTES)).toString("utf8");
 }
 
 /** `gate validate`'s report shows `exit 0` under the `$ <argv>` line of every pinned command, and no other exit anywhere. */
@@ -317,7 +309,8 @@ export async function publish(
     );
   const project = projectOf(ctx, r);
   const repo = repoFor(project, r.repo);
-  const summary = (await agentText(wt.path, intent.payload.summaryFile)).slice(0, SUMMARY_MAX);
+  const { text: summary } = await readFinishSummary(wt.path, intent.payload.summaryFile);
+  const completionSummary = summaryExcerpt(summary, COMPLETION_SUMMARY_MAX);
   const title = prTitle(r, issue, intent.payload.title);
   const gates = gateTable(r);
   const body = renderPrBody({
@@ -330,16 +323,25 @@ export async function publish(
   let head: string | null = null;
   try {
     head = await ctx.git.revParse(gitTarget(wt), "HEAD"); // the one commit every guard reads and the push sends
-    // the completion comment's shorter summary prefix is scanned as it will be posted (a token cut at its end reads differently),
+    // The exact completion excerpt is scanned as it will be posted (shortening can change the scanner's context),
     // so no Linear write after the push can refuse it
-    const scanned = `${body}\n${summary.slice(0, COMPLETION_SUMMARY_MAX)}`;
+    const scanned = `${body}\n${completionSummary}`;
     const failure = await runGuards(ctx, r, issue, title, scanned, head);
     if (failure) return await refusePublish(ctx, r, issue, failure, rec);
     const limitations = intent.payload.repos
       .filter((name) => name !== r.repo && Object.hasOwn(project.repos, name))
       .map((name) => `repo ${name} is not published (one repository per issue in slice 1)`);
     const draft = intent.payload.draft;
-    return await pushAndComplete(ctx, r, issue, { wt, repo, head, title, body, summary, draft, limitations });
+    return await pushAndComplete(ctx, r, issue, {
+      wt,
+      repo,
+      head,
+      title,
+      body,
+      completionSummary,
+      draft,
+      limitations,
+    });
   } catch (e) {
     if (errorCode(e) === "git_dir_tampered") return tamperedLinks(ctx, r, issue, e);
     if (errorCode(e) === "push_rejected" && head)
@@ -453,7 +455,7 @@ async function followups(ctx: Ctx, r: WRecord): Promise<string[]> {
 async function completionComment(ctx: Ctx, w: LinearWrites, r: WRecord, issue: LinearIssue, c: Cleared) {
   const body = renderCompletion({
     prs: r.prs.map((p) => ({ url: p.url, repo: p.repo })),
-    summary: c.summary.slice(0, COMPLETION_SUMMARY_MAX),
+    summary: c.completionSummary,
     gates: gateTable(r),
     limitations: c.limitations,
     followups: await followups(ctx, r),

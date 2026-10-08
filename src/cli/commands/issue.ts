@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { consumeIntent, listIntents, writeIntent } from "../../kit/intents";
 import { type Local, readLaunch, readLocal, worktreeFile, writeLocal, writeStage } from "../../kit/local";
 import { dispatcherMode, readRoleJobs } from "../../kit/roles";
+import { readFinishSummary } from "../../kit/summary";
 import { OrcaError, orca } from "../../orca/cli";
 import { OrcaClient } from "../../orca/client";
 import { scanText } from "../../policy/secrets";
@@ -224,8 +225,9 @@ async function finishVerb(c: Ctx): Promise<number> {
       `not passed${head ? ` at HEAD ${head.slice(0, 12)}` : ""}: ${missing.join(", ")}`,
       `wingmate issue ${c.id} gate ${missing[0]} …`,
     );
-  const file = await postable(c, sf);
-  if ("refused" in file) return file.refused;
+  const file = await readFinishSummary(c.cwd, sf);
+  if (scanText(file.text).length)
+    return refuse("secret_detected", `${file.rel} contains a secret-like token`, "remove it and retry");
   if (head && (await nothingToPublish(c.cwd)))
     return refuse(
       "nothing_to_publish",
