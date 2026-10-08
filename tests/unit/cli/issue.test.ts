@@ -127,9 +127,15 @@ const capture = async (fn: () => Promise<number>) => {
     process.stdout.write = orig;
   }
 };
+const testKitRoot = mkdtempSync(join(tmpdir(), "wm-test-kit-root-"));
 const runVerb = (wt: string, args: string[], deps: Partial<IssueDeps> = {}) =>
   capture(() =>
-    issueCommand(parseArgv(["issue", "JRF-404", ...args]), { cwd: wt, orca: noWorkers, ...deps }),
+    issueCommand(parseArgv(["issue", "JRF-404", ...args]), {
+      cwd: wt,
+      orca: noWorkers,
+      runtimeKitRoot: testKitRoot,
+      ...deps,
+    }),
   );
 type Refusal = { ok: boolean; code: string; message: string; nextStep: string | null };
 const refusal = (r: { code: number; out: string }): Refusal => {
