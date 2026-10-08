@@ -573,7 +573,7 @@ export function renderDashboardHtml(): string {
 
       <!-- Actions -->
       <button onclick="toggleDispatcherPause()" id="pauseBtn" class="sm">Pause Dispatcher</button>
-      <button onclick="fetchData()" class="sm">↻ Refresh</button>
+      <button id="refreshBtn" onclick="manualRefresh()" class="sm">↻ Refresh</button>
     </div>
   </div>
 
@@ -680,6 +680,7 @@ export function renderDashboardHtml(): string {
     let activeModalTarget = null;
     let currentTheme = localStorage.getItem("wingmate_theme") || "dark";
     let currentView = localStorage.getItem("wingmate_view") || "pipeline";
+    let pollTimer = null;
 
     function applyTheme(theme) {
       currentTheme = theme;
@@ -747,18 +748,49 @@ export function renderDashboardHtml(): string {
     }
 
     async function fetchData() {
-      const proj = document.getElementById("projectSelect").value;
-      const tf = document.getElementById("timeframeSelect").value;
+      const projSelect = document.getElementById("projectSelect");
+      const tfSelect = document.getElementById("timeframeSelect");
+      const proj = projSelect ? projSelect.value : "";
+      const tf = tfSelect ? tfSelect.value : "7d";
       const url = "/api/snapshot?timeframe=" + tf + (proj ? "&project=" + proj : "");
 
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 6000);
+
       try {
-        const res = await fetch(url);
+        const res = await fetch(url, { signal: controller.signal });
+        clearTimeout(timeoutId);
         if (!res.ok) throw new Error("HTTP " + res.status);
         currentData = await res.json();
         renderAll(currentData);
+        return currentData;
       } catch (err) {
-        document.getElementById("statusSummary").textContent = "Error loading data: " + err.message;
-        document.getElementById("pulseDot").style.background = "var(--danger)";
+        clearTimeout(timeoutId);
+        const msg = err.name === "AbortError" ? "Request timed out" : err.message;
+        const summary = document.getElementById("statusSummary");
+        if (summary) summary.textContent = "Error loading data: " + msg;
+        const dot = document.getElementById("pulseDot");
+        if (dot) dot.style.background = "var(--danger)";
+        throw err;
+      }
+    }
+
+    async function manualRefresh() {
+      const btn = document.getElementById("refreshBtn");
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = "↻ Refreshing...";
+      }
+      try {
+        await fetchData();
+        showToast("✓ Dashboard refreshed", "info");
+      } catch (err) {
+        showToast("Refresh error: " + err.message, "error");
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = "↻ Refresh";
+        }
       }
     }
 
@@ -1160,7 +1192,7 @@ export function renderDashboardHtml(): string {
         const d = await res.json();
         if (d.ok) {
           showToast("✓ " + identifier + " marked as agent-ready! Dispatcher will claim it.", "success");
-          fetchData();
+          fetchData().catch(() => {});
         } else {
           showToast("Failed to promote: " + (d.error || d.message), "error");
           btns.forEach(b => { b.disabled = false; b.textContent = "+ Make Agent-Ready"; });
@@ -1196,7 +1228,7 @@ export function renderDashboardHtml(): string {
             box.style.borderColor = "var(--success)";
             box.innerHTML = '<div style="color:var(--success); font-weight:700;">✓ Plan Approved</div><div style="font-size:12px; color:var(--text-muted);">Answer delivered to worktree inbox. Resuming implementation.</div>';
           }
-          fetchData();
+          fetchData().catch(() => {});
         } else {
           showToast("Error: " + (d.error || d.message), "error");
           btns.forEach(b => { b.disabled = false; b.textContent = "✓ Approve Plan"; });
@@ -1253,7 +1285,7 @@ export function renderDashboardHtml(): string {
         if (d.ok) {
           showToast("✓ Answer delivered for " + activeModalTarget.identifier + "!", "success");
           closeModal();
-          fetchData();
+          fetchData().catch(() => {});
         } else {
           showToast("Error: " + (d.error || d.message), "error");
         }
@@ -1277,7 +1309,7 @@ export function renderDashboardHtml(): string {
         });
         const d = await res.json();
         showToast(isPaused ? "Dispatcher resumed" : "Dispatcher paused", "info");
-        fetchData();
+        fetchData().catch(() => {});
       } catch (err) {
         showToast("Error: " + err.message, "error");
       } finally {
@@ -1295,11 +1327,25 @@ export function renderDashboardHtml(): string {
       });
     }
 
-    function setupSSE() {
-      const es = new EventSource("/api/events");
-      es.onmessage = () => fetchData();
-      es.onerror = () => setTimeout(setupSSE, 5000);
+    function scheduleNextPoll() {
+      if (pollTimer) clearTimeout(pollTimer);
+      const delay = document.hidden ? 10000 : 3000;
+      pollTimer = setTimeout(async () => {
+        try {
+          await fetchData();
+        } catch {
+          // Keep polling on error
+        }
+        scheduleNextPoll();
+      }, delay);
     }
+
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) {
+        fetchData().catch(() => {});
+      }
+      scheduleNextPoll();
+    });
 
     // Global Event Delegation for buttons
     document.addEventListener("click", e => {
@@ -1325,11 +1371,11 @@ export function renderDashboardHtml(): string {
       }
     });
 
+    // Startup
     applyTheme(currentTheme);
     switchView(currentView);
-    fetchData();
-    setupSSE();
-    setInterval(fetchData, 15000);
+    fetchData().catch(() => {});
+    scheduleNextPoll();
   </script>
 </body>
 </html>`;
