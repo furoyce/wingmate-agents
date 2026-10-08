@@ -32,11 +32,12 @@ import {
   runtimeBindingHash,
 } from "../../src/native/protocol";
 import { setPause } from "../../src/ops/pause";
+import { OrcaError } from "../../src/orca/cli";
 import { run } from "../../src/shared/exec";
 import { readRecord } from "../../src/state/records";
 import { addLabeledByOwner, todo } from "../fakes/issues";
 import { makeWorld } from "../fakes/world";
-import { runTick } from "./harness";
+import { OWNER, runTick } from "./harness";
 
 function required<T>(value: T | null | undefined): T {
   if (value == null) throw new Error("required test fixture missing");
@@ -1201,6 +1202,91 @@ describe("trusted native UI relay", () => {
     expect(await guarded.release(f.binding, 5_000)).toEqual([]);
     expect(checked).toHaveLength(4);
   });
+  for (const stage of ["input_accepted", "turn_started"] as const) {
+    test(`a ${stage} native-result resume defers the owner note to a fresh tick`, async () => {
+      const f = await setup();
+      await f.admit();
+      const i = await f.newRequest();
+      await executeNativeUi(f.w.ctx, f.r, i, await reconcile(f.w.ctx));
+      await consumeIntent(f.wt, i.id);
+      const cursor = f.r.linear.lastSeenCommentAt;
+      f.w.clock.advance(60_000);
+      const note = f.w.linear.humanComment(
+        "i1",
+        "Keep the native fixture scope bounded.",
+        OWNER,
+        f.w.ctx.now(),
+      );
+      f.w.orca.nextSendStage = stage;
+      const before = f.w.orca.calls.length;
+      let resumed = false;
+      f.w.orca.onCall = (verb) => {
+        if (verb === "terminalSend") resumed = true;
+        if (verb === "terminalWait" && resumed)
+          throw new OrcaError("timeout", "a second wait used stale idle liveness after native notification");
+      };
+      expect((await runTick(f.w)).resumes).toEqual([ID]);
+      let saved = required(await readRecord(f.w.dirs, ID));
+      expect(saved.nativeUiJobs[0]).toMatchObject({ id: i.id, status: "succeeded", notified: true });
+      expect(saved.linear.lastSeenCommentAt).toBe(cursor);
+      expect(JSON.parse(readFileSync(join(f.wt, ".wingmate/native-ui.json"), "utf8"))[0].notified).toBe(true);
+      expect(f.w.orca.calls.slice(before).filter((c) => c.verb === "terminalWait")).toHaveLength(1);
+      expect(f.w.orca.calls.slice(before).filter((c) => c.verb === "terminalSend")).toHaveLength(1);
+      f.w.orca.onCall = null;
+      f.w.orca.setAgentState(
+        required(saved.worktree).id,
+        required(saved.coordinator.paneKey),
+        "done",
+        f.w.ctx.now(),
+      );
+      f.w.clock.advance(60_000);
+      expect((await runTick(f.w)).resumes).toEqual([ID]);
+      saved = required(await readRecord(f.w.dirs, ID));
+      expect(saved.linear.lastSeenCommentAt).toBe(note.createdAt);
+      expect(saved.nativeUiJobs[0]?.notified).toBe(true);
+      expect(f.w.orca.calls.slice(before).filter((c) => c.verb === "terminalSend")).toHaveLength(2);
+      f.w.clock.advance(60_000);
+      expect((await runTick(f.w)).resumes).toEqual([]);
+      expect(f.w.orca.calls.slice(before).filter((c) => c.verb === "terminalSend")).toHaveLength(2);
+      rmSync(f.w.root, { recursive: true, force: true });
+    });
+  }
+  for (const unavailable of ["deferred", "unsafe"] as const) {
+    test(`a ${unavailable} native-result notification retries only after an actual accepted send`, async () => {
+      const f = await setup();
+      await f.admit();
+      const i = await f.newRequest();
+      await executeNativeUi(f.w.ctx, f.r, i, await reconcile(f.w.ctx));
+      await consumeIntent(f.wt, i.id);
+      const before = f.w.orca.calls.length;
+      const inbox = join(f.wt, ".wingmate/inbox");
+      const outside = join(f.w.root, "unrelated-inbox");
+      if (unavailable === "deferred") f.w.orca.nextWaitSatisfied = false;
+      else {
+        mkdirSync(outside);
+        rmSync(inbox, { recursive: true, force: true });
+        symlinkSync(outside, inbox);
+      }
+      f.w.clock.advance(60_000);
+      expect((await runTick(f.w)).resumes).toEqual([]);
+      expect(required(await readRecord(f.w.dirs, ID)).nativeUiJobs[0]?.notified).toBe(false);
+      expect(f.w.orca.calls.slice(before).filter((c) => c.verb === "terminalSend")).toHaveLength(0);
+      expect(
+        (await f.w.ctx.ledger.readIssue(ID)).filter((e) => e.type === "delivered" && e.data.kind === "note"),
+      ).toHaveLength(0);
+      if (unavailable === "deferred") f.w.orca.nextWaitSatisfied = true;
+      else rmSync(inbox);
+      f.w.orca.nextSendStage = "input_accepted";
+      f.w.clock.advance(60_000);
+      expect((await runTick(f.w)).resumes).toEqual([ID]);
+      expect(required(await readRecord(f.w.dirs, ID)).nativeUiJobs[0]?.notified).toBe(true);
+      expect(f.w.orca.calls.slice(before).filter((c) => c.verb === "terminalSend")).toHaveLength(1);
+      f.w.clock.advance(60_000);
+      expect((await runTick(f.w)).resumes).toEqual([]);
+      expect(f.w.orca.calls.slice(before).filter((c) => c.verb === "terminalSend")).toHaveLength(1);
+      rmSync(f.w.root, { recursive: true, force: true });
+    });
+  }
   test("completed native result waits through paused/zero-resume ticks and resumes once with refreshed advisory flags", async () => {
     const f = await setup();
     await f.admit();

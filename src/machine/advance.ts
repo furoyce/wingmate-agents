@@ -24,7 +24,7 @@ import { mirrorNativeJobs, recoverNativeUi } from "./nativeUi";
 import { executeOutbox } from "./outbox";
 import type { Event, Reconciled } from "./reconcile";
 import { block, finishBlock, release, stopAgents } from "./release";
-import { deliver } from "./resume";
+import { persistInbox, sendPointerDetailed } from "./resume";
 import { collectRoles } from "./roles";
 import { readTracked, saveRecord } from "./save";
 import {
@@ -358,6 +358,21 @@ async function collectRoleJobs(a: Advance): Promise<StepOut> {
   return "next";
 }
 
+/** Only a real accepted terminal input consumes this idle snapshot; compatibility delivery also represents no-send deferrals. */
+async function resultNotification(a: Advance, text: string): Promise<boolean> {
+  const inbox = await persistInbox(a.ctx, a.r, "note", text, a.r.pipelineStage);
+  if (typeof inbox === "string") return false;
+  const sent = await sendPointerDetailed(
+    a.ctx,
+    a.r,
+    "note",
+    inbox,
+    `note ${inbox.id} — read ${inbox.rel} and continue from stage ${a.r.pipelineStage}.`,
+    "idle",
+  );
+  return sent === "input_accepted" || sent === "turn_started";
+}
+
 async function notifyNativeUi(a: Advance): Promise<StepOut> {
   if (
     a.ro ||
@@ -381,7 +396,7 @@ async function notifyNativeUi(a: Advance): Promise<StepOut> {
   )
     return "next";
   const text = `Dispatcher native UI results:\n${fresh.map((j) => `${j.id}: ${j.status}; evidence: ${j.evidencePath}`).join("\n")}\nRead .wingmate/native-ui.json and its evidence. Gate UI with --request <id>; a failed or unverifiable run cannot prove PASS. Native artifacts require trusted isolated-build provenance; never run repository build scripts or Orca emulator commands on the host.`;
-  if ((await deliver(a.ctx, a.r, "note", text, "idle", a.r.pipelineStage)) === "turn_started") {
+  if (await resultNotification(a, text)) {
     for (const j of fresh) j.notified = true;
     await mirrorNativeJobs(a.r);
     a.budget.resumes -= 1;
@@ -412,7 +427,7 @@ async function notifyRoleJobs(a: Advance): Promise<StepOut> {
   const fresh = jobs.filter((j) => !j.notified);
   if (!fresh.length) return "next";
   const text = `Dispatcher role results (terminal jobs):\n${fresh.map((j) => `${j.id} ${j.role}: ${j.verdict ?? "FAIL"}; report: ${j.reportPath ?? "unavailable"}`).join("\n")}\nRead .wingmate/roles.json and the reports before continuing. Use --request <id> to bind a review gate. A FAIL requires a fix and a fresh review; never invent a passing result.`;
-  if ((await deliver(a.ctx, r, "note", text, "idle", r.pipelineStage)) === "turn_started") {
+  if (await resultNotification(a, text)) {
     for (const j of fresh) j.notified = true;
     enterPipelineStage(a.ctx, r, r.pipelineStage);
     a.budget.resumes -= 1;
