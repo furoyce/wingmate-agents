@@ -23,6 +23,11 @@ export interface SettingsInput {
   baseBranch: string;
   kitDir: string;
   toolchainPaths: string[];
+  /** Scoped runtime grants are read-only; never inferred from a bin directory's parent. */
+  runtimeReadPaths?: readonly string[] | undefined;
+  runtimePath?: string | undefined;
+  /** Exact OS-account receipt file: custom-state legacy kits must also authenticate the absence of a runtime. */
+  runtimeAnchorReadPath?: string | undefined;
   allowedDomains: string[];
   role: Role;
   /** Gitdir names under `<common>/worktrees/` to deny (the own one is skipped); omitted → listed from disk now (`siblingDenyWrite`). */
@@ -475,6 +480,8 @@ export function claudeSettings(i: SettingsInput): object {
           i.worktreePath,
           ...i.childWorktrees,
           ...i.toolchainPaths,
+          ...(i.runtimeReadPaths ?? []),
+          ...(i.runtimeAnchorReadPath ? [i.runtimeAnchorReadPath] : []),
           WINGMATE_BIN_READ,
           // F8: agentEnv points git and gh into this issue's kit (gitconfig, gh-empty, no-hooks); an unreadable
           // GIT_CONFIG_GLOBAL kills git (EPERM, spike §3.4). Read only — `~/.local/share/wingmate/**` stays in denyWrite.
@@ -496,6 +503,8 @@ export function claudeSettings(i: SettingsInput): object {
           `${c}/packed-refs*`,
         ],
         denyWrite: [
+          ...(i.runtimeReadPaths ?? []),
+          ...(i.runtimeAnchorReadPath ? [i.runtimeAnchorReadPath] : []),
           ...(readOnly ? [i.worktreePath, c, ...i.childWorktrees] : []),
           `${c}/config`,
           `${c}/hooks/**`,
@@ -529,7 +538,7 @@ export function claudeSettings(i: SettingsInput): object {
       },
     },
     permissions: { deny: [...deny, "WebFetch", "WebSearch"] },
-    env: blankedEnv(i.blankEnv),
+    env: { ...blankedEnv(i.blankEnv), ...(i.runtimePath ? { PATH: i.runtimePath } : {}) },
   };
 }
 
@@ -648,7 +657,9 @@ export const agentEnv = (
   kitDir: string,
   role: Role = "coordinator",
   blank: readonly string[] = [],
+  runtime?: { path: string },
 ): Record<string, string> => ({
+  ...(runtime ? { PATH: runtime.path } : {}),
   GH_TOKEN: "",
   // gh falls back to these when GH_TOKEN is empty, so an owner shell exporting one would hand it to the agent (F9, §13.3 a)
   GITHUB_TOKEN: "",

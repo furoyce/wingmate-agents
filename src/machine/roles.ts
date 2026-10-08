@@ -25,7 +25,7 @@ import { readText, writeAtomic } from "../state/fs";
 import type { WRecord } from "../state/records";
 import { type RoleJob, rolePending } from "../state/roles";
 import type { Ctx } from "./context";
-import { prepareLaunch } from "./launch";
+import { prepareLaunch, runtimeForLaunch } from "./launch";
 import type { Reconciled } from "./reconcile";
 import { saveRecord } from "./save";
 import { addAttention, dropAttention } from "./states";
@@ -218,7 +218,12 @@ export async function startRole(
     `wingmate ${r.identifier} ${job.role}`,
     launchCommand(
       ["sh", join(dir, "runner.sh")],
-      agentEnv(ctx.kitDirFor(r.identifier), job.role, userClaudeCredentialEnv(ctx.home)),
+      agentEnv(
+        ctx.kitDirFor(r.identifier),
+        job.role,
+        userClaudeCredentialEnv(ctx.home),
+        await runtimeForLaunch(ctx, r),
+      ),
     ),
   );
   Object.assign(job, {

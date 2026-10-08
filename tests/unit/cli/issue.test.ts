@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -24,10 +25,12 @@ import {
   launchCommand,
   roleSettingsFile,
   roleSettingsFiles,
+  shellQuote,
 } from "../../../src/kit/settings";
 import { OrcaError, type OrcaOptions } from "../../../src/orca/cli";
 import type { WorkerRow } from "../../../src/ports";
 import { run } from "../../../src/shared/exec";
+import { resolveRuntime, writeRuntime } from "../../../src/shared/runtime";
 import { newRecord } from "../../../src/state/records";
 
 const GIT_ID = ["-c", "user.name=t", "-c", "user.email=t@example.invalid"];
@@ -345,6 +348,145 @@ describe("wingmate issue", () => {
     const third = refusal(await runVerb(wt, ["gate", "validate"]));
     expect(third.code).toBe("gate_retry_exhausted");
     expect((await readLocal(wt)).gates.validate?.failCount).toBe(2);
+  });
+
+  test("computed gate runtime lookup refuses a corrupted issue identifier before deriving a kit path", async () => {
+    const wt = await worktree({ git: true });
+    writeLaunch(wt);
+    await passGates(wt, null, ["intake", "plan", "planVerify", "implement"]);
+    const local = await readLocal(wt);
+    local.record.identifier = "../../outside";
+    await writeLocal(wt, local);
+    const result = await capture(() =>
+      issueCommand(parseArgv(["issue", "gate", "validate"]), { cwd: wt, orca: noWorkers }),
+    );
+    expect(refusal(result).code).toBe("kit_path_invalid");
+    expect(await listIntents(wt)).toEqual([]);
+  });
+
+  test("computed gates use the dispatcher-pinned runtime, refuse launch edits and fail closed when it disappears", async () => {
+    const wt = await worktree({ git: true });
+    const home = mkdtempSync(join(tmpdir(), "wm-gate-home-"));
+    const state = join(home, "state");
+    const kit = join(state, "kit/JRF-404");
+    const bin = join(home, "tools/bin");
+    mkdirSync(bin, { recursive: true });
+    const realGit = Bun.which("git");
+    if (!realGit) throw new Error("fixture git missing");
+    writeFileSync(join(bin, "wm-runtime-marker"), '#!/bin/sh\nprintf "pinned-runtime\\n"\n', { mode: 0o755 });
+    writeFileSync(
+      join(bin, "git"),
+      `#!/bin/sh\nprintf 'runtime-git\\n' >> ${shellQuote([join(wt, ".runtime-git")])}\nexec ${shellQuote([realGit])} "$@"\n`,
+      { mode: 0o755 },
+    );
+    const runtime = await resolveRuntime([bin], { home, protectedRoots: [wt, state] });
+    if (!runtime) throw new Error("runtime missing");
+    await writeRuntime(kit, runtime);
+    const baseSha = await headOf(wt);
+    const configured = { kitDir: kit, runtime, baseSha, pinnedGates: [["wm-runtime-marker"]] };
+    writeLaunch(wt, configured);
+    const deps = {
+      env: { HOME: home, WINGMATE_HOME: state, PATH: "/agent-selected-path" },
+      runtimeKitRoot: dirname(kit),
+    };
+    await passGates(wt, null, ["intake", "plan", "planVerify", "implement"]);
+    const originalPath = process.env.PATH;
+    process.env.PATH = "/agent-selected-path";
+    try {
+      expect(JSON.parse((await runVerb(wt, ["gate", "validate"], deps)).out)).toMatchObject({
+        verdict: "PASS",
+      });
+    } finally {
+      process.env.PATH = originalPath;
+    }
+    expect(readFileSync(join(wt, ".wingmate/evidence/validate/report.txt"), "utf8")).toContain(
+      "pinned-runtime",
+    );
+    await passGates(wt, baseSha, ["intake", "plan", "planVerify", "implement", "validate", "ui"]);
+    expect(JSON.parse((await runVerb(wt, ["gate", "security"], deps)).out)).toMatchObject({
+      verdict: "PASS",
+    });
+    expect(readFileSync(join(wt, ".runtime-git"), "utf8").split("runtime-git").length).toBeGreaterThan(3);
+    const before = await readLocal(wt);
+    const intents = await listIntents(wt);
+    writeLaunch(wt, { ...configured, runtime: { ...runtime, path: `${runtime.path}:/edited` } });
+    expect(refusal(await runVerb(wt, ["gate", "validate"], deps)).code).toBe("kit_tampered");
+    writeLaunch(wt, { ...configured, runtime: undefined });
+    expect(refusal(await runVerb(wt, ["gate", "validate"], deps)).code).toBe("kit_tampered");
+    writeLaunch(wt, configured);
+    rmSync(bin, { recursive: true });
+    expect(refusal(await runVerb(wt, ["gate", "validate"], deps)).code).toBe("runtime_invalid");
+    expect(await readLocal(wt)).toEqual(before);
+    expect(await listIntents(wt)).toEqual(intents);
+  });
+
+  test("a spoofed home and matching fake receipt cannot replace the protected gate runtime", async () => {
+    const wt = await worktree({ git: true });
+    const home = mkdtempSync(join(tmpdir(), "wm-runtime-anchor-"));
+    const kitRoot = join(home, "protected/kit");
+    const kit = join(kitRoot, "JRF-404");
+    const bin = join(home, "tools/bin");
+    const fakeHome = join(wt, "fake-home");
+    const fakeState = join(fakeHome, "state");
+    const fakeKit = join(fakeState, "kit/JRF-404");
+    const fakeBin = join(fakeHome, "tools/bin");
+    const marker = join(wt, "fake-runtime-executed");
+    mkdirSync(bin, { recursive: true });
+    mkdirSync(fakeBin, { recursive: true });
+    const realGit = Bun.which("git");
+    if (!realGit) throw new Error("fixture git missing");
+    writeFileSync(
+      join(fakeBin, "git"),
+      `#!/bin/sh\ntouch ${shellQuote([marker])}\nexec ${shellQuote([realGit])} "$@"\n`,
+      { mode: 0o755 },
+    );
+    writeFileSync(join(fakeBin, "wm-runtime-marker"), `#!/bin/sh\ntouch ${shellQuote([marker])}\n`, {
+      mode: 0o755,
+    });
+    const runtime = await resolveRuntime([bin], { home, protectedRoots: [wt, kitRoot] });
+    if (!runtime) throw new Error("runtime missing");
+    const fakeRuntime = { binPaths: [fakeBin], readPaths: [fakeBin], path: `${fakeBin}:/usr/bin:/bin` };
+    await writeRuntime(kit, runtime);
+    await writeRuntime(fakeKit, fakeRuntime);
+    const configured = {
+      kitDir: kit,
+      runtime,
+      baseSha: await headOf(wt),
+      pinnedGates: [["wm-runtime-marker"]],
+    };
+    writeLaunch(wt, configured);
+    await passGates(wt, null, ["intake", "plan", "planVerify", "implement"]);
+    const before = await readLocal(wt);
+    const intents = await listIntents(wt);
+    const original = {
+      PATH: process.env.PATH,
+      HOME: process.env.HOME,
+      WINGMATE_HOME: process.env.WINGMATE_HOME,
+      WINGMATE_CONFIG_HOME: process.env.WINGMATE_CONFIG_HOME,
+    };
+    const spoof = {
+      HOME: fakeHome,
+      WINGMATE_HOME: fakeState,
+      WINGMATE_CONFIG_HOME: join(fakeHome, "config"),
+      PATH: fakeRuntime.path,
+    };
+    Object.assign(process.env, spoof);
+    writeLaunch(wt, { ...configured, kitDir: fakeKit, runtime: fakeRuntime });
+    try {
+      expect(
+        refusal(await runVerb(wt, ["gate", "validate"], { env: spoof, runtimeKitRoot: kitRoot })).code,
+      ).toBe("kit_tampered");
+    } finally {
+      for (const [name, value] of Object.entries(original)) {
+        if (value === undefined) Reflect.deleteProperty(process.env, name);
+        else process.env[name] = value;
+      }
+      writeLaunch(wt, configured);
+    }
+    expect(existsSync(marker)).toBe(false);
+    expect(existsSync(join(wt, ".wingmate/evidence/validate/report.txt"))).toBe(false);
+    expect(await readLocal(wt)).toEqual(before);
+    expect(await listIntents(wt)).toEqual(intents);
   });
 
   test("security computes secret scan, path guard and dependency policy from the committed diff, never echoing the secret", async () => {
@@ -813,6 +955,29 @@ describe("wingmate issue spawn (§8.1 amended: launch the role agent with the ki
     "JRF-404 plan-verifier",
   ];
   const SPEC = ["--spec", ".wingmate/spec.md"];
+
+  test("legacy worker/reviewer launches inherit the protected runtime without changing their role or credential blanks", async () => {
+    for (const role of ["plan-verifier", "worker"] as const) {
+      const { wt, home, kit, env } = await spawnWorktree();
+      const bin = join(home, "tools/bin");
+      mkdirSync(bin, { recursive: true });
+      const runtime = await resolveRuntime([bin], { home, protectedRoots: [wt, dirname(dirname(kit))] });
+      if (!runtime) throw new Error("runtime missing");
+      await writeRuntime(kit, runtime);
+      await sealLaunch(wt, { ...(await readLaunch(wt)), runtime });
+      const f = fakeOrca();
+      const result = await runVerb(wt, ["spawn", "--role", role, ...SPEC], {
+        orca: f.orca,
+        env,
+        runtimeKitRoot: dirname(kit),
+      });
+      expect(result.code).toBe(0);
+      const command = commandOf(creates(f.calls)[0]);
+      expect(command).toContain(`PATH=${shellQuote([runtime.path])} `);
+      expect(command).toContain(`WINGMATE_ROLE=${role} `);
+      expect(command).toContain("GH_TOKEN='' ");
+    }
+  });
 
   test("a codex plan-verifier: account, worktree current, run-create, terminal create with the role argv, tui-idle, worker-start --terminal (exact argv)", async () => {
     const { wt, kit, env } = await spawnWorktree();

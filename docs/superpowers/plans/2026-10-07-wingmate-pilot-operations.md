@@ -97,13 +97,25 @@ compiler. TypeScript, Biome, diff checks, compiled build and binary config valid
 no remaining blockers after requiring a valid HEAD before dispatcher gate mutations and testing nonzero child Git exits.
 
 The retry exposed Linear event issues: app-authored comments may appear as ordinary user comments, and the live API
-returns history newest first despite `orderBy: createdAt`. Reconciliation must use protected comment receipts and
-chronological event selection, without giving app identities or body markers owner authority. The coordinator command
-reference also needs complete gate examples and the explicit ask-first intake rule from spec §8.3.
-The event and protocol correction passed 852 tests with zero failures (73 files, 13,907 assertions), TypeScript,
-Biome and diff checks. Live history ordering was verified through a read-only app query. One bounded guidance prompt
-to finish planning and use the ask-first question was accepted by Orca; submission was not yet proven. If delivered,
-this attempt includes assisted intake and must not be described as an entirely unassisted workflow.
+returns history newest first despite `orderBy: createdAt`. PR #4 corrected reconciliation to use protected comment
+receipts and chronological event selection without giving app identities or body markers owner authority. It also
+completed coordinator gate examples and the explicit ask-first intake rule from spec §8.3. The correction merged at
+`d5c2825` after 852 tests with zero failures (73 files, 13,907 assertions), TypeScript, Biome and diff checks. Live history
+ordering was verified through a read-only app query.
+
+The dedicated dispatcher was installed disabled at `2026-10-08T03:35:03.254Z`, binary SHA-256
+`33920fdc7566f1379483111f93ad1b096d1cc4f1fa98f417f52870f83bb316ac`; quick doctor was clean at
+`2026-10-08T03:35:31.475Z`. In JRF-417 cycle 2, intake and plan passed. Bounded normal guidance followed by interrupt
+steering was delivered and proven on screen; this is assisted intake. Tracked source remained clean. The coordinator
+parked at `2026-10-08T03:40:46.731Z` on question `01M4CSJ27VZ2K6P1ZP20KXHNC0`. The owner approved the plan in
+thread reply `27fbe379-7d4b-48a1-9dfd-947db2349b3c`; manual tick 18 at `2026-10-08T04:00:14.794Z` authenticated the
+answer and resumed the existing coordinator for plan verification. No source changes had been made at that checkpoint. PR #5 merged the native UI relay foundation at `c15ec96a9c827354d5b789ffb20c68cfa1f8b97e` after 871 passing tests;
+its merged tree matched the tested head. Native policy remains disabled and live iOS acceptance is pending.
+A bounded read-only Node 24.21.0 probe under the unchanged JRF-417 Claude settings passed one sandboxed Bash call:
+parent/child Node, npm 11.19.0 and Git all worked with the explicit official `/tmp` toolchain PATH prefix. Kit and source
+hashes were unchanged; evidence is in `/tmp/wingmate-node24-exact-kit-probe-20261008T035932.965379Z/results.json`.
+This establishes a current-cycle validation path without rewriting its protected legacy kit. Full scratch completion
+and rollout remain pending; these engineering and planning results do not establish an accepted end-to-end pilot.
 
 ## Parallel validation fixes
 

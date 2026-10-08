@@ -601,6 +601,10 @@ must be `ok`.
 
 ## 16. Known limitations and D14 residuals
 
+Repositories needing a different runtime can set trusted `runtimeBinPaths` without changing the host default.
+See [Repository runtime toolchains](runtime-toolchains.md) for the claim-time pin, protected runtime receipt,
+read-only sandbox grants and `runtime_invalid` recovery. Existing kits retain their pinned runtime until re-queued.
+
 These are the D14 residuals: places where the agent trust boundary is weaker than the design intends.
 
 - **Codex is reviewer-only.** Codex sandboxes do not block reads outside the worktree (§13.3 c), so Codex runs only as a

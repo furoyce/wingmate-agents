@@ -28,6 +28,8 @@ set `WINGMATE_CONFIG`. A FAIL line from `doctor` keeps `wingmate install --enabl
 
 ## Documentation
 
+- [docs/runtime-toolchains.md](docs/runtime-toolchains.md): pin a runtime PATH for one repository without changing
+  global tools, including a reviewed Node 22 installation recipe.
 - [docs/runbook.md](docs/runbook.md): daily routine, answering questions, reviews, stopping, every attention and
   refusal code, incidents, cost, upgrading and known limitations.
 - [docs/linear-app-setup.md](docs/linear-app-setup.md): the one-time Linear setup (OAuth app, labels, views,
