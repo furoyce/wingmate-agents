@@ -157,6 +157,32 @@ describe("wingmate scan", () => {
   });
 });
 
+describe("strict tick and scan admission", () => {
+  for (const [name, command] of [
+    ["tick", tickCommand],
+    ["scan", scanCommand],
+  ] as const) {
+    test(`${name} rejects unknown flags and extra words without building any context`, async () => {
+      const { d, lines, readOnly } = deps(null);
+      const errors: string[] = [];
+      for (const args of [
+        [name, "--prechek"],
+        [name, "--bogus=value"],
+        [name, "extra"],
+        [name, "-h"],
+        [name, "--", "--help"],
+        [name, "--json=false"],
+        [name, "--dry-run", "value"],
+      ]) {
+        expect(await command(parseArgv(args), { ...d, err: (s) => errors.push(s) })).toBe(2);
+      }
+      expect(readOnly).toEqual([]);
+      expect(lines).toEqual([]);
+      expect(errors).toHaveLength(7);
+    });
+  }
+});
+
 describe("main", () => {
   test("every unexpected error is reported as `code: message` on stderr with exit 2 (no stack trace)", () => {
     const out: string[] = [];

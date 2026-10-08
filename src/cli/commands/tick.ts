@@ -47,10 +47,12 @@ export const stderr = (line: string) => {
   process.stderr.write(`${line}\n`);
 };
 
-/** A boolean flag: absent → false, given (once or repeated) without a value → true, anything else → null (a usage error). */
-export function boolFlag(argv: Argv, k: string): boolean | null {
-  const v = argv.flags[k];
-  return v === undefined ? false : v === true ? true : null;
+/** A top-level command with only known valueless flags; refuse typos and extra words before building a context. */
+export function booleanFlagsOnly(argv: Argv, names: readonly string[]): boolean {
+  return (
+    argv.cmd.length === 1 &&
+    Object.entries(argv.flags).every(([name, value]) => names.includes(name) && value === true)
+  );
 }
 
 /** Prints the validated summary and returns `code`; a summary that fails its schema prints only `summary_schema` and exits 2. */
@@ -67,12 +69,12 @@ export function printSummary(summary: TickSummary, out: (line: string) => void, 
 export async function tickCommand(argv: Argv, deps: CommandDeps = {}): Promise<number> {
   const startedAt = Date.now(); // REL-1: the tick's deadline counts from here, the context build (token mint, team read) included
   const out = deps.out ?? stdout;
-  const dryRun = boolFlag(argv, "dry-run");
-  const precheck = boolFlag(argv, "precheck");
-  if (dryRun === null || precheck === null || boolFlag(argv, "json") === null) {
+  if (!booleanFlagsOnly(argv, ["dry-run", "precheck", "json"])) {
     (deps.err ?? stderr)("usage: wingmate tick [--precheck] [--dry-run] [--json]");
     return 2;
   }
+  const dryRun = argv.flags["dry-run"] === true;
+  const precheck = argv.flags.precheck === true;
   let summary: TickSummary;
   try {
     const ctx = await (deps.build ?? buildRealCtx)({ readOnly: dryRun, startedAt });

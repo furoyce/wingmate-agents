@@ -48,6 +48,13 @@ const registry: Record<string, () => Promise<Handler>> = {
   resume: async () => (await import("./commands/pause")).pauseCommand,
   status: async () => (await import("./commands/status")).statusCommand,
 };
+export interface MainDeps {
+  handlers?: Record<string, () => Promise<Handler>>;
+  out?: (text: string) => void;
+  err?: (text: string) => void;
+}
+const USAGE = `usage: wingmate <${Object.keys(registry).join("|")}> …\n`;
+const HELP = `${USAGE}\nwingmate tick [--precheck] [--dry-run] [--json]\nwingmate scan [--dry-run] [--json]\nwingmate issue <identifier> <verb> …\n`;
 
 /** Every error a command lets escape: `code: message` on stderr (never a stack trace, never stdout), exit 2. */
 export function reportError(
@@ -67,17 +74,30 @@ export function reportError(
   return 2;
 }
 
-export async function main(args: string[]): Promise<number> {
+export async function main(args: string[], deps: MainDeps = {}): Promise<number> {
+  const out = deps.out ?? ((text: string) => process.stdout.write(text));
+  const err = deps.err ?? ((text: string) => process.stderr.write(text));
+  // Inspect raw tokens before parsing: help must never import a command or construct a credentialed context.
+  // End-of-options syntax is unsupported; refuse it instead of guessing whether a later token is actionable.
+  if (args.includes("--") || args.some((arg) => arg.startsWith("--help="))) {
+    err(USAGE);
+    return 2;
+  }
+  if (args.includes("--help")) {
+    out(HELP);
+    return 0;
+  }
   const argv = parseArgv(args);
   const top = argv.cmd[0];
-  const load = top ? registry[top] : undefined;
+  const handlers = deps.handlers ?? registry;
+  const load = top && Object.hasOwn(handlers, top) ? handlers[top] : undefined;
   if (!load) {
-    process.stderr.write(`usage: wingmate <${Object.keys(registry).join("|")}> …\n`);
+    err(USAGE);
     return 2;
   }
   try {
     return await (await load())(argv);
   } catch (e) {
-    return reportError(e);
+    return reportError(e, err);
   }
 }
