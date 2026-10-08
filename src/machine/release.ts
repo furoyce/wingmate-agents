@@ -9,6 +9,7 @@ import type { WRecord } from "../state/records";
 import type { Ctx } from "./context";
 import { LinearWrites } from "./linearWrites";
 import { worktreeGone } from "./liveness";
+import { recoverNativeUi } from "./nativeUi";
 import type { Reconciled } from "./reconcile";
 import { saveRecord } from "./save";
 import { addAttention, dropAttention, endAttempt, transition } from "./states";
@@ -36,7 +37,7 @@ export async function closeClaimEntries(ctx: Ctx, identifier: string, why: strin
  * `run:<runId>` when the Run's workers could not be listed, and `terminals:<worktreeId>` when the bulk close failed.
  */
 export async function stopAgents(ctx: Ctx, r: WRecord): Promise<{ unverifiable: string[] }> {
-  const unverifiable: string[] = [];
+  const unverifiable: string[] = await recoverNativeUi(ctx, r, true);
   if (r.coordinator.childRunId) {
     let rows: WorkerRow[] = [];
     try {

@@ -22,6 +22,7 @@ Replace \`<id>\` with this issue's identifier. Write the named evidence/spec fil
 - Implementation: commit the source, then \`wingmate issue <id> gate implement --verdict PASS --evidence .wingmate/evidence/implement.md\`.
 - Review/validation: \`wingmate issue <id> spawn --role code-reviewer --spec .wingmate/code-review-spec.md\`, then end your turn. After settlement: \`wingmate issue <id> gate validate --request <requestId>\`.
 - Unchanged UI paths: \`wingmate issue <id> gate ui --verdict NA --note "no UI change"\`.
+- Native iOS UI: \`wingmate issue <id> ui-smoke --recipe .wingmate/native-recipe.json\`, then END YOUR TURN. After dispatcher settlement: \`wingmate issue <id> gate ui --request <requestId>\`; do not supply a verdict.
 - Security: \`wingmate issue <id> spawn --role security-reviewer --spec .wingmate/security-review-spec.md\`, then end your turn. After settlement: \`wingmate issue <id> gate security --request <requestId>\`.
 - Owner question: \`wingmate issue <id> ask --question-file .wingmate/question.md --options proceed,revise --recommend proceed\`, then end your turn. Write the concrete proposal and numbered options in that file first.
 The \`requestId\` comes from spawn's JSON response; after resumption, \`wingmate issue <id> show\` also lists requests and their results.
@@ -29,8 +30,12 @@ The \`requestId\` comes from spawn's JSON response; after resumption, \`wingmate
 ## Spawning
 Spawning only writes a local request and returns a requestId; it never calls Orca. Queue an independent wave, then END YOUR TURN. The dispatcher launches sandboxed, noninteractive role terminals, captures final responses outside their sandboxes, writes \`.wingmate/roles.json\` and \`.wingmate/evidence/role-<requestId>.md\`, and resumes you after the wave settles. These are terminal jobs, not Orca Dispatches. Never use worker-start, worker_done, run-create, check or any other Orca lifecycle command. Dependencies (\`--deps '["<requestId>"]'\`) name earlier requests from this attempt. Check \`wingmate issue <id> show\` before retrying: an uncertain launch is never repeated automatically. A FAIL requires a fix and a fresh review. Do not edit role receipts or reports.
 
+## Native iOS UI
+Commit source and enter the validated UI stage before queuing a native recipe. A recipe is strict JSON with \`kind: "ios"\` and 1–20 \`expectText\`, \`tapText\` or \`screenshot: true\` steps, including at least one text assertion. Native \`ui-smoke\` only writes a local request; it does not run a build or access Orca/Simulator. END YOUR TURN after queuing, await dispatcher notification, inspect the settled receipt/evidence, then gate with \`--request <requestId>\`. Never call host build scripts, Orca or Simulator commands, choose a device/app/URL, edit receipts, or write a native PASS yourself. Missing trusted isolated build provenance, isolated execution runtime or app-bound AX observations is a hard completion blocker: ask the owner. Changed native UI paths cannot use NA to bypass it. New source or policy changes require fresh proof at committed HEAD.
+
 ## Turn-ending verbs
 After \`ask\`, \`finish\` or \`handoff\` you MUST end your turn immediately and do nothing else. Answers, notes and publish results arrive as files in \`.wingmate/inbox/\` and a pointer message in this terminal; read the file, then continue from the stage it names.
+Native iOS \`ui-smoke\` also requires ending your turn immediately; the dispatcher owns device execution and resumes you after settlement.
 Before every gate read new files in \`.wingmate/inbox/\`; owner notes may be waiting. Orca runtime access is deliberately unavailable inside your sandbox.
 
 ## Hard rules

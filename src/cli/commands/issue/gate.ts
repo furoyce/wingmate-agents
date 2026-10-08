@@ -1,5 +1,3 @@
-// src/cli/commands/issue/gate.ts — `wingmate issue <id> gate <stage>` (§8.1): order enforced, judgment gates need evidence,
-// validate/security are computed by the CLI, and proven verdicts of validate/security/ui go STALE once HEAD moves.
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { GitCli } from "../../../git/cli";
@@ -23,6 +21,9 @@ import { type RunResult, run } from "../../../shared/exec";
 import { writeAtomic } from "../../../state/fs";
 import type { Argv } from "../../index";
 import type { Out, Refuse } from "../issue";
+// src/cli/commands/issue/gate.ts — `wingmate issue <id> gate <stage>` (§8.1): order enforced, judgment gates need evidence,
+// validate/security are computed by the CLI, and proven verdicts of validate/security/ui go STALE once HEAD moves.
+import { readNativeJobs } from "./nativeUi";
 
 const ORDER = ["intake", "plan", "planVerify", "implement", "validate", "ui", "security", "pr"] as const;
 type Stage = (typeof ORDER)[number];
@@ -235,7 +236,13 @@ export async function gateVerb(argv: Argv, d: Deps): Promise<number> {
   if (!stage || !ORDER.includes(stage) || stage === "pr")
     return d.refuse("usage", "gate <intake|plan|planVerify|implement|validate|ui|security> …");
   const f = (k: string) => (typeof argv.flags[k] === "string" ? (argv.flags[k] as string) : null);
+  const native = stage === "ui" && (await readLaunch(d.cwd)).ui.kind === "ios" && f("verdict") !== "NA";
   const computed = stage === "validate" || stage === "security";
+  if (native && argv.flags.verdict !== undefined)
+    return d.refuse(
+      "verdict_not_allowed",
+      "native UI uses its settled dispatcher receipt; gate ui --request <id>",
+    );
   if (computed && argv.flags.verdict !== undefined)
     return d.refuse(
       "verdict_not_allowed",
@@ -287,7 +294,23 @@ export async function gateVerb(argv: Argv, d: Deps): Promise<number> {
   let verdict: "PASS" | "FAIL" | "NA";
   let evidencePath: string | null;
   let note = f("note");
-  if (computed) {
+  if (native) {
+    const nativeJob = (await readNativeJobs(d.cwd)).find((j) => j.id === dispatchId);
+    if (
+      !nativeJob ||
+      !["succeeded", "failed", "unverifiable"].includes(nativeJob.status) ||
+      nativeJob.headSha !== head
+    )
+      return d.refuse(
+        "native_ui_proof_required",
+        "native UI requires a settled dispatcher receipt at HEAD",
+        "ui-smoke --recipe <file>, END YOUR TURN, then gate ui --request <id>",
+      );
+    verdict = nativeJob.status === "succeeded" ? "PASS" : "FAIL";
+    evidencePath = nativeJob.evidencePath;
+    if (verdict === "FAIL" && g.failCount >= 2)
+      return d.refuse("gate_retry_exhausted", "native UI failed twice; ask the owner");
+  } else if (computed) {
     const launch = await readLaunch(d.cwd);
     const res =
       stage === "validate" ? await validateReport(d.cwd, launch) : await securityReport(d.cwd, launch);

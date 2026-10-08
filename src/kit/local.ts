@@ -11,6 +11,8 @@ import { readText, writeAtomic } from "../state/fs";
 export const LocalSchema = z.object({
   record: z.object({
     identifier: z.string(),
+    cycle: z.number().int().positive().optional(),
+    attempt: z.number().int().nonnegative().optional(),
     stage: z.string(),
     pipelineStage: z.string(),
     provider: z.string(),
@@ -59,7 +61,11 @@ export const LaunchSchema = z.object({
   baseSha: z.string().nullable(),
   commonDir: z.string().min(1),
   pinnedGates: z.array(z.array(z.string().min(1)).min(1)),
-  ui: z.object({ kind: z.string(), paths: z.array(z.string()) }),
+  ui: z.object({
+    kind: z.string(),
+    paths: z.array(z.string()),
+    nativePolicyHash: z.string().nullable().optional(),
+  }),
   allowDeps: z.boolean(),
   forbiddenPaths: z.array(z.string()),
   verifyCross: z.boolean(),
@@ -231,7 +237,7 @@ export async function readLaunch(wt: string): Promise<Launch> {
 /** `.wingmate/stage.json`: where a relaunched or resumed coordinator continues from (§5.4 step 5, §7.1 step 1). */
 export const writeStage = (
   wt: string,
-  s: { pipelineStage: string; via: "gate" | "ask"; questionId?: string },
+  s: { pipelineStage: string; via: "gate" | "ask" | "native-ui"; questionId?: string; requestId?: string },
 ): Promise<void> =>
   writeAtomic(p(wt, "stage.json"), JSON.stringify({ ...s, at: new Date().toISOString() }, null, 2));
 
@@ -384,7 +390,7 @@ export async function renameInWorktree(fromDir: string, toDir: string, name: str
  * created exclusively (`O_CREATE_NOFOLLOW`) and moved into place with the no-follow rename, which replaces a symlink planted at
  * `name` instead of following it; a directory swapped for a symlink after the check fails the write (`outbox_unsafe`).
  */
-export async function writeInWorktree(dir: string, name: string, text: string): Promise<void> {
+export async function writeInWorktree(dir: string, name: string, text: string | Buffer): Promise<void> {
   const tmp = join(dir, `.${name}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`);
   const fh = await open(tmp, O_CREATE_NOFOLLOW, 0o644).catch((e: NodeJS.ErrnoException) => {
     if (e.code === "ELOOP" || e.code === "EEXIST")

@@ -5,6 +5,7 @@ import { lstat, mkdir, open, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { monotonicFactory } from "ulid";
 import { z } from "zod";
+import { Digest, NativeRecipeSchema, Sha } from "../native/protocol";
 import { WingmateError } from "../shared/errors";
 import { IDENTIFIER_RE } from "../shared/ids";
 import { readText, writeAtomic } from "../state/fs";
@@ -22,6 +23,22 @@ const GateStage = z.enum(["intake", "plan", "planVerify", "implement", "validate
 const base = { id: Id, issue: z.string().regex(IDENTIFIER_RE), createdAt: z.string().datetime() };
 
 export const IntentSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      ...base,
+      kind: z.literal("native-ui"),
+      payload: z
+        .object({
+          recipe: NativeRecipeSchema,
+          headSha: Sha,
+          policyHash: Digest,
+          worktreeId: z.string().min(1),
+          cycle: z.number().int().positive(),
+          attempt: z.number().int().nonnegative(),
+        })
+        .strict(),
+    })
+    .strict(),
   z.object({
     ...base,
     kind: z.literal("spawn"),

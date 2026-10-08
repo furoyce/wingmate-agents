@@ -1,6 +1,7 @@
 // tests/unit/config/schema.test.ts
 import { describe, expect, test } from "bun:test";
 import { ConfigSchema, withDefaults } from "../../../src/config/schema";
+import { NativePolicySchema } from "../../../src/native/protocol";
 import { WingmateError } from "../../../src/shared/errors";
 const minimal = {
   workspace: {
@@ -52,6 +53,27 @@ describe("ConfigSchema", () => {
     const bad = structuredClone(minimal);
     bad.projects.bouncr.repos.api.gates = [];
     expect(() => ConfigSchema.parse(bad)).toThrow(/gates/);
+  });
+  test("rejects native policies which can never fit the tick with admission, cleanup and delivery reserves", () => {
+    const raw = ConfigSchema.parse(minimal);
+    const native = NativePolicySchema.parse({
+      runtime: "com.apple.CoreSimulator.SimRuntime.iOS-26-5",
+      deviceType: "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro",
+      bundleId: "lol.bouncr.app",
+      producer: "isolated-builder",
+      isolationHash: "a".repeat(64),
+      executionIsolationHash: "b".repeat(64),
+    });
+    const repo = raw.projects.bouncr?.repos.api;
+    if (!repo) throw new Error("required config fixture missing");
+    repo.ui.native = native;
+    expect(() => withDefaults(raw)).not.toThrow();
+    native.timeoutMs = 100_000;
+    expect(() => withDefaults(raw)).toThrow("cannot fit this dispatcher's tick budget");
+    raw.defaults.dispatcher.precheckTimeoutSec = 250;
+    expect(() => withDefaults(raw)).not.toThrow();
+    raw.defaults.dispatcher.precheckTimeoutSec = 200;
+    expect(() => withDefaults(raw)).toThrow("cannot fit this dispatcher's tick budget");
   });
   test("normalizes legacy setup argv and accepts an explicit sequence or none", () => {
     const repo = minimal.projects.bouncr.repos.api;
