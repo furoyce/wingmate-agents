@@ -3,13 +3,13 @@ import { scan } from "../../machine/scan";
 import { errorCode } from "../../shared/errors";
 import type { Argv } from "../index";
 import { buildRealCtx } from "../wire";
-import { type CommandDeps, boolFlag, printSummary, stderr, stdout } from "./tick";
+import { type CommandDeps, booleanFlagsOnly, printSummary, stderr, stdout } from "./tick";
 
 export async function scanCommand(argv: Argv, deps: CommandDeps = {}): Promise<number> {
   const out = deps.out ?? stdout;
   // `--dry-run` is accepted for symmetry with tick (§15.1 says `scan --dry-run`); scan never writes either way
-  if (boolFlag(argv, "json") === null || boolFlag(argv, "dry-run") === null) {
-    (deps.err ?? stderr)("usage: wingmate scan [--json]");
+  if (!booleanFlagsOnly(argv, ["json", "dry-run"])) {
+    (deps.err ?? stderr)("usage: wingmate scan [--dry-run] [--json]");
     return 2;
   }
   try {
