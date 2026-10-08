@@ -2,35 +2,80 @@
 
 ## Current state
 
-The latest remote implementation is [PR #9](https://github.com/furoyce/wingmate-agents/pull/9), merged at
-`90b9f31ebc4ecd8543e265782ef44ae9d2b57062` at `2026-10-08T04:58:31Z`. Its tree
-`5ae196f328b09bdad2c5d6a2e31a7bb6e5261184` matches tested head `688b239b013e64493fa5be129c90ecfcc718a538`:
-900 tests passed, 0 failed, with 14,408 assertions across 76 files; TypeScript, Biome, diff checks, compiled build and binary
-config validation passed. Oversized finish summaries now refuse instead of silently truncating; the exact whole-word
-completion excerpt is scanned before posting, and queued refusals deliver an actionable correction without bypassing
-the existing relaunch cap. The feature branch was deleted on GitHub; its Orca-managed worktree was retained.
+Pilot progress below is a checkpoint at `2026-10-08T20:50Z`; pending reviews may advance afterward.
 
-PR #8 merged at `09676c9f1f2c89d4fb5c810960c9e69cdb6ba41e`, preserving tested head
-`815f5329632b72db665c074f7f7760b042b9aabe` and tree `6e485363fd018a5f124df643270aeb4d788bcef0`.
-PR #8 updated the reviewer prompts and coordinator protocol to clarify read-only review responsibilities without changing
-gates, sandbox permissions or sealed kits, and documented the unimplemented native infrastructure. Its focused existing
-suite passed 72 tests; TypeScript, Biome, diff checks, compiled build and binary config validation passed.
-The prior implementation baseline (PR #7 at `3ac9767`)
-passed the full 893-test suite. Engineering validation is not end-to-end pilot acceptance.
+The owner said, **“I accept the slice 2, please continue.”** The trusted operator relayed that acceptance as assisted
+approval/continuation for JRF-404, JRF-419 and JRF-418, with explicit scope and protocol corrections. Their coordinators resumed;
+independent plan review and all later gates remain mandatory. This records owner acceptance of the slice and assisted
+pilot progress, not formal unassisted or native acceptance under spec §15.1. Automation remains **disabled**.
 
-The current dispatcher is PR #9, installed **disabled** at `2026-10-08T05:01:44.678Z` while JRF-404 was parked, binary SHA-256
-`bd30f46bce1c6739e2f16f2c272254490cd74b8d36bcbe5120d949a180f8d3ab`. Its install receipt and live automation precheck
-pin `/Users/jujufugh/.config/wingmate/pilot-projects.yaml`. This owner-controlled private config selects persistent Node
-24 for Bouncr API and Node 22 for the other three pilots, leaving global Node/Bun defaults unchanged. Quick doctor at
-`2026-10-08T05:02:48.364Z` passed all blocking checks. The prior full doctor at `2026-10-08T04:14:45.873Z` passed ten blocked
-and seven required allowed sandbox probes. The actual precheck previously succeeded from `/tmp` with a conflicting
-inherited `WINGMATE_CONFIG` (idle tick exit 1, as designed). Latest release logs are under
-`~/.local/share/wingmate/evidence/finish-summary-20261008/`; its `SHA256SUMS` digest is
-`684049e68dec44806906cbcea1e5e6b26b1145cda6073335902c67485851a611`. Install, quick-doctor and disabled-automation/precheck
-receipts are under `finish-summary-install-20261008/`, manifest digest
-`86e1b2448f4c93f9a8612e778f53230e51e300f38a734723aeac6f33bdec132f`. Prior evidence remains under
-`review-guidance-20261008/`, `config-pinning-20261008/`, `runtime-native-20261008/` and `runtime-fix-20261008/` in the same
-private evidence directory. Existing sealed kits remain unchanged.
+The latest remote implementation is [PR #12](https://github.com/furoyce/wingmate-agents/pull/12), merged at
+`f1542c156b5329b06bd70fd279030d5d680c1676` at `2026-10-08T20:18:31Z`. Its tree
+`9769c30a05c6546d3ddb07c2e2c673efdbe40811` matches tested head `382fc66d0c42e8b813d86b071e66b5837633b584`:
+924 tests passed, 0 failed, with 16,439 assertions across 76 files. Focused native tests passed 35/35; TypeScript, Biome,
+diff and secret checks, compiled build and binary config validation passed. The final suite supersedes earlier checkpoints
+and a host-timeout focused run; those qualified logs remain archived. PR #12 journals runtime acquisition uncertainty,
+binds execution and recovery to the exact protected runtime lease, separates device cleanup from verified runtime release,
+and bounds capture transfer and cleanup time. It adds no production isolation adapter, artifact producer or foreground AX
+proof. No live native execution was performed. The remote feature branch was deleted; its Orca worktree was retained.
+
+[PR #11](https://github.com/furoyce/wingmate-agents/pull/11), merged at
+`a1df46ffbdad88250238b7074e954e9f3ba9a2f1` at `2026-10-08T20:06:48Z`, preserves tested head
+`f5739238d831c312df09411ecab6f93658ec829f` and tree `4a9f4e6dabeb6e7803fc2ea25d888d2e8cf9ca79`.
+Its final suite passed 906 tests, 0 failed; focused checks, 13 compiled CLI smoke cases, TypeScript, Biome, build, config,
+diff and secret checks passed. Help runs before config loading, while unknown commands and malformed flags still refuse.
+The earlier 905-test checkpoint was superseded by the mixed valued/valueless flag regression. Neither release's engineering
+checks establish end-to-end pilot acceptance.
+
+PR #9 remains the finish-summary baseline at `90b9f31ebc4ecd8543e265782ef44ae9d2b57062`, tested tree
+`5ae196f328b09bdad2c5d6a2e31a7bb6e5261184` and 900 passing tests. Oversized summaries refuse before publication;
+whole-word completion excerpts are scanned, and actionable queued refusals preserve the relaunch cap. PR #8 at `09676c9`
+clarified read-only reviewer responsibilities without weakening gates or permissions; PR #7 at `3ac9767` pinned the trusted
+config path and passed 893 tests.
+
+The current dispatcher is PR #12, installed **disabled** at `2026-10-08T20:19:26.441Z`, binary SHA-256
+`dfdae9b281939319c4e9614ad5ff179d395c5d16d01cb6a2c811ee8c1414a412`. Its install receipt and live automation precheck
+pin `/Users/jujufugh/.config/wingmate/pilot-projects.yaml`; live read-back confirms automation is disabled. Quick doctor at
+`2026-10-08T20:19:48.841Z` returned `ok=true` with 15 checks. This quick check does not rerun the sandbox probes; the prior
+full doctor at `2026-10-08T04:14:45.873Z` passed ten blocked and seven required allowed probes. The precheck was previously
+executed successfully from `/tmp` with a conflicting inherited `WINGMATE_CONFIG` (idle tick exit 1, as designed).
+The previous PR #11 disabled install at `2026-10-08T20:08:03.537Z` and quick doctor at `2026-10-08T20:08:38.702Z` remain
+archived. Existing sealed kits were not rewritten by either installation.
+
+The private pilot config selects persistent Node 24 for Bouncr and Node 22 for the other three pilots. Repository-pinned
+pnpm executables were bootstrapped into isolated Wingmate toolchain directories: JR Travel Atlas 10.4.1, JR Learning Plus
+10.33.0 and Smart Dispatcher 10.30.0. Tarball integrity and exact-version smoke checks passed under Node 22.23.3 with an
+empty private pnpm home. The private config was updated for future kits; global Node/Bun/pnpm defaults and target repository
+source were left unchanged. Existing sealed kits require a fresh supported cycle to receive the new runtime configuration.
+
+Narrow private evidence is under `~/.local/share/wingmate/evidence/`:
+
+- `native-runtime-lease-20261008/`: final source checks and qualified earlier logs; manifest SHA-256
+  `9e0322f7156cb8ad8cab5355aab8a70096901ecc270edbbd98b3738ca686c989`.
+- `native-runtime-lease-install-20261008/`: actual PR #12 install, quick doctor and disabled automation/precheck read-back;
+  manifest SHA-256 `648153d101a50e9a6285f8fdc8ef635866b8c63835946cd5d280b3217774da74`.
+- `cli-help-20261008/`: PR #11 validation; `SHA256SUMS` digest
+  `2863739eda1fda529d130f8e60acf7a5c71718e7e063ff6c07f0b0226773ae57`. Its installation archive
+  `cli-help-install-20261008/` has manifest SHA-256 `2e217de52537b7a9e49a6dffebc77623712194f4e8e4323652f7371eeb64a200`.
+- `pnpm-toolchains-20261008T195245Z/`: isolated bootstrap/version receipts; manifest SHA-256
+  `66be0d06affefdfe18af076e79a6da33de468516eb94a3dfc3496362c1a551a7`. `pnpm-config-20261008/` preserves the private
+  config change, manifest SHA-256 `e940dc03e2fc809d740c1d5095a28e21dfaa1ac38f65901d89e400539ab29151`.
+- `pilot-owner-resume-20261008/`: owner relay, assisted resume receipts and the first independent plan FAILs;
+  manifest SHA-256 `592192942a698faf9520f6da79549b2dd284fbcda14a2c52fa22b094b8a02e53`. This snapshot precedes
+  revised-plan settlement and is not a completed pilot acceptance receipt.
+- `postgres-operator-capability-20261008/`: isolated operator-side PostgreSQL capability probe; manifest SHA-256
+  `459cd75b769ffa273d26b21ddf3851aeb4616082df6097b735560f57306e89c7`.
+- `JRF-419-scoped-implementation-20261008/`: exact test commit, qualified baseline/head results and initial review
+  evidence; manifest SHA-256 `ab538cd7ed2a7d90038559299b98cb5a89d0c94cf572b7794d099f50002b1f61`.
+  This snapshot precedes the computed validation failure and later park.
+- `smart-sandbox-compat-20261008/`: three synthetic compatibility probes, with generated settings, source/dependency
+  hashes and limits; manifest SHA-256 `1007d599fab5910177c8cb34af8b50ff79198fce5225d03bc3c594318d734aa1`.
+- `pilot-progress-20261008T2050/`: later Travel validation/park, JRF-404 revision-3 resume and Learning intake/resume
+  checkpoint; manifest SHA-256 `09514ebace79a9dc3f8acef4376d9076f4a5edacaa745d8667e5a891780f90c9`.
+  Pending reviews remain pending in this snapshot; it is not final pilot acceptance.
+
+Earlier source/install evidence remains under `finish-summary-20261008/`, `finish-summary-install-20261008/`,
+`review-guidance-20261008/`, `config-pinning-20261008/`, `runtime-native-20261008/` and `runtime-fix-20261008/`.
 
 JRF-417 cycle 2 reused its clean worktree with a fresh coordinator and refreshed kit after cycle 1 was archived.
 Normal guidance followed by interrupt steering was proven on screen during intake; this is **assisted intake**.
@@ -70,38 +115,106 @@ check reported an invalid signature, while independent owner-side verification o
 the official archive. Preserve that qualification rather than claiming reproduced binary corruption. Receipts are in
 the private runtime/native evidence directory above.
 
-JR Learning Plus JRF-418, JR Travel Atlas JRF-419 and Smart Dispatcher JRF-420 are prepared Todo pilots without Agent
-labels and remain unclaimed. Smart's actual Crew preflight exited 0 at `db16d95`; its `myFiles` was empty, so this was
-not a reservation for the planned scope. An assisted early-draft operator procedure is arranged for the repository's
-first-commit draft-PR convention and append-only `WORK_LOG.md` coordination. Wingmate publishes at finish and can reuse
-an existing draft, but does not refresh its body or mark it ready; those operator steps are not automated acceptance.
-
-The native infrastructure question remains pending: no VM is configured and no isolated producer or production adapter
-has passed acceptance. Native policy remains unconfigured and the default adapter refuses execution; foreground
-bundle/PID/AX contracts remain unimplemented. See [native prerequisites](../../native-ui-relay.md).
-
-JRF-404 was manually requeued through trusted owner actions, with read-back confirming Todo + Ready and the retained
-agent-ready label. Manual tick 1 at `2026-10-08T04:42:34.357Z` claimed it into new worktree `wm-jrf-404` from
-`3ea70aa443e0c5d7997085b6e27c99b847ef342a`, Wingmate cycle 1, with fresh coordinator session
-`007bf822-8f0f-4b5e-a808-78ea802017d3`. The legacy session was not resumed. Manual tick 2 at
-`2026-10-08T05:00:15.300Z` collected its ask and genuinely parked the coordinator at `2026-10-08T05:00:19.096Z`, question
-`01M4CY2BGQ8RNATJ0E35H1N81D`, Linear comment `5a2a8779-980d-4e15-8add-73b6c1ca2043`. The proposal is
-`.wingmate/question.md`; no implementation plan exists yet.
-
-Independent operator review added `.wingmate/approval-review.md`, correcting mixed-version writers and step-timed cohort
-minima, nullable bigint storage, latest-run scope and pause/background/completion timing. It requires real disposable DB
-validation and trusted native UI evidence before publication. At this checkpoint, the owner has been asked to approve
-the corrected scope; no answer has arrived, no approval or resume is claimed, and the record remains `awaiting-human`. The original question
-and sealed kit are unchanged. This is **operator-assisted proposal review**, not completed lifecycle or native acceptance.
-The original proposal, corrections, parked-record projection and qualified probe facts are preserved under
-`~/.local/share/wingmate/evidence/JRF-404-intake-20261008/`, manifest digest
+JRF-404 was manually requeued through trusted owner actions. Manual tick 1 at `2026-10-08T04:42:34.357Z` claimed it
+into new worktree `wm-jrf-404` from `3ea70aa443e0c5d7997085b6e27c99b847ef342a`, cycle 1, with fresh coordinator session
+`007bf822-8f0f-4b5e-a808-78ea802017d3`; the legacy session was not resumed. It genuinely parked at
+`2026-10-08T05:00:19.096Z` on question `01M4CY2BGQ8RNATJ0E35H1N81D`, Linear comment
+`5a2a8779-980d-4e15-8add-73b6c1ca2043`. Operator proposal review corrected mixed-version writers and independent cohort
+minima, nullable bigint storage, latest-run scope and pause/background/completion timing. Real disposable PostgreSQL
+validation and trusted native UI evidence are hard requirements before publication. The original question and sealed kit
+were preserved; intake evidence remains in `JRF-404-intake-20261008/`, manifest SHA-256
 `9774c1ba28211a01cfb9c59f15efe4813e3f93c0bbf4e47774264b632fb69de3`.
 
-The fresh session confirmed plain, unprefixed Node 24.21.0 and npm 11.19.0. Baseline suites have **not** run. The disposable
-DB probe was rejected before execution by a configured permission rule, with no fuller reason recorded; no retry ran.
-This does not establish OS-level PostgreSQL unavailability or justify bypassing the validation requirement. Complete the
-remaining scratch/native acceptance, JRF-404's authenticated answer/resume check and the other repository pilots before
-enabling automation. Automation remains disabled, and JRF-418/419/420 remain unclaimed without Agent labels.
+The owner acceptance above was relayed with those corrections. It approves a separate 60 Hz step-timed microsecond cohort,
+integer microsecond storage with six-decimal seconds display, current physics and self-reported timing disclosure. Existing
+name/avatar opt-in is retained and new accounts default off. The authenticated manual tick at
+`2026-10-08T19:45:22.818Z` resumed JRF-404. This is **assisted approval/resume**, not authorization to bypass independent
+plan review, DB/native evidence, publication gates or subsequent app release approval.
+
+JRF-404's first independent plan request `01M4EHQ0C078BQK1D8KSAAMMK2` returned FAIL. The retained report identified stale
+sync-response merging, pause/reset coverage without an animation tick, default API serialization compatibility, incomplete
+native changed-flow checks and contradictory store disclosures. Revision 2 request `01M4EJS9ZHTF96CXBHN4YGZ3Z0` also
+returned FAIL, completed at `2026-10-08T20:31:04.153Z` and recorded by the gate at `2026-10-08T20:31:25.553Z`.
+It accepted the previous findings 1–4 at design level but required a
+consistent local-repair/server-rejection policy, complete disclosure reconciliation and invalid progress-query rejection
+before authentication writes. Its exhaustive arithmetic used Node 26.4.0, not the pinned Node 24 fixture runtime.
+
+Revision 3 (`dd2acf297a850f3e4678cb85d5d2ebfca08a97ddadfbc5c7aa729bf3a6657233`) proposes corrections to those three findings.
+The coordinator genuinely parked at `2026-10-08T20:37:43.117Z` on question `01M4EKNNDKSRXNTTW8VK9KN66X`, asking for fresh
+independent verification before implementation. Assisted owner relay `92cc6eb3-7dbc-49da-84b9-f1dc13f4afd9` was authenticated
+at `2026-10-08T20:41:47.911Z`; the same coordinator resumed at `2026-10-08T20:41:48.301Z`. Fresh verifier
+`01M4EM2AKS4EHNPBB878C9BJE5` started at `2026-10-08T20:48:23.291Z` on the exact revision-3 hash and unchanged input HEAD.
+Both earlier FAILs remain retained. No revision-3 PASS or implementation is claimed at this checkpoint.
+Real DB and trusted native evidence remain required before publication. The earlier disposable
+DB probe was rejected before execution by a configured permission rule; this neither establishes OS-level PostgreSQL
+unavailability nor justifies bypassing real DB validation. A later trusted-operator capability probe verified PostgreSQL
+17.11 executables and initialized a newly owned private cluster with an isolated environment. It started no server or
+listener and ran no API, migration or repository code. This establishes an assisted fixture path; real multi-connection DB
+proof remains unrun and mandatory before publication, with no sandbox permission relaxation.
+
+JR Travel Atlas JRF-419 cycle 1 was claimed at `2026-10-08T19:48:08.385Z`. Its coordinator hit `EPERM` at
+`2026-10-08T19:48:41.504Z` while the global pnpm executable tried to switch to the repository-pinned version and create a tool directory under
+`~/Library/pnpm/.tools/`.
+The operator used the supported stop path. After the isolated pinned-pnpm bootstrap and private runtime config update,
+manual claim at `2026-10-08T19:53:48.577Z` started cycle 2 with a fresh kit and coordinator. The unchanged 13-test baseline
+passed before its genuine park at `2026-10-08T20:02:24.942Z`; this is runtime baseline evidence, not validation of new tests.
+
+The owner continuation was relayed with the bounded test-only scope: one referral-code regression group, fixed vectors,
+per-group pepper reset, format and configuration-error checks, preservation of all 13 existing tests and no production
+changes. The optional temporary mutation probe was omitted. Manual tick at `2026-10-08T20:03:02.637Z` authenticated the
+continuation and resumed JRF-419 with the requirement that independent plan verification pass before tracked test changes.
+Its first independent request `01M4EJ12VP7VHT3BCAW98DPDAT` returned FAIL because pre-commit `base..HEAD` checks could not
+verify the proposed uncommitted tests. That failure remains retained. The revised plan separates working-tree checks from
+post-commit preservation/format checks at the exact final HEAD. Fresh request `01M4EJJCWF6T6HM0DW7VANS1NM` returned PASS,
+completed at `2026-10-08T20:21:39.102Z` and recorded by the gate at `2026-10-08T20:21:54.654Z`. The protected
+plan-verification gate is PASS, with its prior failure count of 1 retained. This remains **assisted intake and review recovery**.
+
+The coordinator committed only `server/invite-codes.test.ts` at `e40b4a0594bce849ba8695f6296ee720671ab177`: 50 additions,
+zero removals, five new tests, clean tracked source/index. Targeted and shuffled checks passed 18/18; the isolated new group
+passed 5/5. The full pinned baseline test command had already failed in four existing HTTP listener hooks with `EPERM`
+(2,762 passed, one failed test, 243 skipped); the committed run adds five passing tests and retains the same listener
+failures. Baseline and head type checks and builds passed. The implement gate passed at `2026-10-08T20:29:51.037Z`.
+Independent code review returned PASS at the unchanged commit, completed at `2026-10-08T20:37:29.476Z`; this is
+source-review approval only. The actual CLI-computed validate failed at `2026-10-08T20:39:03.405Z` on the same full-suite
+listener errors. The coordinator genuinely parked at `awaiting-human/validate` on question `01M4EKXGM6VA2Q90WW79KZ1T5E`
+at `2026-10-08T20:40:56.531Z`, asking for an isolated runner. No validation, UI, security or publication PASS is claimed.
+
+Independent audits of installed Claude 2.1.295 found `sandbox.network.allowLocalBinding=true` grants all-interface
+listeners and direct access to every host-local service. The operator therefore preserved the sealed settings and full
+validation command, and sent bounded guidance to complete only the approved tests and runnable checks, then stop before
+finish if isolated full validation is unavailable. The send client timed out before returning a receipt; a subsequent
+read-back confirmed the full guidance in the new session conversation with no draft. No resend was made. This is additional
+operator assistance; neither a narrower replacement command nor a manual PASS satisfies the gate.
+
+JR Learning Plus JRF-418 was queued through incremental `agent-ready` and Ready labels, then correctly deferred at the
+provider cap. Manual tick at `2026-10-08T20:37:27.571Z` parked JRF-404 and claimed JRF-418 into fresh worktree `wm-jrf-418`
+from remote base `5e27d01c286bd206f19babec199ac7edaac81fe3`; its coordinator started at `2026-10-08T20:37:55.825Z`.
+Trusted frozen setup exited 0. It genuinely parked at intake on question `01M4EM2WJ4311W5R5PDQQFNTXV` at
+`2026-10-08T20:48:15.539Z`. Assisted owner reply `a16f7fc7-cc41-408a-a5ae-10e0e35024c2` retained the six requested
+pricing scenarios and one-file scope, corrected plan verification to precede source edits, and separated working-tree
+from committed checks. The reply was authenticated at `2026-10-08T20:49:26.464Z`, and the same coordinator resumed at
+`2026-10-08T20:49:26.829Z`. Full remote CI / verify at the exact published head remains an operator check; no source,
+pinned gate or remote CI result is claimed yet.
+
+Smart Dispatcher JRF-420 remains prepared but unclaimed in Todo without Agent labels.
+Smart's Crew preflight exited 0 at `db16d95`; its `myFiles` was empty, so this did not reserve the
+planned files. An assisted early-draft operator procedure is arranged for its first-commit draft-PR convention and
+append-only `WORK_LOG.md` coordination. Wingmate publishes at finish and can reuse an existing draft, but does not refresh
+its body or mark it ready; those operator actions are not automated acceptance.
+
+A bounded synthetic probe under freshly generated strict sandbox settings confirmed three Smart compatibility blockers:
+an owned Unix-socket listen returned `EPERM` (exit 2), normal tsx 4.21.0 CLI startup failed at its IPC listener with `EPERM`
+(exit 1), and a child Git command that removed `GIT_*` variables while retaining the real HOME failed to read the denied
+owner `.gitconfig` (exit 128). Claude supplied its own temporary path for tsx. These are three compatibility probes, not
+full Smart tests or a full credential-isolation audit. No socket exception, broader local-network grant, HOME workaround,
+source change or gate waiver was applied. Smart remains unclaimed until its validation environment can run the unchanged
+required commands within an appropriate isolation boundary.
+
+No isolated native host, immutable artifact producer, production execution adapter or app-bound foreground bundle/PID/AX
+proof has passed acceptance. PR #12 strengthens the disabled foundation; native policy remains unconfigured and the default
+adapter refuses execution. See [native prerequisites](../../native-ui-relay.md). Real disposable DB and trusted native
+validation remain JRF-404 publication blockers. Complete the remaining formal scratch/native acceptance and repository
+pilots before enabling the five-minute automation. Owner slice acceptance and assisted resumes do not waive those gates.
 
 ## Engineering sequence
 
