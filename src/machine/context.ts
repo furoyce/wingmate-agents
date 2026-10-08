@@ -53,6 +53,8 @@ export interface TickDeadline {
 }
 
 export interface Ctx {
+  /** Canonical config file actually loaded by the trusted dispatcher; never supplied by an issue/agent command. */
+  configPath?: string;
   cfg: Config;
   dirs: Dirs;
   clock: Clock;

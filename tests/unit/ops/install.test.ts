@@ -1,7 +1,17 @@
 // tests/unit/ops/install.test.ts — §4.3 install: the exact automation argv, idempotent create-then-edit, never enabled without a
 // passing doctor, views only as the OAuth app (§11.5), credentials 0600; build, hash, link, views and doctor are injected.
 import { describe, expect, test } from "bun:test";
-import { lstatSync, mkdtempSync, readFileSync, readlinkSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readlinkSync,
+  realpathSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readOnlyCtx } from "../../../src/cli/wire";
@@ -14,11 +24,13 @@ import {
   defaultBuild,
   defaultSymlink,
   install,
+  precheckCommand,
   readInstallState,
   supportedBuildBun,
 } from "../../../src/ops/install";
 import { upsertViews, viewDefinitions } from "../../../src/ops/views";
 import { WingmateError } from "../../../src/shared/errors";
+import { run } from "../../../src/shared/exec";
 import { fakeExec } from "../../fakes/fakeExec";
 import { world } from "../../sim/harness";
 
@@ -170,6 +182,71 @@ const verbs = (w: { orca: { calls: { verb: string; args: unknown }[] } }, verb: 
   w.orca.calls.filter((c) => c.verb === verb);
 
 describe("install — Task 12 coverage", () => {
+  test("the installed precheck pins the loaded file across cwd/env changes and quotes shell metacharacters literally", async () => {
+    const w = await world();
+    const directory = realpathSync(mkdtempSync(join(tmpdir(), "wm-pinned-config-")));
+    const configPath = join(directory, "pilot ' $(touch injected-dollar) `touch injected-backtick` ;.yaml");
+    writeFileSync(configPath, "selected trusted config");
+    w.ctx.configPath = configPath;
+    const otherCwd = join(directory, "another cwd");
+    mkdirSync(otherCwd);
+    const conflicting = join(otherCwd, "wrong.yaml");
+    writeFileSync(conflicting, "wrong inherited config");
+    const r = await install(
+      w.ctx,
+      base({
+        build: async (_wt, out) => {
+          writeFileSync(
+            out,
+            '#!/bin/sh\nprintf "%s\\n" "$WINGMATE_CONFIG" "$@"\n/bin/cat "$WINGMATE_CONFIG"\n',
+            { mode: 0o755 },
+          );
+          return out;
+        },
+      }),
+    );
+    expect(r.configPath).toBe(configPath);
+    expect((await readInstallState(w.dirs))?.configPath).toBe(configPath);
+    const command = w.orca.automations[0]?.precheckCommand;
+    if (!command) throw new Error("missing generated precheck");
+    const executed = await run(["/bin/sh", "-c", command], {
+      cwd: otherCwd,
+      env: { WINGMATE_CONFIG: conflicting, PATH: "/unrelated-path" },
+    });
+    expect(executed.code).toBe(0);
+    expect(executed.stdout).toBe(`${configPath}\ntick\n--precheck\nselected trusted config`);
+    expect(existsSync(join(otherCwd, "injected-dollar"))).toBe(false);
+    expect(existsSync(join(otherCwd, "injected-backtick"))).toBe(false);
+  });
+
+  test("invalid selected paths refuse before credential, build or automation mutations; legacy receipts retain their precheck", async () => {
+    for (const path of [
+      "relative.yaml",
+      "/tmp/config\n.yaml",
+      "/tmp/config\0.yaml",
+      "/missing/config.yaml",
+    ]) {
+      const w = await world();
+      w.ctx.configPath = path;
+      await expect(
+        install(w.ctx, base({ clientId: "synthetic", clientSecret: "synthetic" })),
+      ).rejects.toBeInstanceOf(WingmateError);
+      expect(w.orca.calls).toEqual([]);
+      expect(existsSync(join(w.dirs.config, "credentials.json"))).toBe(false);
+      expect(existsSync(join(w.dirs.state, "install.json"))).toBe(false);
+    }
+    const w = await world();
+    w.ctx.configPath = w.root;
+    await expect(install(w.ctx, base())).rejects.toMatchObject({ code: "config_missing" });
+    expect(w.orca.calls).toEqual([]);
+    const legacy = await world();
+    const r = await install(legacy.ctx, base());
+    expect(r.configPath).toBeUndefined();
+    expect((await readInstallState(legacy.dirs))?.configPath).toBeUndefined();
+    expect(legacy.orca.automations[0]?.precheckCommand).toBe(`${r.binPath} tick --precheck`);
+    for (const path of ["relative.yaml", "/tmp/control\n.yaml", "/tmp/control\0.yaml", "/tmp/../config.yaml"])
+      expect(() => precheckCommand(r.binPath, path)).toThrow();
+  });
   test("the edit sends the same flags as the create (no verb prefix twice); the binary path is <state>/bin/wingmate-<version>", async () => {
     const w = await world();
     const built: [string, string][] = [];
