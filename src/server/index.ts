@@ -65,6 +65,7 @@ export async function startServer(options: ServerOptions = {}): Promise<Wingmate
   const server = Bun.serve({
     port,
     hostname,
+    idleTimeout: 0,
     async fetch(req) {
       const url = new URL(req.url);
       const path = url.pathname;
