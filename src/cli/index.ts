@@ -6,11 +6,12 @@ export interface Argv {
   cmd: string[];
   flags: Record<string, FlagValue>;
 }
-/** A repeated flag's values accumulate; a valueless occurrence among them makes the flag `true` (malformed, so callers refuse it). */
+/** Repeated values accumulate. Mixing valued and valueless forms is a sticky `false` sentinel, refused before dispatch. */
 function addFlag(flags: Record<string, FlagValue>, k: string, v: string | true): void {
   const cur = flags[k];
   if (cur === undefined) flags[k] = v;
-  else if (typeof cur === "boolean" || v === true) flags[k] = true;
+  else if (cur === false) return;
+  else if (typeof cur === "boolean" || v === true) flags[k] = cur === true && v === true;
   else flags[k] = [...(Array.isArray(cur) ? cur : [cur]), v];
 }
 export function parseArgv(args: string[]): Argv {
@@ -88,6 +89,10 @@ export async function main(args: string[], deps: MainDeps = {}): Promise<number>
     return 0;
   }
   const argv = parseArgv(args);
+  if (Object.values(argv.flags).includes(false)) {
+    err(USAGE);
+    return 2;
+  }
   const top = argv.cmd[0];
   const handlers = deps.handlers ?? registry;
   const load = top && Object.hasOwn(handlers, top) ? handlers[top] : undefined;

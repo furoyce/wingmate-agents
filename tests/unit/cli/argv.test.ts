@@ -93,6 +93,30 @@ describe("help before dispatch", () => {
     }
     expect(seen).toHaveLength(2);
   });
+
+  test("mixed valued and valueless flags never load a command, even after further repeats", async () => {
+    let loads = 0;
+    const errors: string[] = [];
+    const deps = {
+      handlers: {
+        tick: async () => {
+          loads++;
+          throw new Error("malformed flags must not load a handler");
+        },
+      },
+      err: (s: string) => errors.push(s),
+    };
+    for (const args of [
+      ["tick", "--json=false", "--json"],
+      ["tick", "--json", "--json=false"],
+      ["tick", "--dry-run=no", "--dry-run", "--dry-run"],
+      ["tick", "--json", "--json=no", "--json=yes"],
+    ]) {
+      expect(await main(args, deps)).toBe(2);
+    }
+    expect(loads).toBe(0);
+    expect(errors).toHaveLength(4);
+  });
 });
 
 describe("parseArgv", () => {
@@ -119,9 +143,10 @@ describe("parseArgv", () => {
     });
     expect(parseArgv(["x", "--repo", "a"]).flags).toEqual({ repo: "a" }); // a single value stays a string
     expect(parseArgv(["x", "--draft", "--draft"]).flags).toEqual({ draft: true });
-    // a valueless occurrence of a valued flag is malformed: the flag becomes `true`, which the verbs refuse
-    expect(parseArgv(["x", "--repo", "a", "--repo"]).flags).toEqual({ repo: true });
-    expect(parseArgv(["x", "--repo", "--repo", "a"]).flags).toEqual({ repo: true });
+    // Mixing forms is malformed in either direction, and later occurrences cannot repair the sentinel.
+    expect(parseArgv(["x", "--repo", "a", "--repo"]).flags).toEqual({ repo: false });
+    expect(parseArgv(["x", "--repo", "--repo", "a"]).flags).toEqual({ repo: false });
+    expect(parseArgv(["x", "--repo", "a", "--repo", "--repo", "b"]).flags).toEqual({ repo: false });
   });
   test("C7: flags named like Object.prototype members are ordinary own flags (no inherited value, no prototype change)", () => {
     const { flags } = parseArgv([

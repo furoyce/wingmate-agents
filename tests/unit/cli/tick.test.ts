@@ -173,12 +173,15 @@ describe("strict tick and scan admission", () => {
         [name, "--", "--help"],
         [name, "--json=false"],
         [name, "--dry-run", "value"],
+        [name, "--json=false", "--json"],
+        [name, "--json", "--json=false"],
+        [name, "--dry-run=no", "--dry-run", "--dry-run"],
       ]) {
         expect(await command(parseArgv(args), { ...d, err: (s) => errors.push(s) })).toBe(2);
       }
       expect(readOnly).toEqual([]);
       expect(lines).toEqual([]);
-      expect(errors).toHaveLength(7);
+      expect(errors).toHaveLength(10);
     });
   }
 });
