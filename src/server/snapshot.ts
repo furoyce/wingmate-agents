@@ -244,8 +244,10 @@ export async function buildSnapshot(
       identifier: li.identifier,
       linearId: li.id,
       title: li.title,
+      project: projectKey,
       projectKey,
       projectName: projectKey.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
+      priority: li.priority ?? 0,
       state: {
         id: li.state.id,
         name: li.state.name,

@@ -72,6 +72,8 @@ describe("server snapshot", () => {
     const found = snap.triage.find((t) => t.identifier === "JRF-802");
     expect(found).toBeDefined();
     expect(found?.recommendedProvider).toBe("claude");
+    expect(found?.project).toBeDefined();
+    expect(found?.priority).toBe(2);
     expect(snap.funnel.todo).toBeGreaterThanOrEqual(1);
   });
 });

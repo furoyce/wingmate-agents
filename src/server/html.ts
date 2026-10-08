@@ -62,6 +62,8 @@ export function renderDashboardHtml(): string {
       line-height: 1.5;
       -webkit-font-smoothing: antialiased;
       transition: background 0.2s ease, color 0.2s ease;
+      overflow-x: hidden;
+      width: 100%;
     }
     a { color: var(--accent); text-decoration: none; }
     a:hover { text-decoration: underline; }
@@ -143,7 +145,16 @@ export function renderDashboardHtml(): string {
       outline: none;
     }
 
-    .container { max-width: 1440px; margin: 0 auto; padding: 20px 24px; display: flex; flex-direction: column; gap: 24px; }
+    .container {
+      width: 100%;
+      max-width: 100%;
+      margin: 0;
+      padding: 18px 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+      box-sizing: border-box;
+    }
 
     /* Funnel Strip */
     .funnel-container {
@@ -152,6 +163,7 @@ export function renderDashboardHtml(): string {
       border-radius: 10px;
       padding: 16px 20px;
       box-shadow: var(--card-shadow);
+      box-sizing: border-box;
     }
     .section-title {
       font-size: 13px;
@@ -166,8 +178,19 @@ export function renderDashboardHtml(): string {
     }
     .funnel-grid {
       display: grid;
-      grid-template-columns: repeat(6, 1fr);
+      grid-template-columns: repeat(6, minmax(0, 1fr));
       gap: 12px;
+      box-sizing: border-box;
+    }
+    @media (max-width: 1200px) {
+      .funnel-grid {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+    }
+    @media (max-width: 640px) {
+      .funnel-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
     }
     .funnel-step {
       background: var(--surface-elevated);
@@ -207,7 +230,21 @@ export function renderDashboardHtml(): string {
     .badge { padding: 2px 7px; border-radius: 4px; font-size: 11px; font-weight: 600; font-family: var(--font-mono); }
     .badge-claude { background: rgba(217, 119, 6, 0.15); color: #F59E0B; border: 1px solid rgba(217, 119, 6, 0.3); }
     .badge-codex { background: rgba(16, 185, 129, 0.15); color: #10B981; border: 1px solid rgba(16, 185, 129, 0.3); }
-    .badge-project { background: var(--surface-hover); color: var(--text-muted); border: 1px solid var(--border); }
+    .badge-project {
+      background: var(--surface-hover);
+      color: var(--text-muted);
+      border: 1px solid var(--border);
+      max-width: 105px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      display: inline-block;
+      vertical-align: middle;
+    }
+    .badge-prio-1 { background: rgba(239, 68, 68, 0.15); color: var(--danger); border: 1px solid rgba(239, 68, 68, 0.4); }
+    .badge-prio-2 { background: rgba(245, 158, 11, 0.15); color: var(--warning); border: 1px solid rgba(245, 158, 11, 0.4); }
+    .badge-prio-3 { background: var(--surface-hover); color: var(--text-muted); border: 1px solid var(--border); }
+    .badge-prio-4 { background: var(--surface-hover); color: var(--text-dim); border: 1px solid var(--border); }
     .badge-waiting { background: rgba(245, 158, 11, 0.2); color: var(--warning); border: 1px solid var(--warning); }
     .badge-pass { background: rgba(16, 185, 129, 0.2); color: var(--success); border: 1px solid var(--success); }
 
@@ -310,22 +347,36 @@ export function renderDashboardHtml(): string {
     /* Kanban Board View */
     .kanban-board {
       display: grid;
-      grid-template-columns: repeat(6, minmax(240px, 1fr));
-      gap: 14px;
-      overflow-x: auto;
-      padding-bottom: 16px;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 12px;
+      width: 100%;
       align-items: start;
+      box-sizing: border-box;
+    }
+    @media (max-width: 1200px) {
+      .kanban-board {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 12px;
+      }
+    }
+    @media (max-width: 720px) {
+      .kanban-board {
+        grid-template-columns: repeat(1, minmax(0, 1fr));
+        gap: 12px;
+      }
     }
     .kanban-col {
       background: var(--surface);
       border: 1px solid var(--border);
       border-radius: 10px;
-      padding: 14px;
+      padding: 12px 10px;
       display: flex;
       flex-direction: column;
-      gap: 12px;
+      gap: 10px;
       min-height: 480px;
+      min-width: 0;
       box-shadow: var(--card-shadow);
+      box-sizing: border-box;
     }
     .kanban-col-header {
       display: flex;
@@ -333,15 +384,20 @@ export function renderDashboardHtml(): string {
       justify-content: space-between;
       padding-bottom: 8px;
       border-bottom: 1px solid var(--border-subtle);
+      gap: 6px;
     }
     .kanban-col-title {
-      font-size: 12px;
+      font-size: 11px;
       font-weight: 700;
       text-transform: uppercase;
       color: var(--text-muted);
       display: flex;
       align-items: center;
       gap: 6px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      letter-spacing: 0.3px;
     }
     .kanban-col-badge {
       background: var(--surface-elevated);
@@ -351,21 +407,26 @@ export function renderDashboardHtml(): string {
       padding: 1px 6px;
       border-radius: 10px;
       border: 1px solid var(--border);
+      flex-shrink: 0;
     }
     .kanban-cards {
       display: flex;
       flex-direction: column;
       gap: 10px;
+      min-width: 0;
     }
     .kanban-card {
       background: var(--surface-elevated);
       border: 1px solid var(--border);
       border-radius: 8px;
-      padding: 12px;
+      padding: 10px;
       display: flex;
       flex-direction: column;
-      gap: 8px;
+      gap: 6px;
+      min-width: 0;
       transition: all 0.15s ease;
+      word-break: break-word;
+      box-sizing: border-box;
     }
     .kanban-card:hover {
       border-color: var(--accent);
@@ -377,15 +438,18 @@ export function renderDashboardHtml(): string {
       background: rgba(245, 158, 11, 0.05);
     }
     .kanban-card-title {
-      font-size: 13px;
+      font-size: 12px;
       font-weight: 600;
       color: var(--text);
       line-height: 1.35;
+      word-break: break-word;
     }
     .kanban-card-meta {
       display: flex;
       align-items: center;
       justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 4px;
       font-size: 11px;
       color: var(--text-dim);
       font-family: var(--font-mono);
@@ -967,18 +1031,23 @@ export function renderDashboardHtml(): string {
             '</tr>' +
           '</thead>' +
           '<tbody>' +
-            triage.map(t => (
-              '<tr>' +
-                '<td><strong>' + t.identifier + '</strong></td>' +
-                '<td><span class="badge badge-project">' + t.project + '</span></td>' +
-                '<td>' + escapeHtml(t.title) + '</td>' +
-                '<td><span class="badge badge-' + t.recommendedProvider + '">' + t.recommendedProvider + '</span></td>' +
-                '<td><span style="color: var(--text-dim);">P' + t.priority + '</span></td>' +
-                '<td style="text-align: right;">' +
-                  '<button class="primary sm btn-promote" data-linear-id="' + t.linearId + '" data-id="' + t.identifier + '" data-provider="' + t.recommendedProvider + '">+ Make Agent-Ready</button>' +
-                '</td>' +
-              '</tr>'
-            )).join("") +
+            triage.map(t => {
+              const proj = t.project || t.projectKey || "general";
+              const prioText = t.priority && t.priority > 0 ? ("P" + t.priority) : "—";
+              const prioClass = t.priority && t.priority > 0 ? ("badge-prio-" + t.priority) : "";
+              return (
+                "<tr>" +
+                  "<td><strong>" + t.identifier + "</strong></td>" +
+                  '<td><span class="badge badge-project" title="' + escapeHtml(proj) + '">' + escapeHtml(proj) + "</span></td>" +
+                  "<td>" + escapeHtml(t.title) + "</td>" +
+                  '<td><span class="badge badge-' + t.recommendedProvider + '">' + t.recommendedProvider + "</span></td>" +
+                  "<td>" + (prioClass ? '<span class="badge ' + prioClass + '">' + prioText + "</span>" : '<span style="color: var(--text-dim);">' + prioText + "</span>") + "</td>" +
+                  '<td style="text-align: right;">' +
+                    '<button class="primary sm btn-promote" data-linear-id="' + t.linearId + '" data-id="' + t.identifier + '" data-provider="' + t.recommendedProvider + '">+ Make Agent-Ready</button>' +
+                  "</td>" +
+                "</tr>"
+              );
+            }).join("") +
           '</tbody>' +
         '</table>'
       );
@@ -1060,20 +1129,25 @@ export function renderDashboardHtml(): string {
             '<span class="kanban-col-badge">' + triage.length + '</span>' +
           '</div>' +
           '<div class="kanban-cards">' +
-            (triage.length === 0 ? '<div class="empty-state" style="padding:16px;">No candidate issues</div>' : triage.map(t => (
-              '<div class="kanban-card">' +
-                '<div class="kanban-card-meta">' +
-                  '<span class="badge badge-project">' + t.project + '</span>' +
-                  '<span style="font-weight:700;">' + t.identifier + '</span>' +
-                  '<span style="color:var(--text-dim);">P' + t.priority + '</span>' +
-                '</div>' +
-                '<div class="kanban-card-title">' + escapeHtml(t.title) + '</div>' +
-                '<div style="display:flex; justify-content:space-between; align-items:center; margin-top:4px;">' +
-                  '<span class="badge badge-' + t.recommendedProvider + '">' + t.recommendedProvider + '</span>' +
-                  '<button class="primary sm btn-promote" data-linear-id="' + t.linearId + '" data-id="' + t.identifier + '" data-provider="' + t.recommendedProvider + '">+ Ready</button>' +
-                '</div>' +
-              '</div>'
-            )).join("")) +
+            (triage.length === 0 ? '<div class="empty-state" style="padding:16px;">No candidate issues</div>' : triage.map(t => {
+              const proj = t.project || t.projectKey || "general";
+              const prioText = t.priority && t.priority > 0 ? ("P" + t.priority) : "";
+              const prioHtml = prioText ? ('<span class="badge badge-prio-' + t.priority + '">' + prioText + '</span>') : "";
+              return (
+                '<div class="kanban-card">' +
+                  '<div class="kanban-card-meta">' +
+                    '<span class="badge badge-project" title="' + escapeHtml(proj) + '">' + escapeHtml(proj) + '</span>' +
+                    '<span style="font-weight:700;">' + t.identifier + '</span>' +
+                    prioHtml +
+                  '</div>' +
+                  '<div class="kanban-card-title">' + escapeHtml(t.title) + '</div>' +
+                  '<div style="display:flex; justify-content:space-between; align-items:center; margin-top:4px;">' +
+                    '<span class="badge badge-' + t.recommendedProvider + '">' + t.recommendedProvider + '</span>' +
+                    '<button class="primary sm btn-promote" data-linear-id="' + t.linearId + '" data-id="' + t.identifier + '" data-provider="' + t.recommendedProvider + '">+ Ready</button>' +
+                  '</div>' +
+                '</div>'
+              );
+            }).join("")) +
           '</div>' +
         '</div>' +
 
@@ -1084,7 +1158,28 @@ export function renderDashboardHtml(): string {
             '<span class="kanban-col-badge">' + d.funnel.agentReady + '</span>' +
           '</div>' +
           '<div class="kanban-cards">' +
-            (d.funnel.agentReady === 0 ? '<div class="empty-state" style="padding:16px;">Queue is empty. Promote an issue from Todo to queue.</div>' : '') +
+            ((d.queue && d.queue.length > 0) ? d.queue.map(q => {
+              const proj = q.project || "general";
+              return (
+                '<div class="kanban-card">' +
+                  '<div class="kanban-card-meta">' +
+                    '<span class="badge badge-project" title="' + escapeHtml(proj) + '">' + escapeHtml(proj) + '</span>' +
+                    '<span style="font-weight:700;">' + q.identifier + '</span>' +
+                    '<span class="badge badge-' + q.provider + '">' + q.provider + '</span>' +
+                  '</div>' +
+                  '<div class="kanban-card-title">' + escapeHtml(q.title || "Queued Linear Issue") + '</div>' +
+                  '<div style="font-size:11px; color:var(--text-dim); display:flex; justify-content:space-between; align-items:center; margin-top:2px;">' +
+                    '<span>Status: <strong style="color:var(--accent);">Queued</strong></span>' +
+                    (q.priority ? '<span style="color:var(--text-dim); font-weight:600;">P' + q.priority + '</span>' : '') +
+                  '</div>' +
+                '</div>'
+              );
+            }).join("") : (d.funnel.agentReady > 0 ? (
+              '<div class="kanban-card" style="background:rgba(56, 189, 248, 0.05); border-color:var(--accent); text-align:center; padding:14px;">' +
+                '<div style="font-weight:700; color:var(--accent); margin-bottom:4px;">' + d.funnel.agentReady + ' issue' + (d.funnel.agentReady > 1 ? 's' : '') + ' ready</div>' +
+                '<div style="font-size:11px; color:var(--text-muted);">Marked agent-ready in Linear.<br>Awaiting dispatcher claim.</div>' +
+              '</div>'
+            ) : '<div class="empty-state" style="padding:16px;">Queue is empty. Promote an issue from Todo to queue.</div>')) +
           '</div>' +
         '</div>' +
 
@@ -1095,20 +1190,26 @@ export function renderDashboardHtml(): string {
             '<span class="kanban-col-badge">' + inAgent.length + '</span>' +
           '</div>' +
           '<div class="kanban-cards">' +
-            (inAgent.length === 0 ? '<div class="empty-state" style="padding:16px;">No agents actively coding</div>' : inAgent.map(w => (
-              '<div class="kanban-card">' +
-                '<div class="kanban-card-meta">' +
-                  '<span class="badge badge-project">' + w.project + '</span>' +
-                  '<span style="font-weight:700;">' + w.identifier + '</span>' +
-                  '<span class="badge badge-' + w.provider + '">' + w.provider + '</span>' +
-                '</div>' +
-                '<div class="kanban-card-title">' + escapeHtml(w.title) + '</div>' +
-                '<div style="font-size:11px; color:var(--text-dim);">Stage: <strong>' + w.pipelineStage + '</strong> · Uptime: ' + w.ageMin + 'm</div>' +
-                '<div style="display:flex; justify-content:flex-end; margin-top:4px;">' +
-                  '<button class="sm btn-open-orca" data-path="' + (w.worktreePath || '') + '">Open in Orca ↗</button>' +
-                '</div>' +
-              '</div>'
-            )).join("")) +
+            (inAgent.length === 0 ? '<div class="empty-state" style="padding:16px;">No agents actively coding</div>' : inAgent.map(w => {
+              const proj = w.project || "general";
+              return (
+                '<div class="kanban-card">' +
+                  '<div class="kanban-card-meta">' +
+                    '<span class="badge badge-project" title="' + escapeHtml(proj) + '">' + escapeHtml(proj) + '</span>' +
+                    '<span style="font-weight:700;">' + w.identifier + '</span>' +
+                    '<span class="badge badge-' + w.provider + '">' + w.provider + '</span>' +
+                  '</div>' +
+                  '<div class="kanban-card-title">' + escapeHtml(w.title) + '</div>' +
+                  '<div style="font-size:11px; color:var(--text-dim); display:flex; justify-content:space-between; align-items:center;">' +
+                    '<span>Stage: <strong>' + w.pipelineStage + '</strong></span>' +
+                    '<span>' + w.ageMin + 'm</span>' +
+                  '</div>' +
+                  '<div style="display:flex; justify-content:flex-end; margin-top:4px;">' +
+                    '<button class="sm btn-open-orca" data-path="' + (w.worktreePath || '') + '">Open in Orca ↗</button>' +
+                  '</div>' +
+                '</div>'
+              );
+            }).join("")) +
           '</div>' +
         '</div>' +
 
@@ -1119,23 +1220,26 @@ export function renderDashboardHtml(): string {
             '<span class="kanban-col-badge" style="background:var(--warning-glow); color:var(--warning); border-color:var(--warning);">' + waiting.length + '</span>' +
           '</div>' +
           '<div class="kanban-cards">' +
-            (waiting.length === 0 ? '<div class="empty-state" style="padding:16px;">No questions open</div>' : waiting.map(w => (
-              '<div class="kanban-card waiting">' +
-                '<div class="kanban-card-meta">' +
-                  '<span class="badge badge-project">' + w.project + '</span>' +
-                  '<span style="font-weight:700;">' + w.identifier + '</span>' +
-                  '<span class="badge badge-waiting">Action Needed</span>' +
-                '</div>' +
-                '<div class="kanban-card-title">' + escapeHtml(w.title) + '</div>' +
-                '<div style="font-size:11px; color:var(--text-muted); background:var(--surface); padding:6px 8px; border-radius:4px; border:1px solid var(--border-subtle);">' +
-                  escapeHtml((w.openQuestion ? w.openQuestion.prompt || '' : '').slice(0, 140)) + '...' +
-                '</div>' +
-                '<div style="display:flex; gap:6px; margin-top:4px; flex-wrap:wrap;">' +
-                  '<button class="primary sm btn-approve" data-id="' + w.identifier + '" data-qid="' + (w.openQuestion ? w.openQuestion.id : '') + '">✓ Approve</button>' +
-                  '<button class="sm btn-answer-modal" data-id="' + w.identifier + '" data-qid="' + (w.openQuestion ? w.openQuestion.id : '') + '">Answer...</button>' +
-                '</div>' +
-              '</div>'
-            )).join("")) +
+            (waiting.length === 0 ? '<div class="empty-state" style="padding:16px;">No questions open</div>' : waiting.map(w => {
+              const proj = w.project || "general";
+              return (
+                '<div class="kanban-card waiting">' +
+                  '<div class="kanban-card-meta">' +
+                    '<span class="badge badge-project" title="' + escapeHtml(proj) + '">' + escapeHtml(proj) + '</span>' +
+                    '<span style="font-weight:700;">' + w.identifier + '</span>' +
+                    '<span class="badge badge-waiting">Action Needed</span>' +
+                  '</div>' +
+                  '<div class="kanban-card-title">' + escapeHtml(w.title) + '</div>' +
+                  '<div style="font-size:11px; color:var(--text-muted); background:var(--surface); padding:6px 8px; border-radius:4px; border:1px solid var(--border-subtle);">' +
+                    escapeHtml((w.openQuestion ? w.openQuestion.prompt || '' : '').slice(0, 140)) + '...' +
+                  '</div>' +
+                  '<div style="display:flex; gap:6px; margin-top:4px; flex-wrap:wrap;">' +
+                    '<button class="primary sm btn-approve" data-id="' + w.identifier + '" data-qid="' + (w.openQuestion ? w.openQuestion.id : '') + '">✓ Approve</button>' +
+                    '<button class="sm btn-answer-modal" data-id="' + w.identifier + '" data-qid="' + (w.openQuestion ? w.openQuestion.id : '') + '">Answer...</button>' +
+                  '</div>' +
+                '</div>'
+              );
+            }).join("")) +
           '</div>' +
         '</div>' +
 
@@ -1146,20 +1250,23 @@ export function renderDashboardHtml(): string {
             '<span class="kanban-col-badge">' + inReview.length + '</span>' +
           '</div>' +
           '<div class="kanban-cards">' +
-            (inReview.length === 0 ? '<div class="empty-state" style="padding:16px;">No open reviews</div>' : inReview.map(w => (
-              '<div class="kanban-card">' +
-                '<div class="kanban-card-meta">' +
-                  '<span class="badge badge-project">' + w.project + '</span>' +
-                  '<span style="font-weight:700;">' + w.identifier + '</span>' +
-                  '<span class="badge badge-pass">Gates Passed</span>' +
-                '</div>' +
-                '<div class="kanban-card-title">' + escapeHtml(w.title) + '</div>' +
-                '<div style="display:flex; gap:6px; justify-content:flex-end; margin-top:4px;">' +
-                  (w.prUrl ? '<a href="' + w.prUrl + '" target="_blank"><button class="sm primary">View PR ↗</button></a>' : '') +
-                  '<button class="sm btn-open-orca" data-path="' + (w.worktreePath || '') + '">Orca ↗</button>' +
-                '</div>' +
-              '</div>'
-            )).join("")) +
+            (inReview.length === 0 ? '<div class="empty-state" style="padding:16px;">No open reviews</div>' : inReview.map(w => {
+              const proj = w.project || "general";
+              return (
+                '<div class="kanban-card">' +
+                  '<div class="kanban-card-meta">' +
+                    '<span class="badge badge-project" title="' + escapeHtml(proj) + '">' + escapeHtml(proj) + '</span>' +
+                    '<span style="font-weight:700;">' + w.identifier + '</span>' +
+                    '<span class="badge badge-pass">Gates Passed</span>' +
+                  '</div>' +
+                  '<div class="kanban-card-title">' + escapeHtml(w.title) + '</div>' +
+                  '<div style="display:flex; gap:6px; justify-content:flex-end; margin-top:4px; flex-wrap:wrap;">' +
+                    (w.prUrl ? '<a href="' + w.prUrl + '" target="_blank"><button class="sm primary">View PR ↗</button></a>' : '') +
+                    '<button class="sm btn-open-orca" data-path="' + (w.worktreePath || '') + '">Orca ↗</button>' +
+                  '</div>' +
+                '</div>'
+              );
+            }).join("")) +
           '</div>' +
         '</div>' +
 
@@ -1170,8 +1277,21 @@ export function renderDashboardHtml(): string {
             '<span class="kanban-col-badge">' + d.funnel.done + '</span>' +
           '</div>' +
           '<div class="kanban-cards">' +
-            '<div style="padding:16px; font-size:12px; color:var(--text-muted); text-align:center;">' +
-              '<strong>' + d.funnel.done + ' issues</strong> shipped and merged in ' + d.metrics.timeframe + '.' +
+            '<div class="kanban-card" style="background:rgba(16, 185, 129, 0.05); border-color:rgba(16, 185, 129, 0.2);">' +
+              '<div style="display:flex; align-items:center; justify-content:space-between;">' +
+                '<span style="font-size:11px; color:var(--text-dim); text-transform:uppercase; font-weight:700;">Shipped</span>' +
+                '<span class="badge badge-pass">Merged</span>' +
+              '</div>' +
+              '<div style="font-size:24px; font-weight:800; font-family:var(--font-mono); color:var(--success); margin:4px 0;">' +
+                d.funnel.done + ' <span style="font-size:12px; font-weight:500; color:var(--text-muted);">issues</span>' +
+              '</div>' +
+              '<div style="font-size:11px; color:var(--text-muted); line-height:1.4;">' +
+                'Shipped in <strong>' + escapeHtml(d.metrics.timeframe) + '</strong> window.' +
+              '</div>' +
+              '<div style="margin-top:8px; padding-top:8px; border-top:1px solid var(--border-subtle); font-size:11px; color:var(--text-dim); display:flex; justify-content:space-between;">' +
+                '<span>Pass Rate: <strong style="color:var(--text);">' + d.metrics.gatePassRate + '%</strong></span>' +
+                '<span>Avg: <strong style="color:var(--text);">' + d.metrics.avgCycleMinutes + 'm</strong></span>' +
+              '</div>' +
             '</div>' +
           '</div>' +
         '</div>'

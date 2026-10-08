@@ -17,8 +17,10 @@ export interface TriageItem {
   identifier: string;
   linearId: string;
   title: string;
+  project: string;
   projectKey: string;
   projectName: string;
+  priority?: number;
   state: {
     id: string;
     name: string;
