@@ -47,6 +47,7 @@ const registry: Record<string, () => Promise<Handler>> = {
   // `resume` is `pause --off` (Appendix A): the same command, which reads its own name
   resume: async () => (await import("./commands/pause")).pauseCommand,
   status: async () => (await import("./commands/status")).statusCommand,
+  ui: async () => (await import("./commands/ui")).uiCommand,
 };
 
 /** Every error a command lets escape: `code: message` on stderr (never a stack trace, never stdout), exit 2. */
