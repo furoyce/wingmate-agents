@@ -2,7 +2,7 @@
 
 The owner requested slice-1 validation and continuation into slice 2 on 2026-10-07.
 Baseline at `92b4e07`: 803 tests pass; TypeScript and Biome pass. OAuth authentication and live metadata now work.
-The live queue comparison found no eligible Todo issues; notification receipt still needs the owner's confirmation.
+The initial live queue comparison found no eligible Todo issues. The owner subsequently confirmed both notification channels.
 
 ## Engineering sequence
 
@@ -57,15 +57,38 @@ Live acceptance cannot be reported complete from simulations or missing credenti
   in Todo without an Agent label; the other three projects have no Todo issues. Legacy JRF-401/402/404 remain outside
   Todo and were not claimed.
 - Notification fixture JRF-416 was created as the app, the owner subscribed, and doctor posted its notification test
-  and set Needs-Human. Receipt confirmation remains pending. No issue pilot or automation enable has been completed.
+  and set Needs-Human. The owner confirmed both notifications; quick doctor recorded confirmation at
+  `2026-10-08T03:04:41.910Z` with no blocking failures. Needs-Human was removed and the fixture moved to Done.
+- PR #2 merged at `6e08278056d47cd030332587bd5ff167217812a8`; the merged tree matched the tested head.
+  The dedicated dispatcher was fast-forwarded and installed disabled. Full doctor on that binary passed its blocking
+  sandbox, auth, metadata and install checks; notification confirmation above closes the remaining notification check.
+- JRF-401/402 legacy branches had no unique commits and their PRs were merged. Ignored JRF-402 web logs were archived
+  with hashes under `~/.local/share/wingmate/evidence/legacy-JRF-402/`; original worktrees, sessions, issue states and
+  source logs were preserved. JRF-402 still needs authenticated production acceptance.
+- The owner clarified JRF-404: store/display microsecond units while retaining the current 60 Hz simulation. The answer
+  was recorded as an owner comment; actual timing precision must be described accurately. The old session was not resumed.
+- Scratch JRF-417 was claimed from the sole eligible queue entry into a new clean Bouncr worktree at
+  `3ea70aa443e0c5d7997085b6e27c99b847ef342a`; both setup commands passed. The coordinator could not proceed because
+  the Bun 1.3.9 executable lost inherited role environment in the unchanged macOS sandbox. Wingmate stopped the cycle
+  through its supported stop command before any plan, source changes or reviewer request. This attempt is not acceptance.
+- A verified, isolated Bun 1.4.2 compiler preserved role environment and child-process environment under the same sandbox.
+  A rebuilt actual CLI returned the expected bounded refusals for incomplete spawn and gate commands with unchanged
+  outbox, gates and record snapshots. The system's default Bun was left unchanged. This verifies runtime compatibility,
+  not completion of the scratch workflow. Install now requires Bun 1.4.2 or newer; compiled executables disable automatic
+  project configuration/environment loading. Doctor requires role-context and child-Git probes before pilot retry.
 
 ## Current state
 
-Engineering validation: `bun test` passed 839 tests with zero failures (73 files, 13,838 assertions);
-`bunx tsc --noEmit`, `bunx biome check .`, `git diff --check`, compiled build and binary `config validate` passed.
-New kits use dispatcher-owned reviewers and method loop; legacy kits remain compatible. The owner requested PR and
-merge of these changes. The disabled baseline install has been validated live; install this code before running the
-pilot acceptance checklist above. Do not enable the automation merely because the engineering checks are green.
+PR #2 engineering validation passed 839 tests with zero failures (73 files, 13,838 assertions), TypeScript, Biome,
+diff checks, compiled build and binary config validation. New kits use dispatcher-owned reviewers and method loop;
+legacy kits remain compatible. The installed automation remains disabled. The runtime compatibility correction must
+be merged, installed and checked before retrying JRF-417 through a fresh dispatcher cycle. Full scratch completion,
+JRF-404 ask/park/resume, native iOS UI relay and the other three repository pilots remain pending.
+Do not enable the automation merely because the engineering checks are green.
+
+The runtime correction passed 845 tests with zero failures (73 files, 13,895 assertions) using the isolated Bun 1.4.2
+compiler. TypeScript, Biome, diff checks, compiled build and binary config validation passed. Independent review found
+no remaining blockers after requiring a valid HEAD before dispatcher gate mutations and testing nonzero child Git exits.
 
 ## Parallel validation fixes
 

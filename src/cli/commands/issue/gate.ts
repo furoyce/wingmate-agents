@@ -246,6 +246,13 @@ export async function gateVerb(argv: Argv, d: Deps): Promise<number> {
   if (method !== null && method !== "loop" && method !== "graph")
     return d.refuse("usage", "--method loop|graph");
   const head = await gitHead(d.cwd);
+  const dispatcher = await dispatcherMode(d.cwd);
+  if (dispatcher && !head)
+    return d.refuse(
+      "git_head_unavailable",
+      "cannot resolve HEAD for a dispatcher gate",
+      "restore Git access and a committed worktree HEAD, then retry the gate",
+    );
   if (markStale(d.local, head)) await writeLocal(d.cwd, d.local);
   const idx = ORDER.indexOf(stage);
   const missing = ORDER.slice(0, idx).filter((s) => !passed(d.local, s));
@@ -256,7 +263,6 @@ export async function gateVerb(argv: Argv, d: Deps): Promise<number> {
       `wingmate issue ${d.id} gate ${missing[0]} …`,
     );
   const g = d.local.gates[stage] ?? EMPTY;
-  const dispatcher = await dispatcherMode(d.cwd);
   if (dispatcher && method === "graph")
     return d.refuse("graph_unavailable", "terminal-job fallback uses method loop");
   const dispatchId = f("request") ?? f("dispatch");

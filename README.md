@@ -37,4 +37,6 @@ set `WINGMATE_CONFIG`. A FAIL line from `doctor` keeps `wingmate install --enabl
 
 ## Development
 
-Bun 1.3.9 or later. Run `bun install`, then `bun test`, `bunx tsc --noEmit` and `bunx biome check .`.
+Bun 1.4.2 or later. Earlier compiled runtimes lose inherited environment variables inside the macOS agent sandbox
+([Bun #27802](https://github.com/oven-sh/bun/issues/27802)). Run `bun install`, then `bun test`, `bunx tsc --noEmit`
+and `bunx biome check .`.

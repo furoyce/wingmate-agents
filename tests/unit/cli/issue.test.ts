@@ -138,6 +138,17 @@ const refusal = (r: { code: number; out: string }): Refusal => {
 };
 
 describe("wingmate issue", () => {
+  test("dispatcher gates refuse an unavailable HEAD without writing state or intents", async () => {
+    const wt = await worktree();
+    writeLaunch(wt, { spawnMode: "dispatcher" });
+    const before = await readLocal(wt);
+    expect(refusal(await runVerb(wt, ["gate", "intake", "--verdict", "PASS"])).code).toBe(
+      "git_head_unavailable",
+    );
+    expect(await readLocal(wt)).toEqual(before);
+    expect(await listIntents(wt)).toEqual([]);
+  });
+
   test("gate intake requires --method and evidence; writes gates.json and an intent", async () => {
     const wt = await worktree();
     writeFileSync(join(wt, ".wingmate", "evidence", "assumptions.md"), "- a");

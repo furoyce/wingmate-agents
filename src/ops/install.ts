@@ -235,22 +235,64 @@ export async function install(ctx: Ctx, o: InstallOptions): Promise<InstallResul
 }
 
 /** `bun install --frozen-lockfile` then `bun build --compile` into a temp file renamed over `outFile` (a running binary is never rewritten). */
-export async function defaultBuild(worktreePath: string, outFile: string): Promise<string> {
+export const MIN_BUILD_BUN = "1.4.2";
+
+/** Older Bun executables lose inherited environment variables inside macOS Seatbelt (Bun #27802). */
+export function supportedBuildBun(version: string): boolean {
+  const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(version.trim());
+  if (!match) return false;
+  const actual = match.slice(1).map(Number);
+  if (actual.some((n) => !Number.isSafeInteger(n))) return false;
+  const minimum = MIN_BUILD_BUN.split(".").map(Number);
+  for (const [i, expected] of minimum.entries()) {
+    const value = actual[i] ?? 0;
+    if (value > expected) return true;
+    if (value < expected) return false;
+  }
+  return true;
+}
+
+export async function defaultBuild(
+  worktreePath: string,
+  outFile: string,
+  exec: typeof run = run,
+): Promise<string> {
   const tail = (s: string) => {
     const t = s.trim().split("\n").slice(-5).join(" | ").slice(0, 500);
     return scanText(t).length ? "(output withheld: it looked like a secret)" : t;
   };
-  const deps = await run(["bun", "install", "--frozen-lockfile"], {
+  const version = await exec(["bun", "--version"], { cwd: worktreePath, timeoutMs: 30_000 });
+  if (version.code !== 0 || version.timedOut || version.truncated || !supportedBuildBun(version.stdout))
+    throw new WingmateError(
+      "bun_unsupported",
+      `building Wingmate requires Bun ${MIN_BUILD_BUN} or later; older runtimes lose the agent environment inside the macOS sandbox`,
+      "put a supported Bun release on PATH, then re-run install",
+    );
+  const deps = await exec(["bun", "install", "--frozen-lockfile"], {
     cwd: worktreePath,
     timeoutMs: 10 * 60_000,
   });
   if (deps.code !== 0)
     throw new WingmateError("build_failed", `bun install failed (${deps.code}): ${tail(deps.stderr)}`);
   const tmp = `${outFile}.${newUlid()}.tmp`;
-  const b = await run(["bun", "build", "--compile", "./bin/wingmate.ts", "--outfile", tmp], {
-    cwd: worktreePath,
-    timeoutMs: 10 * 60_000,
-  });
+  const b = await exec(
+    [
+      "bun",
+      "build",
+      "--compile",
+      "--no-compile-autoload-dotenv",
+      "--no-compile-autoload-bunfig",
+      "--no-compile-autoload-tsconfig",
+      "--no-compile-autoload-package-json",
+      "./bin/wingmate.ts",
+      "--outfile",
+      tmp,
+    ],
+    {
+      cwd: worktreePath,
+      timeoutMs: 10 * 60_000,
+    },
+  );
   if (b.code !== 0)
     throw new WingmateError("build_failed", `bun build failed (${b.code}): ${tail(b.stderr)}`);
   await chmod(tmp, 0o755);

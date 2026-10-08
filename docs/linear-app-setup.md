@@ -6,7 +6,7 @@ is in [runbook.md](runbook.md).
 
 **Before you start**
 
-- Orca is running, Bun 1.3.9 or later is installed, and `gh auth status` shows you logged in.
+- Orca is running, Bun 1.4.2 or later is on PATH, and `gh auth status` shows you logged in.
 - You run every command from a checkout of this repository. That is where `config/projects.yaml` is, and `install`
   asks Orca which repository that checkout belongs to.
 - `main` on GitHub holds the version you want to run. `install` builds the dispatcher from the `wingmate-dispatcher`

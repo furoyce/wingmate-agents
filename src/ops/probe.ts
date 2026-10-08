@@ -13,6 +13,7 @@ import { basename, join } from "node:path";
 import { z } from "zod";
 import { DISPATCHER_GIT_ENV } from "../git/cli";
 import { discoverGitLinks, verifyGitLinks } from "../git/trust";
+import type { Launch } from "../kit/local";
 import {
   AGENT_GIT_EMAIL,
   CREDENTIAL_ENV_PATTERN,
@@ -58,6 +59,8 @@ interface Probe {
   unproven?: string;
   /** The class a succeeding exit must carry (`succeed` probes); any when absent. */
   okSig?: RegExp;
+  /** A benign CLI refusal can prove a required path was reached; it must return this exact exit (default: 0). */
+  allowedExit?: number;
   /**
    * The host a `net` failure must name: the block must also be the sandbox's own, the `network-outbound <host>:<port>` violation
    * Claude Code appends to that command's tool result (spike §3.4a/§3.4b) — a DNS or firewall failure prints the same curl/git error.
@@ -96,6 +99,36 @@ const LINE = /PROBE (\d{1,2}) exit=(-?\d{1,3}) sig=([a-z0-9]{1,24})/g;
 export const PROBE_ID = "WMPROBE-1";
 const q = (s: string) => shellQuote([s]);
 
+/** Minimal dispatcher-mode launch metadata for refusal-only probes; no gate or role job is requested. */
+export function probeLaunch(worktreeId: string, commonDir: string, kitDir: string): Launch {
+  const settings = join(kitDir, "claude-settings.json");
+  return {
+    spawnMode: "dispatcher",
+    provider: "claude",
+    model: null,
+    effort: "max",
+    kitDir,
+    worktreeId,
+    roleSettings: {
+      "plan-verifier": settings,
+      "code-reviewer": settings,
+      "security-reviewer": settings,
+      "ui-reviewer": settings,
+      worker: settings,
+    },
+    baseSha: null,
+    commonDir,
+    pinnedGates: [],
+    ui: { kind: "none", paths: [] },
+    allowDeps: false,
+    forbiddenPaths: [],
+    verifyCross: false,
+    workers: [],
+    tiers: {},
+    quota: { weeklyMax: 80, sessionMax: 90, maxSnapshotAgeMin: 360 },
+  };
+}
+
 /**
  * Shared by every script: classify a command's stderr. Auth before the generic permission text ("Permission denied (publickey)").
  * R35: Claude Code's shell sets `credential.interactive=false`, so git's "no credential" reads "unable to get password from user".
@@ -111,7 +144,7 @@ export const CLASSIFY = `classify() {
   esac
 }`;
 
-/** The §13.3(b) probe set (Ruling for Task 12; SEC-2 added 15 and 16): ten that must fail, five that must succeed, one reported (D14). */
+/** The §13.3(b) probe set: ten controls must block, seven required paths must work, one is reported (D14). */
 export function claudeProbes(p: ProbePaths): Probe[] {
   const write = (path: string) => `o=$( { : >> ${q(path)}; } 2>&1 ); c=$?`;
   return [
@@ -240,6 +273,24 @@ export function claudeProbes(p: ProbePaths): Probe[] {
       unproven: "git failed otherwise: control unproven",
       body: `o=$(cd ${q(p.worktree)} && printf 'protocol=https\\nhost=github.com\\n\\n' | git credential fill 2>&1 >/dev/null); c=$?`,
     },
+    {
+      // The compiled CLI must see the coordinator role inside the sandbox. Missing role/spec stops before any launch or intent.
+      n: 17,
+      name: "wingmate_coordinator_role",
+      expect: "succeed",
+      allowedExit: 2,
+      okSig: /^usage$/,
+      body: `o=$(cd ${q(p.worktree)} && wingmate issue ${p.identifier} spawn --dry-run 2>&1); c=$?; case "$o" in ('{"ok":false,"code":"usage","message":'*',"nextStep":'*'}') o=usage ;; esac`,
+    },
+    {
+      // Dispatcher intake requires a resolved child-git HEAD before refusing the absent method; fresh state has no stale gates.
+      n: 18,
+      name: "wingmate_child_git",
+      expect: "succeed",
+      allowedExit: 2,
+      okSig: /^methodrequired$/,
+      body: `o=$(cd ${q(p.worktree)} && wingmate issue ${p.identifier} gate intake --verdict PASS 2>&1); c=$?; case "$o" in ('{"ok":false,"code":"method_required","message":'*',"nextStep":'*'}') o=methodrequired ;; esac`,
+    },
   ];
 }
 
@@ -262,9 +313,9 @@ function credentialEnvBody(blanked: readonly string[]): string {
 /** One script: the shared classifier, the probe's body, then its single line. Bodies that set `o` to a class word pass it through. */
 export function probeScript(p: Probe): string {
   const sig =
-    p.n === 9 || p.n === 11 || p.n === 12 || p.n === 13 || p.n === 14
+    p.n === 9 || p.n === 11 || p.n === 12 || p.n === 13 || p.n === 14 || p.n === 17 || p.n === 18
       ? // `(pattern)` form: macOS /bin/sh (bash 3.2) ends a `$(…)` at a case pattern's bare `)`, leaving `sig= echo …` (no PROBE line)
-        `$(case "$o" in (http[0-9][0-9][0-9]|ok|local|none|elsewhere|set|unset|reachable|unreachable) echo "$o" ;; (*) classify "$o" ;; esac)`
+        `$(case "$o" in (http[0-9][0-9][0-9]|ok|local|none|elsewhere|set|unset|reachable|unreachable|usage|methodrequired) echo "$o" ;; (*) classify "$o" ;; esac)`
       : `$(classify "$o")`;
   return `#!/bin/sh\n# wingmate doctor probe ${p.n} (${p.name}): must ${p.expect === "report" ? "be reported" : p.expect}\n${CLASSIFY}\n${p.body}\necho "PROBE ${p.n} exit=$c sig=${sig}"\n`;
 }
@@ -428,7 +479,7 @@ export function judge(
         failures.push(
           `${p.name}: blocked, but no sandbox violation for ${p.violation} in its tool result (a DNS or firewall failure proves nothing about the sandbox)`,
         );
-    } else if (l.exit !== 0) failures.push(`${p.name}: failed (${desc})`);
+    } else if (l.exit !== (p.allowedExit ?? 0)) failures.push(`${p.name}: failed (${desc})`);
     else if (p.okSig && !p.okSig.test(l.sig)) failures.push(`${p.name}: unexpected result (${desc})`);
   }
   return { failures, lines };
@@ -593,6 +644,10 @@ export async function claudeProbe(ctx: Ctx, d: ClaudeProbeDeps): Promise<ClaudeP
         provider: "claude",
         childRunId: null,
       }),
+    );
+    await writeAtomic(
+      join(shown.path, ".wingmate", "launch.json"),
+      JSON.stringify(probeLaunch(wt.id, common, kitDir)),
     );
     const probes = claudeProbes({
       credentials: join(ctx.dirs.config, "credentials.json"),

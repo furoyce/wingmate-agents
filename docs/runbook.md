@@ -581,8 +581,10 @@ Until then, these are the real spend signals:
 
    `install` does the following:
 
-   - it runs `bun install --frozen-lockfile` and `bun build --compile` in the dispatcher worktree, writing
+   - it requires Bun 1.4.2 or later on PATH (older builds lose inherited environment variables inside the macOS
+     sandbox), then runs `bun install --frozen-lockfile` and `bun build --compile` in the dispatcher worktree, writing
      `<state>/bin/wingmate-<version>`. A running tick keeps its old binary; a new file replaces the old one by rename;
+     the compiled executable ignores runtime `.env`, `bunfig.toml`, `tsconfig.json` and `package.json` files;
    - it points `~/.local/bin/wingmate` at the new binary;
    - it edits the automation's precheck to the new path;
    - it keeps `core.useReplaceRefs=false` set in each pilot repository's own config (a deliberate setting: Orca's

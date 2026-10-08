@@ -5,6 +5,7 @@ import { describe, expect, test } from "bun:test";
 import {
   chmodSync,
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
@@ -12,8 +13,8 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join } from "node:path";
-import { blankedEnv } from "../../../src/kit/settings";
+import { basename, dirname, join, resolve } from "node:path";
+import { blankedEnv, shellQuote } from "../../../src/kit/settings";
 import { TOKEN_ENV } from "../../../src/linear/envToken";
 import {
   CLASSIFY,
@@ -24,6 +25,7 @@ import {
   credentialNames,
   invalidSettings,
   judge,
+  probeLaunch,
   probeLines,
   probeScript,
   sandboxStatus,
@@ -69,6 +71,8 @@ const GOOD: Record<number, string> = {
   14: "exit=0 sig=reachable",
   15: "exit=1 sig=auth",
   16: "exit=128 sig=auth",
+  17: "exit=2 sig=usage",
+  18: "exit=2 sig=methodrequired",
 };
 const lines = (over: Record<number, string | null> = {}) =>
   Object.entries({ ...GOOD, ...over })
@@ -244,9 +248,9 @@ describe("PROBE lines (inverted or missing lines fail the probe)", () => {
       "sibling_gitdir_write: no PROBE line",
       "index_lock_write: no PROBE line",
     ]);
-    // the reply alone settles nothing: every required probe fails (15 of 16; the orca line is only reported)
+    // the reply alone settles nothing: every required probe fails (17 of 18; the orca line is only reported)
     const replyOnly = judged(stream("", { final: lines() }));
-    expect(replyOnly.length).toBe(15);
+    expect(replyOnly.length).toBe(17);
     expect(replyOnly).toContain("credentials_read: no PROBE line");
     expect(judged(lines())).toEqual(replyOnly); // not stream-json at all
     // a line printed in another command's result (probe 3's call printing probe 1's line) is not probe 1's result
@@ -318,6 +322,20 @@ describe("PROBE lines (inverted or missing lines fail the probe)", () => {
   test("two different lines for one probe conflict", () => {
     const dup = judged(stream(`${lines()}\nPROBE 6 exit=0 sig=none`));
     expect(dup[0]).toContain("index_lock_write: conflicting results");
+  });
+  test("required CLI paths need their exact refusal and exit: hidden role context, child ENOENT, and false successes fail", () => {
+    expect(judged(stream(lines({ 17: "2 sig=other", 18: "2 sig=enoent" })))).toEqual([
+      "wingmate_coordinator_role: unexpected result (exit=2 sig=other)",
+      "wingmate_child_git: unexpected result (exit=2 sig=enoent)",
+    ]);
+    expect(judged(stream(lines({ 17: "0 sig=usage", 18: "1 sig=methodrequired" })))).toEqual([
+      "wingmate_coordinator_role: failed (exit=0 sig=usage)",
+      "wingmate_child_git: failed (exit=1 sig=methodrequired)",
+    ]);
+    expect(judged(stream(lines({ 17: null, 18: null })))).toEqual([
+      "wingmate_coordinator_role: no PROBE line",
+      "wingmate_child_git: no PROBE line",
+    ]);
   });
   test("a registry reply must be an HTTP success; a missing report line (orca) is no failure; literal script text never parses", () => {
     expect(judged(stream(lines({ 9: "0 sig=http403" })))).toEqual([
@@ -435,7 +453,7 @@ describe("probe scripts (real sh, temp files only)", () => {
       "ref: refs/heads/decoy\nwingmate-probe\n",
     );
   });
-  test("the probes whose body sets their own class (9, 11–14) print a parseable PROBE line under the system sh (bash 3.2 as sh on macOS)", async () => {
+  test("the probes whose body sets their own class (9, 11–14, 17–18) print a parseable PROBE line under the system sh (bash 3.2 as sh on macOS)", async () => {
     for (const [n, o] of [
       [9, "http200"],
       [11, "ok"],
@@ -443,12 +461,87 @@ describe("probe scripts (real sh, temp files only)", () => {
       [13, "unset"],
       [14, "reachable"],
       [14, "Some Other Text"],
+      [17, "usage"],
+      [18, "methodrequired"],
     ] as const) {
       const out = await sh(
         probeScript({ n, name: "stub", expect: "report", body: `o=${JSON.stringify(o)}; c=0` }),
       );
       expect(probeLines(out).get(n)).toEqual([{ exit: 0, sig: o === "Some Other Text" ? "other" : o }]);
     }
+  });
+  test("the CLI probes exercise coordinator authorization and child git, without local writes or external actions", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "wm-probe-cli-"));
+    const bin = join(dir, "bin");
+    const wt = join(dir, "worktree");
+    mkdirSync(bin);
+    mkdirSync(join(wt, ".wingmate"), { recursive: true });
+    const record = JSON.stringify({
+      identifier: PROBE_ID,
+      stage: "working",
+      pipelineStage: "intake",
+      provider: "claude",
+      childRunId: null,
+    });
+    writeFileSync(join(wt, ".wingmate", "record.json"), record);
+    const launch = JSON.stringify(probeLaunch(`probe::${wt}`, join(wt, ".git"), join(dir, "kit")));
+    writeFileSync(join(wt, ".wingmate", "launch.json"), launch);
+    expect((await gitIn(wt, ["init", "-q"])).code).toBe(0);
+    await commit(wt);
+    const wingmate = join(bin, "wingmate");
+    writeFileSync(
+      wingmate,
+      `#!/bin/sh\nexec ${shellQuote([process.execPath, resolve("bin/wingmate.ts")])} "$@"\n`,
+      { mode: 0o755 },
+    );
+    const git = join(bin, "git");
+    const invoked = join(dir, "git-invoked");
+    const gitPath = Bun.which("git");
+    if (!gitPath) throw new Error("git missing from the test host");
+    writeFileSync(
+      git,
+      `#!/bin/sh\nprintf '%s\\n' "$@" > ${shellQuote([invoked])}\nexec ${shellQuote([gitPath])} "$@"\n`,
+      { mode: 0o755 },
+    );
+    const probes = claudeProbes({ ...PATHS, worktree: wt });
+    const execute = async (n: number, role: string | null, path = bin) => {
+      const probe = probes.find((p) => p.n === n);
+      if (!probe) throw new Error(`no probe ${n}`);
+      const r = await run(
+        [
+          "env",
+          "-i",
+          `HOME=${dir}`,
+          `PATH=${path}`,
+          ...(role === null ? [] : [`WINGMATE_ROLE=${role}`]),
+          "/bin/sh",
+          "-c",
+          probeScript(probe),
+        ],
+        { timeoutMs: 10_000 },
+      );
+      expect(r.code).toBe(0); // the script reports the command's own exit in its PROBE line
+      return probeLines(r.stdout).get(n);
+    };
+    expect(await execute(17, "coordinator")).toEqual([{ exit: 2, sig: "usage" }]);
+    expect(existsSync(invoked)).toBe(false); // malformed spawn stops before any child or launcher
+    expect(await execute(17, null)).toEqual([{ exit: 2, sig: "other" }]);
+    expect(await execute(17, "worker")).toEqual([{ exit: 2, sig: "other" }]);
+    expect(await execute(18, "coordinator")).toEqual([{ exit: 2, sig: "methodrequired" }]);
+    expect(readFileSync(invoked, "utf8")).toBe("rev-parse\n--verify\n-q\nHEAD\n");
+    // Leave wingmate resolvable but no git in PATH: internal_error is not an expected method refusal.
+    const noGitBin = join(dir, "no-git");
+    mkdirSync(noGitBin);
+    writeFileSync(join(noGitBin, "wingmate"), readFileSync(wingmate), { mode: 0o755 });
+    const missingGit = await execute(18, "coordinator", noGitBin);
+    expect(missingGit?.[0]?.exit).toBe(2);
+    expect(missingGit?.[0]?.sig).not.toBe("methodrequired");
+    // A git process that starts but fails to resolve HEAD must also fail the dispatcher-mode probe.
+    writeFileSync(git, "#!/bin/sh\nexit 128\n", { mode: 0o755 });
+    expect(await execute(18, "coordinator")).toEqual([{ exit: 2, sig: "other" }]);
+    expect(readdirSync(join(wt, ".wingmate")).sort()).toEqual(["launch.json", "record.json"]);
+    expect(readFileSync(join(wt, ".wingmate", "record.json"), "utf8")).toBe(record);
+    expect(readFileSync(join(wt, ".wingmate", "launch.json"), "utf8")).toBe(launch);
   });
   /** Probe 13's script run by real `sh` under `env -i` with only PATH and `vars`: its output, as the tool result would carry it. */
   const probe13In = async (vars: string[]) => {
@@ -551,11 +644,15 @@ describe("claudeProbe (a real wm-doctor worktree; the agent simulated)", () => {
     const w = await world();
     const seen: Seen[] = [];
     const exec = fakeClaude(async (cwd, kit) => {
+      expect(JSON.parse(readFileSync(join(cwd, ".wingmate", "launch.json"), "utf8")).spawnMode).toBe(
+        "dispatcher",
+      );
       await commit(cwd);
       return stream(lines(), { kit });
     }, seen);
     const r = await claudeProbe(w.ctx, { exec: exec.exec, cwd: "/wt/self" });
     expect(r).toMatchObject({ ok: true, orcaReachable: true });
+    expect(r.detail).toContain("10 blocked, 7 allowed as required");
     const s = seen[0];
     if (!s) throw new Error("claude was not run");
     const wtPath = s.opts.cwd ?? "";
