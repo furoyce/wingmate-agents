@@ -6,15 +6,26 @@ import { gitTarget } from "../git/trust";
 import type { Intent } from "../kit/intents";
 import { readNoFollow, worktreeDir, writeInWorktree } from "../kit/local";
 import { verifiedArtifact } from "../native/artifact";
+import type { NativeUiPort } from "../native/host";
 import {
+  NATIVE_CAPTURE_MAX_BYTES,
   NATIVE_CLEANUP_RESERVE_MS,
   NATIVE_DELIVERY_RESERVE_MS,
+  NATIVE_DEVICE_CLEANUP_MS,
+  NATIVE_LEASE_CLEANUP_MS,
   type NativeJob,
   type NativeReceipt,
   NativeReceiptSchema,
+  type NativeRuntimeBinding,
+  NativeRuntimeBindingSchema,
+  NativeRuntimeLookupSchema,
+  NativeRuntimeRequestSchema,
   hash,
+  nativeJobViews,
   policyHash,
   recipeHash,
+  runtimeBindingHash,
+  sameRuntimeBinding,
 } from "../native/protocol";
 import { WingmateError, errorText } from "../shared/errors";
 import { writeAtomic } from "../state/fs";
@@ -30,7 +41,7 @@ import { addAttention } from "./states";
 export async function mirrorNativeJobs(r: WRecord): Promise<void> {
   if (!r.worktree) return;
   const wm = await worktreeDir(r.worktree.path, ".wingmate");
-  await writeInWorktree(wm, "native-ui.json", JSON.stringify(r.nativeUiJobs, null, 2));
+  await writeInWorktree(wm, "native-ui.json", JSON.stringify(nativeJobViews(r.nativeUiJobs), null, 2));
 }
 
 type NativeIntent = Extract<Intent, { kind: "native-ui" }>;
@@ -46,6 +57,88 @@ export const nativeJobDir = (ctx: Ctx, r: WRecord, id: string) =>
   );
 const policyOf = (ctx: Ctx, r: WRecord) => ctx.cfg.projects[r.project]?.repos[r.repo]?.ui.native;
 const refused = (code: string, text: string) => new WingmateError(code, text);
+const runtimeRequest = (job: NativeJob) =>
+  NativeRuntimeRequestSchema.parse({
+    requestId: job.id,
+    worktreeId: job.worktreeId,
+    profileHash: job.executionIsolationHash,
+  });
+
+async function resolveRuntime(native: NativeUiPort, binding: NativeRuntimeBinding, timeoutMs: number) {
+  const resolved = NativeRuntimeBindingSchema.safeParse(await native.resolve(binding, timeoutMs));
+  if (!resolved.success || !sameRuntimeBinding(resolved.data, binding))
+    throw refused(
+      "native_runtime_lease_unavailable",
+      "the recorded native runtime lease is unavailable, expired or mismatched; no replacement runtime is selected",
+    );
+}
+
+async function cleanupJob(ctx: Ctx, r: WRecord, job: NativeJob): Promise<string[]> {
+  const native = ctx.nativeUi;
+  if (!native) return ["native runtime cleanup is unavailable"];
+  const deadline = native.now() + NATIVE_CLEANUP_RESERVE_MS;
+  const bounded = async <T>(cap: number, action: (timeoutMs: number) => Promise<T>): Promise<T> => {
+    const started = native.now();
+    const budget = Math.min(cap, deadline - started);
+    if (budget <= 0) throw new Error("native cleanup deadline exceeded");
+    const result = await action(budget);
+    if (native.now() > deadline || native.now() - started > budget)
+      throw new Error("native cleanup response exceeded its total wall budget");
+    return result;
+  };
+  try {
+    if (job.runtimeAcquireUncertain) {
+      const request = runtimeRequest(job);
+      const found = NativeRuntimeLookupSchema.safeParse(
+        await bounded(NATIVE_LEASE_CLEANUP_MS, (ms) => native.lookup(request, ms)),
+      );
+      if (
+        !found.success ||
+        found.data.request.requestId !== job.id ||
+        found.data.request.worktreeId !== job.worktreeId ||
+        found.data.request.profileHash !== job.executionIsolationHash ||
+        (found.data.status === "bound" && found.data.binding.profileHash !== job.executionIsolationHash)
+      )
+        return ["native runtime acquisition is uncertain; exact request lookup requires owner action"];
+      job.runtimeBinding = found.data.status === "bound" ? found.data.binding : null;
+      job.runtimeReleased = found.data.status === "absent";
+      job.runtimeAcquireUncertain = false;
+      await saveRecord(ctx, r); // recovered routing is protected before any cleanup/release transport
+    }
+    if (!job.deviceCleanupComplete) {
+      if (job.createUncertain && !job.udid)
+        return ["native device allocation remains uncertain; owner investigation is required"];
+      if (job.udid) {
+        if (!job.runtimeBinding || job.runtimeBinding.profileHash !== job.executionIsolationHash)
+          return ["native runtime lease is missing; exact runtime cleanup requires owner action"];
+        const binding = job.runtimeBinding;
+        const udid = job.udid;
+        await bounded(NATIVE_LEASE_CLEANUP_MS, (ms) => resolveRuntime(native, binding, ms));
+        const errors = await bounded(NATIVE_DEVICE_CLEANUP_MS, (ms) =>
+          native.cleanup(binding, udid, job.worktreeId, ms),
+        );
+        if (errors.length) return errors;
+      }
+      job.deviceCleanupComplete = true;
+      await saveRecord(ctx, r); // a release retry must not require an already-deleted runtime's device transport
+    }
+    if (!job.runtimeReleased) {
+      if (!job.runtimeBinding || job.runtimeBinding.profileHash !== job.executionIsolationHash)
+        return ["native runtime lease is missing; exact lease release requires owner action"];
+      // release resolves its own exact binding and is idempotent for a verified released tombstone only.
+      // A generic unavailable/expired lease cannot be treated as verified absence.
+      const binding = job.runtimeBinding;
+      const errors = await bounded(NATIVE_LEASE_CLEANUP_MS, (ms) => native.release(binding, ms));
+      if (errors.length) return errors;
+      job.runtimeReleased = true;
+      await saveRecord(ctx, r);
+    }
+    if (native.now() > deadline) return ["native cleanup exceeded its shared deadline during state progress"];
+    return [];
+  } catch {
+    return ["recorded native runtime lease cleanup is unavailable or unverified"];
+  }
+}
 
 // Contract from Orca emulator skill and serve-sim AxSnapshot: bounded elements, normalized visible frames, exact labels/values.
 // An unknown/raw-pixel schema fails closed; no coordinate inference and no arbitrary raw emulator passthrough.
@@ -97,7 +190,7 @@ async function mirror(ctx: Ctx, r: WRecord, job: NativeJob, receipt: NativeRecei
   }
   await writeInWorktree(dest, "receipt.json", JSON.stringify(receipt, null, 2));
   const wm = await worktreeDir(r.worktree.path, ".wingmate");
-  await writeInWorktree(wm, "native-ui.json", JSON.stringify(r.nativeUiJobs, null, 2));
+  await writeInWorktree(wm, "native-ui.json", JSON.stringify(nativeJobViews(r.nativeUiJobs), null, 2));
 }
 
 async function requireCommittedHead(ctx: Ctx, r: WRecord, expected: string, pinnedHead?: string) {
@@ -188,6 +281,10 @@ export async function executeNativeUi(
     headSha: p.headSha,
     policyHash: p.policyHash,
     executionIsolationHash: policy.executionIsolationHash,
+    runtimeBinding: null,
+    runtimeAcquireUncertain: false,
+    runtimeReleased: true,
+    deviceCleanupComplete: true,
     recipeHash: recipeHash(p.recipe),
     requestedAt: intent.createdAt,
     status: "running",
@@ -219,8 +316,14 @@ export async function executeNativeUi(
     await writeFile(join(dir, name), data, { mode: 0o600 });
     artifacts.push({ name, hash: hash(data) });
   };
+  const ownedBinding = () => {
+    if (!job.runtimeBinding)
+      throw refused("native_runtime_lease_unavailable", "native runtime ownership has not been journaled");
+    return job.runtimeBinding;
+  };
   const checked = async (args: string[], env?: Record<string, string>) => {
-    const result = await native.simctl(args, timeout(), env);
+    const result = await native.simctl(ownedBinding(), args, timeout(), env);
+    timeout();
     // stdout/stderr stay protected and are never treated as a verdict. Do not echo potentially sensitive app logs to Linear.
     await record(
       `command-${artifacts.length}.json`,
@@ -242,7 +345,8 @@ export async function executeNativeUi(
   };
   const scoped = (args: string[]) => [...args, "--device", ownedUdid(), "--worktree", `id:${worktree.id}`];
   const observation = async () => {
-    const raw = await native.observe(ownedUdid(), worktree.id, timeout());
+    const raw = await native.observe(ownedBinding(), ownedUdid(), worktree.id, timeout());
+    timeout();
     if (!raw || raw.bundleId !== policy.bundleId || raw.pid !== appPid)
       throw refused(
         "native_foreground_unverified",
@@ -271,12 +375,22 @@ export async function executeNativeUi(
   const screenshot = async (n: number) => {
     await observation();
     const name = `step-${String(n).padStart(2, "0")}.png`;
-    await checked(["io", ownedUdid(), "screenshot", "--type=png", join(dir, name)]);
+    const bytes = await native.capture(
+      ownedBinding(),
+      ownedUdid(),
+      worktree.id,
+      NATIVE_CAPTURE_MAX_BYTES,
+      timeout(),
+    );
+    timeout();
     await observation();
-    const bytes = await readNoFollow(join(dir, name), 16 * 1024 * 1024 + 1);
-    if (bytes.length > 16 * 1024 * 1024 || !bytes.subarray(0, 8).equals(PNG))
+    if (
+      !Buffer.isBuffer(bytes) ||
+      bytes.length > NATIVE_CAPTURE_MAX_BYTES ||
+      !bytes.subarray(0, 8).equals(PNG)
+    )
       throw refused("native_screenshot_invalid", "native screenshot is absent, oversized or not PNG");
-    artifacts.push({ name, hash: hash(bytes) });
+    await record(name, bytes);
   };
   try {
     if (previous)
@@ -286,23 +400,35 @@ export async function executeNativeUi(
       );
     await requireCommittedHead(ctx, r, p.headSha);
     await prepareLaunch(ctx, r);
-    const isolation = await native.executionIsolation();
-    if (
-      isolation?.kind !== "dedicated-isolated-host" ||
-      isolation.profileHash !== policy.executionIsolationHash
-    )
+    job.runtimeAcquireUncertain = true;
+    job.runtimeReleased = false;
+    job.cleanupComplete = false;
+    await saveRecord(ctx, r); // even an interrupted acquire can reserve a lease; lookup must use this exact request
+    const acquired = await native.acquire(runtimeRequest(job), timeout());
+    if (acquired === null) {
+      job.runtimeAcquireUncertain = false;
+      job.runtimeReleased = true; // null explicitly proves no resources were acquired for this request
+      await saveRecord(ctx, r);
+    }
+    const binding = NativeRuntimeBindingSchema.safeParse(acquired);
+    if (!binding.success || binding.data.profileHash !== policy.executionIsolationHash)
       throw refused(
         "native_execution_unavailable",
         "native app execution requires a trusted isolated runtime; shared-host CoreSimulator is unsupported",
       );
+    job.runtimeBinding = binding.data;
+    job.runtimeAcquireUncertain = false;
+    await saveRecord(ctx, r); // persist the original runtime before any device allocation or transport
+    await resolveRuntime(native, ownedBinding(), timeout());
     const artifact = await verifiedArtifact(ctx.dirs, repo.orcaRepo, job.headSha, policy, ctx.now(), () => {
       timeout();
     });
     appHash = artifact.appHash;
-    if ((await native.bundleId(artifact.app, timeout())) !== policy.bundleId)
+    if ((await native.bundleId(ownedBinding(), artifact.app, timeout())) !== policy.bundleId)
       throw refused("native_bundle_mismatch", "artifact bundle does not match the pinned native policy");
     await requireCommittedHead(ctx, r, job.headSha);
     job.createUncertain = true;
+    job.deviceCleanupComplete = false;
     job.cleanupComplete = false;
     await saveRecord(ctx, r); // persist uncertainty before the only device allocation
     const made = await checked([
@@ -323,7 +449,11 @@ export async function executeNativeUi(
     await checked(["boot", job.udid]);
     await checked(["bootstatus", job.udid, "-b"]);
     await checked(["install", job.udid, artifact.app]);
-    await native.emulator(["attach", job.udid, "--worktree", `id:${r.worktree.id}`], timeout());
+    await native.emulator(
+      ownedBinding(),
+      ["attach", job.udid, "--worktree", `id:${r.worktree.id}`],
+      timeout(),
+    );
     const launched = await checked(
       ["launch", "--terminate-running-process", job.udid, policy.bundleId, ...policy.launchArgs],
       policy.testEnv,
@@ -344,7 +474,7 @@ export async function executeNativeUi(
         );
         await record(`ax-${n + 1}.json`, JSON.stringify(raw));
         if ("tapText" in step && point)
-          await native.emulator(scoped(["tap", String(point.x), String(point.y)]), timeout());
+          await native.emulator(ownedBinding(), scoped(["tap", String(point.x), String(point.y)]), timeout());
         else assertions++;
       }
       await screenshot(n + 1);
@@ -357,13 +487,9 @@ export async function executeNativeUi(
     error = errorText(e).slice(0, 2000);
     if (isTickAbort(e)) aborted = e;
   } finally {
-    if (job.udid) {
-      const cleanup = await ctx.nativeUi
-        .cleanup(job.udid, r.worktree.id)
-        .catch(() => ["native cleanup failed"]);
-      job.cleanupComplete = cleanup.length === 0;
-      if (cleanup.length) error = [error, ...cleanup].filter(Boolean).join("; ");
-    }
+    const cleanup = await cleanupJob(ctx, r, job);
+    job.cleanupComplete = cleanup.length === 0;
+    if (cleanup.length) error = [error, ...cleanup].filter(Boolean).join("; ");
   }
   if (!job.cleanupComplete) addAttention(r, "native_ui_cleanup_required");
   const receipt: NativeReceipt = {
@@ -376,6 +502,7 @@ export async function executeNativeUi(
     headSha: job.headSha,
     policyHash: job.policyHash,
     recipeHash: job.recipeHash,
+    runtimeBindingHash: job.runtimeBinding ? runtimeBindingHash(job.runtimeBinding) : null,
     appHash,
     appPid,
     udid: job.udid,
@@ -423,6 +550,7 @@ async function protectedReceipt(ctx: Ctx, r: WRecord, job: NativeJob): Promise<N
       receipt.headSha !== job.headSha ||
       receipt.policyHash !== job.policyHash ||
       receipt.recipeHash !== job.recipeHash ||
+      receipt.runtimeBindingHash !== (job.runtimeBinding ? runtimeBindingHash(job.runtimeBinding) : null) ||
       receipt.udid !== job.udid
     )
       throw new Error("receipt context");
@@ -477,7 +605,12 @@ export async function verifyNativeUiGate(
     !job ||
     job.status !== "succeeded" ||
     !job.receiptHash ||
+    !job.runtimeBinding ||
+    job.runtimeBinding.profileHash !== policy.executionIsolationHash ||
     !job.cleanupComplete ||
+    !job.deviceCleanupComplete ||
+    !job.runtimeReleased ||
+    job.runtimeAcquireUncertain ||
     job.createUncertain ||
     job.headSha !== current ||
     job.policyHash !== policyHash(policy)
@@ -507,13 +640,8 @@ export async function recoverNativeUi(ctx: Ctx, r: WRecord, stopping = false): P
   const unresolved: string[] = [];
   for (const job of r.nativeUiJobs) {
     if (job.status !== "running" && job.cleanupComplete) continue;
-    const isolation = await ctx.nativeUi?.executionIsolation().catch(() => null);
-    if (job.udid && ctx.nativeUi && isolation?.profileHash === job.executionIsolationHash) {
-      const errors = await ctx.nativeUi
-        .cleanup(job.udid, job.worktreeId)
-        .catch(() => ["native cleanup unavailable"]);
-      job.cleanupComplete = errors.length === 0;
-    } else if (!job.udid && !job.createUncertain) job.cleanupComplete = true;
+    const errors = await cleanupJob(ctx, r, job);
+    job.cleanupComplete = errors.length === 0;
     if (!job.cleanupComplete) {
       unresolved.push(`native:${job.id}`);
       addAttention(r, "native_ui_cleanup_required");
@@ -530,6 +658,7 @@ export async function recoverNativeUi(ctx: Ctx, r: WRecord, stopping = false): P
       headSha: job.headSha,
       policyHash: job.policyHash,
       recipeHash: job.recipeHash,
+      runtimeBindingHash: job.runtimeBinding ? runtimeBindingHash(job.runtimeBinding) : null,
       appHash: null,
       appPid: null,
       udid: job.udid,
