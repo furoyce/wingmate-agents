@@ -5,6 +5,7 @@ import { mkdir, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { type Intent, consumeIntent, outboxDirs, quarantineIntent, readIntentFiles } from "../kit/intents";
 import { readNoFollow, worktreeFile } from "../kit/local";
+import { readFinishSummary } from "../kit/summary";
 import { MARK } from "../linear/markers";
 import { renderQuestion } from "../linear/templates";
 import { OrcaError } from "../orca/cli";
@@ -19,7 +20,7 @@ import { LinearWrites } from "./linearWrites";
 import { syncMirror } from "./mirror";
 import { executeNativeUi, verifyNativeUiGate } from "./nativeUi";
 import type { Reconciled } from "./reconcile";
-import { coordinatorMarker, deliver } from "./resume";
+import { coordinatorMarker, deliver, persistInbox, sendPointerDetailed } from "./resume";
 import { startRole, verifyRoleGate } from "./roles";
 import { saveRecord } from "./save";
 import { addAttention, dropAttention, enterPipelineStage, stageOf, transition } from "./states";
@@ -223,8 +224,7 @@ async function finish(x: Run, i: Of<"finish">): Promise<void> {
   const { ctx, r } = x;
   if (r.stage !== "working") throw new WingmateError("stage_mismatch", `finish while ${r.stage}`);
   await assertNoLiveWorkers(ctx, r);
-  const sf = await worktreeFile(x.wt, i.payload.summaryFile);
-  if (!sf.ok) throw new WingmateError("file_invalid", sf.error);
+  await readFinishSummary(x.wt, i.payload.summaryFile);
   enterPipelineStage(ctx, r, "pr");
   const { publish } = await ctx.publishImpl();
   x.res.finished = await publish(ctx, r, x.issue, i, x.rec);
@@ -354,6 +354,37 @@ async function failed(x: Run, i: Intent, err: unknown): Promise<void> {
   const { ctx, r } = x;
   if (i.kind === "gate" && err instanceof WingmateError && err.code === "stage_prerequisite")
     return gateRefused(x, i, err);
+  if (i.kind === "finish" && err instanceof WingmateError && err.code === "summary_too_long") {
+    x.res.failed += 1;
+    if (x.opts.canDeliver === false) return; // keep it pending until a normal tick can deliver the refusal
+    const text = `finish was refused by the dispatcher: ${err.message}. ${err.nextStep}`;
+    const inbox = await persistInbox(ctx, r, "note", text, r.pipelineStage);
+    if (inbox === "unsafe") return;
+    const delivered =
+      inbox === "gone"
+        ? "exited"
+        : await sendPointerDetailed(
+            ctx,
+            r,
+            "note",
+            inbox,
+            `finish refused — read ${inbox.rel}, shorten the summary and run finish again`,
+            x.rec.liveness.get(r.identifier) ?? "exited",
+          );
+    // An exited coordinator is recovered only by advance's bounded liveness policy, never by an intent retry.
+    if (delivered === "deferred" || delivered === "exited") return;
+    x.res.resumed = true;
+    // Persist and deliver the correction before consuming: a failed or deferred pointer leaves the intent retryable.
+    await consumeIntent(x.wt, i.id);
+    await ctx.ledger.append({
+      at: ctx.now(),
+      issue: r.identifier,
+      type: "intent_failed",
+      data: { kind: i.kind, id: i.id, code: err.code, counted: false },
+    });
+    addNote(r, "finish refused: summary_too_long");
+    return;
+  }
   x.res.failed += 1;
   const code = errorCode(err);
   const consumed = CONSUMED_ON_FAILURE.has(code);

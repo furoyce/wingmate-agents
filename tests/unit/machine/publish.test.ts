@@ -87,6 +87,38 @@ const grantEntry = (createdAt: string, actorId: string | null, botActorId: strin
   }) satisfies LinearHistoryEntry;
 
 describe("publish guards (§13.3 d)", () => {
+  test("forged or edited oversized finish summaries refuse before Git or any publication write", async () => {
+    const { w, identifier, path } = await setup();
+    const r = await rec(w, identifier);
+    const reconciled = await reconcile(w.ctx);
+    const before = {
+      record: structuredClone(r),
+      linear: structuredClone(w.linear.writes),
+      journal: await w.ctx.journal.all(),
+    };
+    let gitReads = 0;
+    w.git.revParse = async () => {
+      gitReads++;
+      throw new Error("oversized summary must be refused before Git");
+    };
+    for (const summary of ["a".repeat(4001), "界".repeat(30000)]) {
+      writeFileSync(join(path, ".wingmate", "s.md"), summary);
+      await expect(publish(w.ctx, r, issueOf(w), finishIntent(identifier), reconciled)).rejects.toMatchObject(
+        {
+          code: "summary_too_long",
+          nextStep: expect.stringContaining("at most 4000"),
+        },
+      );
+      expect(gitReads).toBe(0);
+      expect(w.git.pushed).toEqual([]);
+      expect(w.gh.prs).toEqual([]);
+      expect(w.gh.repos).toEqual([]);
+      expect(w.linear.writes).toEqual(before.linear);
+      expect(await w.ctx.journal.all()).toEqual(before.journal);
+      expect(r).toEqual(before.record);
+    }
+  });
+
   test("secret in added line blocks push", async () => {
     // Review Focus 5
     const { w, identifier, path } = await setup();
@@ -174,11 +206,10 @@ describe("publish guards (§13.3 d)", () => {
 
   test("the completion comment's shorter summary is scanned as it will be posted, before anything is pushed", async () => {
     const { w, identifier, path } = await setup();
-    // a path-like token is no secret in the PR body; cut where the completion's summary ends, it reads as a keyed token
-    const token = "q7Zp3Lm9Xc2Vb8Nn/4Qw6Er1Ty5Ui0Op7/As9Df8Gh7Jk6Lz5";
-    const lead = `${"lorem ".repeat(242)}lorem.\ntoken: `;
-    expect(lead.length + token.indexOf("/As9") + 1).toBe(1500); // the cut falls right after the second slash
-    writeFileSync(join(path, ".wingmate", "s.md"), `${lead}${token}\n`);
+    // The full PR line is a placeholder; the shorter excerpt omits that suffix and must be scanned independently.
+    const token = "q7Zp3Lm9Xc2Vb8Nn4Qw6Er1Ty5Ui0Op7As9Df8Gh7Jk6Lz5";
+    const lead = `${"lorem ".repeat(235)}\ntoken: `;
+    writeFileSync(join(path, ".wingmate", "s.md"), `${lead}${token}${" notes".repeat(20)} example.invalid\n`);
     expect(await call(w, identifier)).toBe(false);
     expect(w.git.pushed).toEqual([]);
     expect(w.linear.writes.filter((x) => x.kind === "attachment")).toEqual([]);
@@ -512,6 +543,36 @@ describe("publish guards (§13.3 d)", () => {
 });
 
 describe("publish success and replay (§6.6, I4, I9)", () => {
+  test("an exact 4000-character summary reaches the PR intact and the completion excerpt ends at a word", async () => {
+    const { w, identifier, path } = await setup();
+    const lead = `${"word ".repeat(299)}edge`;
+    expect(lead.length).toBe(1499);
+    const summary = `${lead} continued ${"word ".repeat(497)}END`.padEnd(4000, ".");
+    expect(summary.length).toBe(4000);
+    writeFileSync(join(path, ".wingmate", "s.md"), summary);
+    const bodies: string[] = [];
+    const create = w.gh.prCreate.bind(w.gh);
+    w.gh.prCreate = async (repo, a) => {
+      bodies.push(a.body);
+      return create(repo, a);
+    };
+    expect(await call(w, identifier)).toBe(true);
+    expect(bodies[0]).toContain(`## Summary\n${summary}\n\n## Linear`);
+    const completion = completions(w)[0]?.body ?? "";
+    expect(completion).toContain(`\n\n${lead}…\n\nGates:`);
+    expect(completion).not.toContain("continued");
+    expect(completions(w)).toHaveLength(1);
+  });
+
+  test("a completion excerpt drops a crossing word whole and marks the omission", async () => {
+    const { w, identifier, path } = await setup();
+    const lead = "word ".repeat(299).trimEnd();
+    writeFileSync(join(path, ".wingmate", "s.md"), `${lead} unfinishedword and more detail`);
+    expect(await call(w, identifier)).toBe(true);
+    expect(completions(w)[0]?.body).toContain(`\n\n${lead}…\n\nGates:`);
+    expect(completions(w)[0]?.body).not.toContain("unfin");
+  });
+
   test("push → PR → attachment → one completion comment → Review-Ready + In Review → stage review", async () => {
     const { w, identifier, path } = await setup();
     w.git.changed.set(path, ["src/a.ts"]);

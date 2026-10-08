@@ -1,4 +1,6 @@
 // src/kit/protocol.ts — the coordinator protocol installed as <worktree>/.wingmate/PROTOCOL.md (§8.1, §8.2, §8.4).
+import { FINISH_SUMMARY_MAX } from "./summary";
+
 export const PROTOCOL_MD = `# Wingmate coordinator protocol
 You are the coordinator for one Linear issue. The dispatcher (deterministic code, no LLM) owns every Linear and GitHub write; you own planning, verification, implementation and evidence. Everything you report goes through \`wingmate issue <id> …\` verbs, which write intents into \`.wingmate/outbox/\` for the dispatcher.
 
@@ -12,7 +14,7 @@ intake → plan → planVerify → implement → validate → ui → security �
 - validate: include validation evidence and known limitations in the review spec; \`spawn --role code-reviewer --spec <file>\`, then END YOUR TURN. On its receipt, \`wingmate issue <id> gate validate --request <id>\` runs every pinned command (no --verdict) and requires the independent PASS at HEAD.
 - ui: only when UI paths changed; evidence via \`wingmate issue <id> ui-smoke --recipe <file>\`; otherwise \`gate ui --verdict NA --note "no UI change"\`.
 - security: \`spawn --role security-reviewer --spec <file>\`, then END YOUR TURN. On its receipt, \`wingmate issue <id> gate security --request <id>\` combines the computed checks with the independent verdict at HEAD.
-- finish: \`wingmate issue <id> finish --summary-file <file>\`; the dispatcher pushes, opens the PR and moves the issue to review. Then END YOUR TURN.
+- finish: write a concise summary of at most ${FINISH_SUMMARY_MAX} characters, covering the change, validation and material limitations. Do not add a \`## Summary\` heading; the PR renderer supplies it. Keep detailed evidence in \`.wingmate/evidence/\`. Run \`wingmate issue <id> finish --summary-file <file>\`; oversized summaries are refused. The dispatcher pushes, opens the PR and moves the issue to review. Then END YOUR TURN.
 
 ## Command reference
 Replace \`<id>\` with this issue's identifier. Write the named evidence/spec files before invoking a command. Every command returns JSON; a refusal explains the missing argument or prerequisite.

@@ -170,6 +170,19 @@ export async function sendPointer(
   pointer: string,
   liveness: Liveness,
 ): Promise<Delivery> {
+  const result = await sendPointerDetailed(ctx, r, kind, inbox, pointer, liveness);
+  return result === "deferred" ? "input_accepted" : result;
+}
+
+/** Unlike the compatibility wrapper, distinguish a non-idle wait where no pointer was sent. */
+export async function sendPointerDetailed(
+  ctx: Ctx,
+  r: WRecord,
+  kind: InboxKind,
+  inbox: Persisted,
+  pointer: string,
+  liveness: Liveness,
+): Promise<Delivery | "deferred"> {
   const handle = r.coordinator.terminalHandle;
   if (liveness === "exited" || !handle) return "exited";
   if (liveness === "working" && r.coordinator.childRunId && kind !== "answer") {
@@ -194,7 +207,7 @@ export async function sendPointer(
       type: "delivery_deferred",
       data: { kind },
     });
-    return "input_accepted";
+    return "deferred";
   }
   const receipt = await ctx.orca.terminalSend(handle, pointer, 10);
   await ctx.ledger.append({

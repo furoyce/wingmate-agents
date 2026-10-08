@@ -34,6 +34,8 @@ import { resolveRuntime, writeRuntime } from "../../../src/shared/runtime";
 import { newRecord } from "../../../src/state/records";
 
 const GIT_ID = ["-c", "user.name=t", "-c", "user.email=t@example.invalid"];
+// Real default-state kits may exist for this fixture's issue ID; never read their runtime receipts.
+const RUNTIME_KIT_ROOT = mkdtempSync(join(tmpdir(), "wm-issue-trusted-kit-"));
 const git = (wt: string, ...args: string[]) => run(["git", "-C", wt, ...GIT_ID, ...args]);
 const headOf = async (wt: string) => (await git(wt, "rev-parse", "HEAD")).stdout.trim();
 async function worktree(opts: { git?: boolean } = {}) {
@@ -129,7 +131,12 @@ const capture = async (fn: () => Promise<number>) => {
 };
 const runVerb = (wt: string, args: string[], deps: Partial<IssueDeps> = {}) =>
   capture(() =>
-    issueCommand(parseArgv(["issue", "JRF-404", ...args]), { cwd: wt, orca: noWorkers, ...deps }),
+    issueCommand(parseArgv(["issue", "JRF-404", ...args]), {
+      cwd: wt,
+      orca: noWorkers,
+      runtimeKitRoot: RUNTIME_KIT_ROOT,
+      ...deps,
+    }),
   );
 type Refusal = { ok: boolean; code: string; message: string; nextStep: string | null };
 const refusal = (r: { code: number; out: string }): Refusal => {
@@ -607,6 +614,32 @@ describe("wingmate issue", () => {
       kind: "finish",
       payload: { summaryFile: ".wingmate/s.md", title: "T", draft: true, repos: ["api"] },
     });
+  });
+
+  test("finish refuses oversized summaries without an intent, and accepts exactly 4000 characters", async () => {
+    const wt = await worktree({ git: true });
+    writeLaunch(wt, { baseSha: await headOf(wt) });
+    const h = await commit(wt, { "src/a.ts": "1\n" });
+    const local = await passGates(wt, h);
+    for (const [summary, length] of [
+      ["a".repeat(4001), "4001"],
+      ["🦉".repeat(2001), "4002"],
+      ["界".repeat(30000), "at least"],
+    ] as const) {
+      writeFileSync(join(wt, ".wingmate", "s.md"), summary);
+      const fail = refusal(await runVerb(wt, ["finish", "--summary-file", ".wingmate/s.md"]));
+      expect(fail.code).toBe("summary_too_long");
+      expect(fail.message).toContain(length);
+      expect(fail.message).toContain("maximum is 4000");
+      expect(fail.nextStep).toContain("shorten .wingmate/s.md");
+      expect(await listIntents(wt)).toEqual([]);
+      expect((await readLocal(wt)).gates).toEqual(local.gates);
+    }
+    // Preserve the former UTF-16 string limit, including multi-byte UTF-8 content.
+    writeFileSync(join(wt, ".wingmate", "s.md"), "🦉".repeat(2000));
+    const ok = await runVerb(wt, ["finish", "--summary-file", ".wingmate/s.md"]);
+    expect(ok.code).toBe(0);
+    expect(await listIntents(wt)).toHaveLength(1);
   });
 
   test("ask validates --recommend, --append/--reask, live workers and the question file; writes stage.json", async () => {
