@@ -1,7 +1,7 @@
 // tests/unit/ops/install.test.ts — §4.3 install: the exact automation argv, idempotent create-then-edit, never enabled without a
 // passing doctor, views only as the OAuth app (§11.5), credentials 0600; build, hash, link, views and doctor are injected.
 import { describe, expect, test } from "bun:test";
-import { lstatSync, mkdtempSync, readlinkSync, statSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdtempSync, readFileSync, readlinkSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readOnlyCtx } from "../../../src/cli/wire";
@@ -11,14 +11,67 @@ import { doctor } from "../../../src/ops/doctor";
 import {
   type InstallOptions,
   automationArgs,
+  defaultBuild,
   defaultSymlink,
   install,
   readInstallState,
+  supportedBuildBun,
 } from "../../../src/ops/install";
 import { upsertViews, viewDefinitions } from "../../../src/ops/views";
 import { WingmateError } from "../../../src/shared/errors";
 import { fakeExec } from "../../fakes/fakeExec";
 import { world } from "../../sim/harness";
+
+describe("compiled runtime compatibility", () => {
+  test("rejects runtimes affected by lost sandbox environment and unknown version output", () => {
+    for (const v of ["1.3.9", "1.3.10", "1.4.1", "", "garbage", "1.4.2-canary", "1.4.2\nextra"])
+      expect(supportedBuildBun(v)).toBe(false);
+    for (const v of ["1.4.2", "1.4.20", "1.5.0", "2.0.0", "1.4.2\n"]) expect(supportedBuildBun(v)).toBe(true);
+  });
+
+  test("unsupported compiler changes neither dependencies nor the installed executable", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "wm-old-compiler-"));
+    const output = join(dir, "wingmate");
+    writeFileSync(output, "previous executable");
+    const calls: string[][] = [];
+    await expect(
+      defaultBuild(dir, output, async (argv) => {
+        calls.push(argv);
+        return { code: 0, stdout: "1.3.9\n", stderr: "", timedOut: false, truncated: false };
+      }),
+    ).rejects.toMatchObject({ code: "bun_unsupported" });
+    expect(calls).toEqual([["bun", "--version"]]);
+    expect(readFileSync(output, "utf8")).toBe("previous executable");
+  });
+
+  test("supported compiler installs atomically with runtime project autoload disabled", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "wm-new-compiler-"));
+    const output = join(dir, "wingmate");
+    writeFileSync(output, "previous executable");
+    const calls: string[][] = [];
+    await defaultBuild(dir, output, async (argv) => {
+      calls.push(argv);
+      if (argv[1] === "build") {
+        expect(readFileSync(output, "utf8")).toBe("previous executable");
+        const temporary = argv[argv.indexOf("--outfile") + 1];
+        if (!temporary) throw new Error("no compiler output argument");
+        writeFileSync(temporary, "new executable");
+      }
+      return {
+        code: 0,
+        stdout: argv[1] === "--version" ? "1.4.2\n" : "",
+        stderr: "",
+        timedOut: false,
+        truncated: false,
+      };
+    });
+    expect(calls.map((a) => a[1])).toEqual(["--version", "install", "build"]);
+    for (const kind of ["dotenv", "bunfig", "tsconfig", "package-json"])
+      expect(calls[2]).toContain(`--no-compile-autoload-${kind}`);
+    expect(readFileSync(output, "utf8")).toBe("new executable");
+    expect(statSync(output).mode & 0o777).toBe(0o755);
+  });
+});
 
 describe("install", () => {
   test("automation args match §4.3 exactly and stay disabled unless --enable passed doctor", async () => {
