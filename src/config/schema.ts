@@ -1,5 +1,11 @@
 // src/config/schema.ts — Zod schema for config/projects.yaml (spec §10.1) and the defaults merge.
 import { z } from "zod";
+import {
+  NATIVE_ADMISSION_HEADROOM_MS,
+  NATIVE_CLEANUP_RESERVE_MS,
+  NATIVE_DELIVERY_RESERVE_MS,
+  NativePolicySchema,
+} from "../native/protocol";
 import { WingmateError } from "../shared/errors";
 const Argv = z.array(z.string().min(1)).min(1);
 // Legacy single argv stays accepted; execution always receives an explicit sequence, never shell text.
@@ -25,6 +31,7 @@ export const RepoSchema = z.object({
       dev: Argv.optional(),
       url: z.string().default(""),
       smokeRoutes: z.array(z.string()).default([]),
+      native: NativePolicySchema.optional(),
     })
     .default({ kind: "none" }),
   packageRoots: z.array(z.string()).default(["."]),
@@ -215,6 +222,23 @@ const deepMerge = <T extends object>(base: T, over: object | undefined): T => {
 export function withDefaults(raw: RawConfig): Config {
   const projects: Record<string, ProjectConfig> = {};
   for (const [key, p] of Object.entries(raw.projects)) {
+    // Match tickBudgetMs's 60-second precheck margin; reject configurations that could defer native requests forever.
+    const tickBudget = Math.max(30, raw.defaults.dispatcher.precheckTimeoutSec - 60) * 1000;
+    for (const [name, repo] of Object.entries(p.repos)) {
+      if (
+        repo.ui.native &&
+        repo.ui.native.timeoutMs +
+          NATIVE_CLEANUP_RESERVE_MS +
+          NATIVE_DELIVERY_RESERVE_MS +
+          NATIVE_ADMISSION_HEADROOM_MS >
+          tickBudget
+      )
+        throw new WingmateError(
+          "config_invalid",
+          `projects.${key}.repos.${name}.ui.native.timeoutMs cannot fit this dispatcher's tick budget with admission, cleanup and delivery reserves`,
+          "reduce native timeoutMs or increase defaults.dispatcher.precheckTimeoutSec",
+        );
+    }
     if (!p.repos[p.routing.default]) {
       throw new WingmateError(
         "config_invalid",

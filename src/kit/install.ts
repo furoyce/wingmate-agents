@@ -7,6 +7,7 @@ import { z } from "zod";
 import type { Config, ProjectConfig } from "../config/schema";
 import { DISPATCHER_GIT_ENV } from "../git/cli";
 import { verifyGitLinks } from "../git/trust";
+import { policyHash } from "../native/protocol";
 import { WingmateError, errorCode } from "../shared/errors";
 import { run } from "../shared/exec";
 import { readText, writeAtomic } from "../state/fs";
@@ -430,7 +431,11 @@ function launchFile(i: InstallInput, repo: Repo, w: Worktree): Launch {
     baseSha: w.baseSha,
     commonDir: w.gitCommonDir,
     pinnedGates: repo.gates,
-    ui: repo.ui,
+    ui: {
+      kind: repo.ui.kind,
+      paths: repo.ui.paths,
+      nativePolicyHash: repo.ui.native ? policyHash(repo.ui.native) : null,
+    },
     allowDeps: i.allowDeps ?? false,
     forbiddenPaths: [...i.project.forbiddenPaths, ...repo.forbiddenPaths],
     verifyCross: i.cfg.defaults.providers.verifyCross,
@@ -518,6 +523,7 @@ export async function installKit(i: InstallInput): Promise<InstallResult> {
   );
   for (const [k, v] of Object.entries(PROMPTS)) await writeAtomic(join(wm, "prompts", `${k}.md`), v);
   await writeAtomic(join(wm, "gates.json"), JSON.stringify({}, null, 2));
+  await writeAtomic(join(wm, "native-ui.json"), JSON.stringify(r.nativeUiJobs, null, 2));
   await writeAtomic(join(wm, "launch.json"), JSON.stringify(launchFile(i, repo, w), null, 2));
   await writeAtomic(join(wm, "ticket", "title.md"), i.issue.title);
   await writeAtomic(join(wm, "ticket", "description.md"), i.issue.description ?? "");
@@ -528,6 +534,8 @@ export async function installKit(i: InstallInput): Promise<InstallResult> {
   await writeLocal(wt, {
     record: {
       identifier: r.identifier,
+      cycle: r.cycle,
+      attempt: r.coordinator.attempt,
       stage: r.stage,
       pipelineStage: r.pipelineStage,
       provider: r.provider,

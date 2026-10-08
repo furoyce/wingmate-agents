@@ -1,6 +1,7 @@
 import { mkdir, readdir, rename } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
+import { NativeJobSchema } from "../native/protocol";
 import { WingmateError } from "../shared/errors";
 import type { Dirs } from "../shared/paths";
 import { createExclusive, readText, writeAtomic } from "./fs";
@@ -103,6 +104,7 @@ export const RecordSchema = z.object({
   ),
   handoffs: z.object({ total: z.number().int(), thisCycle: z.number().int() }),
   roleJobs: z.array(RoleJobSchema).default([]),
+  nativeUiJobs: z.array(NativeJobSchema).default([]),
   roleMode: z.enum(["legacy", "terminal-job"]).default("legacy"),
   questions: z.array(
     z.object({

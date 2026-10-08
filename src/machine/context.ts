@@ -2,6 +2,7 @@
 import { join } from "node:path";
 import type { Config } from "../config/schema";
 import type { Intent } from "../kit/intents";
+import { type NativeUiPort, nativeUiHost } from "../native/host";
 import type { GhPort, GitPort, LinearIssue, LinearPort, LinearTeamMeta, OrcaPort } from "../ports";
 import { run } from "../shared/exec";
 import { logger } from "../shared/logger";
@@ -59,6 +60,7 @@ export interface Ctx {
   orca: OrcaPort;
   git: GitPort;
   gh: GhPort;
+  nativeUi?: NativeUiPort;
   journal: Journal;
   ledger: Ledger;
   log: ReturnType<typeof logger>;
@@ -87,6 +89,7 @@ export interface BuildCtxInput {
   orca: OrcaPort;
   git: GitPort;
   gh: GhPort;
+  nativeUi?: NativeUiPort;
   home?: string;
   toolchainPaths?: string[];
   sweep?: SweepFn;
@@ -164,6 +167,7 @@ export async function buildCtx(o: BuildCtxInput): Promise<Ctx> {
     orca: o.orca,
     git: o.git,
     gh: o.gh,
+    nativeUi: o.nativeUi ?? nativeUiHost(home),
     home,
     journal: new Journal(o.dirs, o.clock),
     ledger: new Ledger(o.dirs),

@@ -3,6 +3,7 @@ import { readIntentFiles } from "../kit/intents";
 import { readMirrorQuestions, worktreeDir, writeMirror } from "../kit/local";
 import { errorCode } from "../shared/errors";
 import type { WRecord } from "../state/records";
+import { mirrorNativeJobs } from "./nativeUi";
 
 /** The pending `ask` intents; none when the outbox is unsafe (F7: it is never read then). */
 async function pendingAsks(wt: string): Promise<Set<string>> {
@@ -29,9 +30,12 @@ export async function syncMirror(r: WRecord): Promise<void> {
     ...r.questions.map((q) => ({ id: q.id, status: q.status, askedAt: q.askedAt })),
     ...(await readMirrorQuestions(wt)).filter((q) => !known.has(q.id) && asks.has(q.id)),
   ];
+  await mirrorNativeJobs(r);
   await writeMirror(wt, {
     record: {
       identifier: r.identifier,
+      cycle: r.cycle,
+      attempt: r.coordinator.attempt,
       stage: r.stage,
       pipelineStage: r.pipelineStage,
       provider: r.provider,

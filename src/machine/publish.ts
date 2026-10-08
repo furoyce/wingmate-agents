@@ -24,6 +24,7 @@ import { allowDepsGranted } from "./grants";
 import { isTickAbort } from "./guard";
 import { LinearWrites } from "./linearWrites";
 import type { Liveness } from "./liveness";
+import { verifyNativeUiGate } from "./nativeUi";
 import type { Reconciled } from "./reconcile";
 import { block } from "./release";
 import { type Persisted, persistInbox, relaunch, sendPointer } from "./resume";
@@ -238,6 +239,15 @@ async function guards(
       if (!(e instanceof WingmateError)) throw e;
       return stale(`${stage}: ${e.code}: ${e.message}`);
     }
+  }
+  try {
+    await verifyNativeUiGate(ctx, r, r.gates.ui.verdict ?? "", r.gates.ui.dispatchId, at, {
+      head: at,
+      changedPaths: changed,
+    });
+  } catch (e) {
+    if (!(e instanceof WingmateError)) throw e;
+    return stale(`ui: ${e.code}: ${e.message}`);
   }
   return validateFailure(r, wt, repo, at);
 }

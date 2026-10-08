@@ -24,11 +24,13 @@ export async function roleWavePending(a: Advance): Promise<boolean> {
   const { r } = a;
   if (r.roleMode !== "terminal-job" || r.stage !== "working" || !r.worktree || !existsSync(r.worktree.path))
     return false;
+  if (r.nativeUiJobs.some((j) => j.cycle === r.cycle && j.attempt === r.coordinator.attempt && !j.notified))
+    return true;
   if (r.roleJobs.some((j) => j.cycle === r.cycle && j.attempt === r.coordinator.attempt && rolePending(j)))
     return true;
   try {
     return (await readIntentFiles(r.worktree.path)).intents.some(
-      (i) => i.kind === "spawn" && i.issue === r.identifier,
+      (i) => (i.kind === "spawn" || i.kind === "native-ui") && i.issue === r.identifier,
     );
   } catch (e) {
     if (errorCode(e) !== "outbox_unsafe") throw e;
@@ -50,7 +52,7 @@ export async function agentProgressed(wt: string): Promise<boolean> {
   if (!t) return false;
   try {
     const via = (JSON.parse(t) as { via?: unknown }).via;
-    return via === "gate" || via === "ask";
+    return via === "gate" || via === "ask" || via === "native-ui";
   } catch {
     return false;
   }

@@ -11,6 +11,25 @@ const stillRunning = (pattern: string) =>
   Bun.spawnSync(["pgrep", "-f", pattern]).stdout.toString().trim() !== "";
 
 describe("exec.run", () => {
+  test("trusted host helpers can use an explicit environment without inheriting arbitrary parent values", async () => {
+    const previous = process.env.WM_NATIVE_PARENT_FIXTURE;
+    process.env.WM_NATIVE_PARENT_FIXTURE = "owner-only-fixture";
+    try {
+      const argv = [
+        "/bin/sh",
+        "-c",
+        'printf "%s|%s" "${WM_NATIVE_PARENT_FIXTURE-absent}" "$WM_NATIVE_CHILD_FIXTURE"',
+      ];
+      const isolated = await run(argv, { inheritEnv: false, env: { WM_NATIVE_CHILD_FIXTURE: "test-child" } });
+      expect(isolated.code).toBe(0);
+      expect(isolated.stdout).toBe("absent|test-child");
+      const existing = await run(argv, { env: { WM_NATIVE_CHILD_FIXTURE: "test-child" } });
+      expect(existing.stdout).toBe("owner-only-fixture|test-child");
+    } finally {
+      if (previous === undefined) Reflect.deleteProperty(process.env, "WM_NATIVE_PARENT_FIXTURE");
+      else process.env.WM_NATIVE_PARENT_FIXTURE = previous;
+    }
+  });
   test("captures stdout and exit code", async () => {
     const r = await run(["sh", "-c", "printf hello; exit 3"]);
     expect(r.stdout).toBe("hello");

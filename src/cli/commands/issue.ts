@@ -16,6 +16,7 @@ import { readText } from "../../state/fs";
 import { rolePending } from "../../state/roles";
 import type { Argv } from "../index";
 import { gateVerb, gitHead, markStale } from "./issue/gate";
+import { requestNativeUi } from "./issue/nativeUi";
 import { spawnVerb } from "./issue/spawn";
 import { readAgentContext, uiSmoke } from "./issue/uiSmoke";
 
@@ -79,7 +80,9 @@ async function workersLive(c: Ctx): Promise<string[]> {
   if (await dispatcherMode(c.cwd))
     return [
       ...(await readRoleJobs(c.cwd)).filter(rolePending).map((j) => j.id),
-      ...(await listIntents(c.cwd)).filter((i) => i.kind === "spawn").map((i) => i.id),
+      ...(await listIntents(c.cwd))
+        .filter((i) => i.kind === "spawn" || i.kind === "native-ui")
+        .map((i) => i.id),
     ];
   const runId = c.local.run?.childRunId ?? c.local.record.childRunId;
   if (!runId) return [];
@@ -322,6 +325,8 @@ const VERBS = new Map<string, (c: Ctx) => Promise<number>>([
     async (c) => {
       const recipe = flag(c.argv, "recipe");
       if (!recipe) return refuse("usage", "ui-smoke --recipe <file>");
+      if ((await readLaunch(c.cwd)).ui.kind === "ios")
+        return requestNativeUi(c.cwd, c.id, recipe, c.local, out, refuse, c.env.WINGMATE_ROLE);
       if (!c.orca.exec || !c.orca.agentContext) return noRunner("ui-smoke");
       return uiSmoke(c.cwd, c.id, recipe, out, refuse, c.orca.exec, c.orca.agentContext);
     },

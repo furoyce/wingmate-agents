@@ -97,6 +97,7 @@ export function guardedCtx(ctx: Ctx, check: (verb: string) => Promise<void>): Ct
     orca: guardMethods(ctx.orca, WRITE_VERBS.orca, check),
     git: guardMethods(ctx.git, WRITE_VERBS.git, check),
     gh: guardMethods(ctx.gh, WRITE_VERBS.gh, check),
+    ...(ctx.nativeUi ? { nativeUi: guardMethods(ctx.nativeUi, ["simctl", "emulator"], check) } : {}),
     sweep: async (paths, opts) => {
       await check("sweep");
       return ctx.sweep(paths, opts);

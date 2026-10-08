@@ -10,6 +10,8 @@ export interface RunOptions {
   cwd?: string;
   timeoutMs?: number;
   env?: Record<string, string>;
+  /** Trusted native host helpers receive an explicit environment, never inherited credentials. */
+  inheritEnv?: boolean;
   stdin?: string;
 }
 
@@ -81,7 +83,7 @@ export async function run(argv: string[], opts: RunOptions = {}): Promise<RunRes
   // not just the direct child. Detached children do not receive the terminal's Ctrl-C; that is
   // acceptable because run() serves the dispatcher and the `issue` verbs, not interactive humans.
   const proc = Bun.spawn(argv, {
-    env: childEnv(opts.env),
+    env: opts.inheritEnv === false ? (opts.env ?? {}) : childEnv(opts.env),
     stdout: "pipe",
     stderr: "pipe",
     detached: true,

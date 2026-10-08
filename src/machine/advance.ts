@@ -20,6 +20,7 @@ import { comments, reviewFeedback } from "./humans";
 import { LinearWrites } from "./linearWrites";
 import { coordinatorRow, roleHandles } from "./liveness";
 import { syncMirror } from "./mirror";
+import { mirrorNativeJobs, recoverNativeUi } from "./nativeUi";
 import { executeOutbox } from "./outbox";
 import type { Event, Reconciled } from "./reconcile";
 import { block, finishBlock, release, stopAgents } from "./release";
@@ -319,6 +320,40 @@ async function collectRoleJobs(a: Advance): Promise<StepOut> {
   return "next";
 }
 
+async function notifyNativeUi(a: Advance): Promise<StepOut> {
+  if (
+    a.ro ||
+    a.launched ||
+    a.budget.resumes <= 0 ||
+    a.live !== "idle" ||
+    a.r.stage !== "working" ||
+    !a.r.worktree
+  )
+    return "next";
+  const fresh = a.r.nativeUiJobs.filter(
+    (j) =>
+      !j.notified && j.status !== "running" && j.cycle === a.r.cycle && j.attempt === a.r.coordinator.attempt,
+  );
+  if (!fresh.length) return "next";
+  if (
+    a.r.roleJobs.some(rolePending) ||
+    (await readIntentFiles(a.r.worktree.path)).intents.some(
+      (i) => i.kind === "spawn" || i.kind === "native-ui",
+    )
+  )
+    return "next";
+  const text = `Dispatcher native UI results:\n${fresh.map((j) => `${j.id}: ${j.status}; evidence: ${j.evidencePath}`).join("\n")}\nRead .wingmate/native-ui.json and its evidence. Gate UI with --request <id>; a failed or unverifiable run cannot prove PASS. Native artifacts require trusted isolated-build provenance; never run repository build scripts or Orca emulator commands on the host.`;
+  if ((await deliver(a.ctx, a.r, "note", text, "idle", a.r.pipelineStage)) === "turn_started") {
+    for (const j of fresh) j.notified = true;
+    await mirrorNativeJobs(a.r);
+    a.budget.resumes -= 1;
+    a.s.resumes.push(a.r.identifier);
+    a.launched = true;
+    a.dirty = true;
+  }
+  return "next";
+}
+
 async function notifyRoleJobs(a: Advance): Promise<StepOut> {
   const { r } = a;
   if (
@@ -367,12 +402,20 @@ async function blockNotice(a: Advance): Promise<StepOut> {
 
 // C28: the allow-deps grant reaches launch.json before `comments` delivers an answer, so a resumed agent's `gate security` sees it
 const STEPS = [
+  async (a: Advance): Promise<StepOut> => {
+    if (a.r.nativeUiJobs.some((j) => j.status === "running" || !j.cleanupComplete)) {
+      await recoverNativeUi(a.ctx, a.r);
+      a.dirty = true;
+    }
+    return "next";
+  },
   rebind,
   overrides,
   blockNotice,
   replayClaim,
   collectRoleJobs,
   outbox,
+  notifyNativeUi,
   notifyRoleJobs,
   allowDepsGrant,
   waitForRoleJobs,

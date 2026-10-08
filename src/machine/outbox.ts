@@ -17,6 +17,7 @@ import type { Ctx } from "./context";
 import { isTickAbort } from "./guard";
 import { LinearWrites } from "./linearWrites";
 import { syncMirror } from "./mirror";
+import { executeNativeUi, verifyNativeUiGate } from "./nativeUi";
 import type { Reconciled } from "./reconcile";
 import { coordinatorMarker, deliver } from "./resume";
 import { startRole, verifyRoleGate } from "./roles";
@@ -64,7 +65,7 @@ interface Run {
 }
 
 /** Failures that drop the intent at once (the agent re-asks or re-runs the verb); everything else is retried. */
-const CONSUMED_ON_FAILURE = new Set(["secret_detected", "workers_live"]);
+const CONSUMED_ON_FAILURE = new Set(["secret_detected", "workers_live", "native_ui_conflict"]);
 const MAX_FAILURES = 3;
 const TEXT_MAX_BYTES = 64 * 1024;
 const EVIDENCE_MAX_BYTES = 2 * 1024 * 1024;
@@ -134,6 +135,7 @@ async function gate(x: Run, i: Of<"gate">): Promise<void> {
     throw new WingmateError("verdict_not_allowed", "NA applies only to ui");
   if (verdict !== "NA" && !i.payload.evidencePath)
     throw new WingmateError("evidence_required", `${stage} ${verdict} names no evidence file`);
+  if (stage === "ui") await verifyNativeUiGate(ctx, r, verdict, i.payload.dispatchId, i.payload.headSha);
   if (verdict === "PASS") await verifyRoleGate(ctx, r, stage, i.payload.dispatchId, i.payload.headSha);
   if (i.payload.evidencePath) await copyEvidence(x, i.payload.evidencePath);
   g.verdict = verdict;
@@ -281,6 +283,8 @@ async function followup(x: Run, i: Of<"followup">): Promise<void> {
 
 async function execute(x: Run, i: Intent): Promise<void> {
   switch (i.kind) {
+    case "native-ui":
+      return executeNativeUi(x.ctx, x.r, i, x.rec);
     case "spawn":
       return startRole(x.ctx, x.r, i);
     case "note":
@@ -377,7 +381,10 @@ async function runIntent(x: Run, i: Intent): Promise<boolean> {
     await execute(x, i);
   } catch (err) {
     if (isTickAbort(err)) throw err;
-    if (i.kind === "spawn" && ["roles_busy", "provider_unavailable"].includes(errorCode(err))) {
+    if (
+      ["spawn", "native-ui"].includes(i.kind) &&
+      ["roles_busy", "provider_unavailable", "native_ui_deferred"].includes(errorCode(err))
+    ) {
       addAttention(x.r, errorCode(err));
       return false; // ordinary backpressure never quarantines a valid request
     }
@@ -432,7 +439,7 @@ async function drain(x: Run, opts: OutboxOptions): Promise<void> {
     if (i.kind === "handoff" && !opts.canHandoff) break; // stays pending for a later tick
     if (i.kind === "finish" && !opts.canResume) break; // so does a finish: its refusal would be a resume (§8.1)
     if (
-      i.kind === "spawn" &&
+      (i.kind === "spawn" || i.kind === "native-ui") &&
       (opts.canDeliver === false ||
         !opts.canResume ||
         x.rec.partial ||
