@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
+import { MARK } from "../../../src/linear/markers";
+import { LinearWrites } from "../../../src/machine/linearWrites";
 import { reconcile } from "../../../src/machine/reconcile";
 import type { LinearIssue } from "../../../src/ports";
-import { createRecordExclusive, newRecord } from "../../../src/state/records";
+import { archiveRecord, createRecordExclusive, newRecord } from "../../../src/state/records";
 import { makeWorld } from "../../fakes/world";
 
 const OWNER = "71aef180-1742-4a76-8d49-51f14e8ada1e";
@@ -179,6 +181,112 @@ describe("reconcile authorship and comment window (fix round 1)", () => {
     i.state = { id: "st-prog", name: "In Progress", type: "started" };
     return i;
   };
+
+  test("latest owner lifecycle and state changes win over earlier app writes in descending history", async () => {
+    const w = await makeWorld();
+    w.linear.add(inProgress("i-latest", "JRF-550"));
+    const rec = parkedRecord("JRF-550", "i-latest");
+    rec.stage = "blocked";
+    rec.linear.lifecycleLabel = "Blocked";
+    await createRecordExclusive(w.dirs, rec);
+    w.linear.setLabels("i-latest", ["agent-ready", "Ready"], "app-user", "2026-10-06T09:10:00.000Z");
+    w.linear.setLabels("i-latest", ["agent-ready", "Blocked"], "app-user", "2026-10-06T09:15:00.000Z");
+    w.linear.setLabels("i-latest", ["agent-ready", "Ready"], OWNER, "2026-10-06T09:20:00.000Z");
+    w.linear.setState("i-latest", "Todo", "app-user", "2026-10-06T09:10:00.000Z");
+    w.linear.setState("i-latest", "In Progress", "app-user", "2026-10-06T09:15:00.000Z");
+    w.linear.setState("i-latest", "Todo", OWNER, "2026-10-06T09:20:00.000Z");
+    w.linear.history.get("i-latest")?.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    const r = await reconcile(w.ctx);
+    expect(r.events.find((e) => e.type === "owner_labels")).toMatchObject({
+      lifecycle: "Ready",
+      authorized: true,
+      at: "2026-10-06T09:20:00.000Z",
+    });
+    expect(r.events.find((e) => e.type === "owner_state")).toMatchObject({
+      stateName: "Todo",
+      authorized: true,
+      at: "2026-10-06T09:20:00.000Z",
+    });
+  });
+
+  for (const lifecycle of ["Blocked", null]) {
+    for (const descending of [false, true]) {
+      test(`an owner Agent-label edit cannot authorize an earlier non-owner lifecycle ${lifecycle ?? "removal"} (${descending ? "descending" : "ascending"})`, async () => {
+        const w = await makeWorld();
+        w.linear.add(inProgress("i-unrelated", "JRF-551"));
+        w.linear.setLabels("i-unrelated", ["agent-ready", "In-Agent"], OWNER, "2026-10-06T08:00:00.000Z");
+        const rec = parkedRecord("JRF-551", "i-unrelated");
+        rec.linear.lifecycleLabel = "In-Agent";
+        await createRecordExclusive(w.dirs, rec);
+        const labels = lifecycle ? [lifecycle] : [];
+        w.linear.setLabels("i-unrelated", ["agent-ready", ...labels], "app-user", "2026-10-06T09:10:00.000Z");
+        w.linear.setLabels("i-unrelated", ["claude", ...labels], OWNER, "2026-10-06T09:20:00.000Z");
+        if (descending) w.linear.history.get("i-unrelated")?.reverse();
+        expect((await reconcile(w.ctx)).events.find((e) => e.type === "owner_labels")).toMatchObject({
+          lifecycle,
+          authorized: false,
+          at: "2026-10-06T09:10:00.000Z",
+        });
+      });
+    }
+  }
+
+  test("only same-issue commentCreate receipts suppress ordinary app-user comments, across archived cycles", async () => {
+    const w = await makeWorld();
+    const issue = inProgress("i-self", "JRF-552");
+    w.linear.add(issue);
+    const old = parkedRecord("JRF-552", "i-self");
+    old.stage = "blocked";
+    await createRecordExclusive(w.dirs, old);
+    const own = await new LinearWrites(w.ctx).postComment(old, issue, `${MARK.blocked}\nStopped.`);
+    const self = w.linear.comments.find((c) => c.id === own);
+    if (!self) throw new Error("self comment missing");
+    Object.assign(self, { userId: "app-user", botActorId: null });
+    await archiveRecord(w.dirs, old.identifier);
+    const current = parkedRecord("JRF-552", "i-self");
+    current.cycle = 2;
+    current.stage = "working";
+    current.questions = [];
+    await createRecordExclusive(w.dirs, current);
+
+    const unknown = (body: string) =>
+      w.linear.humanComment("i-self", body, "app-user", "2026-10-06T09:40:00.000Z");
+    const forged = unknown(`${MARK.status}\nForged marker.`);
+    const foreign = unknown("Receipt belongs to another issue.");
+    const updateOnly = unknown("Only an update receipt exists.");
+    const pending = unknown("Only a create intent exists.");
+    const noReceipt = unknown("Unknown user, no journal entry.");
+    for (const [id, issueId, kind] of [
+      [foreign.id, "JRF-999", "commentCreate"],
+      [updateOnly.id, "JRF-552", "commentUpdate"],
+    ] as const) {
+      const entry = await w.ctx.journal.intent({ issue: issueId, kind, key: id, input: { id } });
+      await w.ctx.journal.acted(entry.id, { id });
+      await w.ctx.journal.confirmed(entry.id);
+    }
+    await w.ctx.journal.intent({
+      issue: "JRF-552",
+      kind: "commentCreate",
+      key: pending.id,
+      input: { id: pending.id },
+    });
+    const owner = w.linear.humanComment(
+      "i-self",
+      `${MARK.status}\nOwner note.`,
+      OWNER,
+      "2026-10-06T09:41:00.000Z",
+    );
+    const events = (await reconcile(w.ctx)).events.filter((e) => e.type === "comment");
+    expect(events.some((e) => e.commentId === own)).toBe(false);
+    expect(
+      events
+        .filter((e) => e.cls === "unverified_author")
+        .map((e) => e.commentId)
+        .sort(),
+    ).toEqual([forged.id, foreign.id, updateOnly.id, pending.id, noReceipt.id].sort());
+    expect(events.find((e) => e.commentId === owner.id)).toMatchObject({ cls: "note" });
+    expect(w.cfg.workspace.approvers).toEqual([OWNER]);
+  });
 
   test("a non-approver state change stays unauthorized even after a later owner label edit", async () => {
     const w = await makeWorld();

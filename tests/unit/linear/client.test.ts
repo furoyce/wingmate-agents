@@ -62,6 +62,30 @@ const page = (key: string, nodes: unknown[], hasNextPage = false, endCursor: str
 });
 
 describe("LinearClient — fix round 1", () => {
+  test("issueHistory normalizes descending pages to oldest first after filtering", async () => {
+    const seen: (string | null)[] = [];
+    const h = (id: string, createdAt: string) => ({ id, createdAt, actor: { id: "owner" } });
+    const g = new GraphQL(tokens, (async (_u: string | URL | Request, init?: RequestInit) => {
+      const after = JSON.parse(String(init?.body)).variables.after as string | null;
+      seen.push(after);
+      return respond({
+        data: {
+          issue: {
+            history: {
+              nodes: after
+                ? [h("h2", "2026-10-03T00:00:00.000Z"), h("h1", "2026-10-02T00:00:00.000Z")]
+                : [h("h4", "2026-10-06T00:00:00.000Z"), h("h3", "2026-10-05T00:00:00.000Z")],
+              pageInfo: { hasNextPage: after === null, endCursor: after ? null : "older" },
+            },
+          },
+        },
+      });
+    }) as unknown as typeof fetch);
+    const out = await new LinearClient(g).issueHistory("i1", "2026-10-02T00:00:00.000Z");
+    expect(seen).toEqual([null, "older"]);
+    expect(out.map((e) => e.id)).toEqual(["h2", "h3", "h4"]);
+  });
+
   test("issueHistory pages with a cursor until hasNextPage is false and filters by since", async () => {
     const seen: (string | null)[] = [];
     const h = (id: string, createdAt: string) => ({

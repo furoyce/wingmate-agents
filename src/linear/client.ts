@@ -277,7 +277,7 @@ export class LinearClient implements LinearPort {
       out.push(...d.issue.history.nodes.filter((h) => h.createdAt > sinceIso).map(toHistory));
       after = d.issue.history.pageInfo.hasNextPage ? d.issue.history.pageInfo.endCursor : null;
     } while (after);
-    return out;
+    return out.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   }
 
   async teamMeta(teamKey: string): Promise<LinearTeamMeta> {
