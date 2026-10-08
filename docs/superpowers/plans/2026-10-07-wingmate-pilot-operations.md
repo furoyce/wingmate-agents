@@ -101,9 +101,9 @@ returns history newest first despite `orderBy: createdAt`. Reconciliation must u
 chronological event selection, without giving app identities or body markers owner authority. The coordinator command
 reference also needs complete gate examples and the explicit ask-first intake rule from spec §8.3.
 The event and protocol correction passed 852 tests with zero failures (73 files, 13,907 assertions), TypeScript,
-Biome and diff checks. Live history ordering was verified through a read-only app query. The scratch coordinator
-received one bounded guidance message to finish planning and use the ask-first question; this attempt therefore
-includes assisted intake and must not be described as an entirely unassisted workflow.
+Biome and diff checks. Live history ordering was verified through a read-only app query. One bounded guidance prompt
+to finish planning and use the ask-first question was accepted by Orca; submission was not yet proven. If delivered,
+this attempt includes assisted intake and must not be described as an entirely unassisted workflow.
 
 ## Parallel validation fixes
 
