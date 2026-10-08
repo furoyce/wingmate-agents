@@ -4,6 +4,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { writeIntent } from "../../src/kit/intents";
+import { OrcaError } from "../../src/orca/cli";
 import { type WRecord, readRecord, writeRecord } from "../../src/state/records";
 import { OWNER, type World, advance, labeledByOwner, runTick, todo, world } from "./harness";
 
@@ -151,6 +152,80 @@ describe("§7.1 step 4: an answer whose turn is not confirmed", () => {
 });
 
 describe("§7.2 owner notes", () => {
+  for (const receipt of ["turn_started", "input_accepted"] as const) {
+    test(`two owner notes start at most one turn per tick after ${receipt}`, async () => {
+      const w = await world();
+      const r = await claimed(w);
+      idleNow(w, r);
+      w.orca.nextSendStage = receipt;
+      advance(w, 5);
+      const first = w.linear.humanComment("i1", "Keep the existing scoring API.", OWNER, w.ctx.now());
+      advance(w, 1);
+      const second = w.linear.humanComment("i1", "Retain the tie tests too.", OWNER, w.ctx.now());
+      const n = sends(w);
+      let resumed = false;
+      w.orca.onCall = (verb) => {
+        if (verb === "terminalSend") resumed = true;
+        if (verb === "terminalWait" && resumed)
+          throw new OrcaError("timeout", "a second owner note waited on stale idle liveness");
+      };
+      expect((await runTick(w)).resumes).toEqual(["JRF-501"]);
+      expect((await rec(w)).linear.lastSeenCommentAt).toBe(first.createdAt);
+      expect(sends(w)).toBe(n + 1);
+      expect(inboxTexts(r, "note-").filter((t) => t.includes(first.body))).toHaveLength(1);
+      expect(inboxTexts(r, "note-").some((t) => t.includes(second.body))).toBe(false);
+
+      w.orca.onCall = null;
+      idleNow(w, r);
+      advance(w, 5);
+      expect((await runTick(w)).resumes).toEqual(["JRF-501"]);
+      expect((await rec(w)).linear.lastSeenCommentAt).toBe(second.createdAt);
+      expect(sends(w)).toBe(n + 2);
+      expect(inboxTexts(r, "note-").filter((t) => t.includes(second.body))).toHaveLength(1);
+      w.orca.setAgentState(r.worktree?.id ?? "", r.coordinator.paneKey ?? "", "working", w.ctx.now());
+      advance(w, 5);
+      await runTick(w);
+      expect(sends(w)).toBe(n + 2);
+    });
+  }
+
+  for (const deferredBy of ["budget", "idle-wait"] as const) {
+    test(`a note deferred by ${deferredBy} stays unseen and spends no resume`, async () => {
+      const w = await world();
+      const r = await claimed(w);
+      idleNow(w, r);
+      advance(w, 5);
+      const note = w.linear.humanComment("i1", "Keep the existing scoring API.", OWNER, w.ctx.now());
+      advance(w, 1);
+      const later = w.linear.humanComment("i1", "Retain the tie tests too.", OWNER, w.ctx.now());
+      const n = sends(w);
+      if (deferredBy === "budget") w.cfg.defaults.dispatcher.resumesPerTick = 0;
+      else {
+        w.orca.nextWaitSatisfied = false;
+        let waits = 0;
+        w.orca.onCall = (verb) => {
+          if (verb === "terminalWait" && ++waits > 1) w.orca.nextWaitSatisfied = true;
+        };
+      }
+      expect((await runTick(w)).resumes).toEqual([]);
+      expect((await rec(w)).linear.lastSeenCommentAt).toBe(r.linear.lastSeenCommentAt);
+      expect(sends(w)).toBe(n);
+      expect(inboxTexts(r, "note-").some((t) => t.includes(later.body))).toBe(false);
+      w.orca.onCall = null;
+      w.cfg.defaults.dispatcher.resumesPerTick = 3;
+      w.orca.nextWaitSatisfied = true;
+      advance(w, 1);
+      expect((await runTick(w)).resumes).toEqual(["JRF-501"]);
+      expect((await rec(w)).linear.lastSeenCommentAt).toBe(note.createdAt);
+      expect(sends(w)).toBe(n + 1);
+      idleNow(w, r);
+      advance(w, 1);
+      expect((await runTick(w)).resumes).toEqual(["JRF-501"]);
+      expect((await rec(w)).linear.lastSeenCommentAt).toBe(later.createdAt);
+      expect(sends(w)).toBe(n + 2);
+    });
+  }
+
   test("a working coordinator gets the note persisted in its inbox and a pointer; with a child Run it goes to the Run mailbox", async () => {
     const w = await world();
     const r = await claimed(w);
@@ -164,10 +239,11 @@ describe("§7.2 owner notes", () => {
     const cur = await rec(w);
     cur.coordinator.childRunId = "run_1";
     await writeRecord(w.dirs, cur);
+    w.cfg.defaults.dispatcher.resumesPerTick = 0; // mailbox notes enqueue without starting a turn
     advance(w, 5);
     w.linear.humanComment("i1", "and keep the old one", OWNER, w.ctx.now());
     advance(w, 5);
-    await runTick(w);
+    expect((await runTick(w)).resumes).toEqual([]);
     expect(w.orca.calls.filter((c) => c.verb === "orchestrationSend")).toHaveLength(1);
     expect((await w.ctx.ledger.readIssue("JRF-501")).some((e) => e.type === "note_enqueued")).toBe(true);
   });

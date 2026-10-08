@@ -7,9 +7,10 @@ import { listIntents, writeIntent } from "../../src/kit/intents";
 import { readLocal, writeLocal } from "../../src/kit/local";
 import { readRoleJobs } from "../../src/kit/roles";
 import { roleJobDir, startRole, verifyRoleGate } from "../../src/machine/roles";
+import { OrcaError } from "../../src/orca/cli";
 import { run } from "../../src/shared/exec";
 import { readRecord, writeRecord } from "../../src/state/records";
-import { type World, advance, labeledByOwner, runTick, todo, world } from "./harness";
+import { OWNER, type World, advance, labeledByOwner, runTick, todo, world } from "./harness";
 
 const ID = "JRF-501";
 function required<T>(value: T | null | undefined): T {
@@ -101,6 +102,51 @@ async function committedSource(w: World, wt: string) {
 }
 
 describe("slice 2 dispatcher role relay", () => {
+  test("a role-result resume defers an owner note until a fresh tick without losing notification", async () => {
+    const { w, wt } = await setup();
+    const intent = await request(wt);
+    advance(w, 5);
+    await runTick(w);
+    let r = await record(w);
+    done(w, r, intent.id);
+    const cursor = r.linear.lastSeenCommentAt;
+    advance(w, 5);
+    const note = w.linear.humanComment("i1", "Keep the test scope bounded.", OWNER, w.ctx.now());
+    const callsBefore = w.orca.calls.length;
+    let resumed = false;
+    w.orca.onCall = (verb) => {
+      if (verb === "terminalSend") resumed = true;
+      if (verb === "terminalWait" && resumed)
+        throw new OrcaError("timeout", "a second wait used stale idle liveness after the resume");
+    };
+
+    expect((await runTick(w)).resumes).toEqual([ID]);
+    r = await record(w);
+    expect(r.roleJobs[0]).toMatchObject({
+      id: intent.id,
+      status: "succeeded",
+      verdict: "PASS",
+      notified: true,
+    });
+    expect(r.linear.lastSeenCommentAt).toBe(cursor);
+    expect(w.orca.calls.slice(callsBefore).filter((c) => c.verb === "terminalWait")).toHaveLength(1);
+    expect(w.orca.calls.slice(callsBefore).filter((c) => c.verb === "terminalSend")).toHaveLength(1);
+
+    // The next tick reads the now-idle coordinator again and delivers the still-unseen note once.
+    w.orca.onCall = null;
+    w.orca.setAgentState(required(r.worktree).id, required(r.coordinator.paneKey), "done", w.ctx.now());
+    advance(w, 5);
+    await runTick(w);
+    r = await record(w);
+    expect(r.linear.lastSeenCommentAt).toBe(note.createdAt);
+    expect(r.roleJobs[0]?.notified).toBe(true);
+    expect(w.orca.calls.slice(callsBefore).filter((c) => c.verb === "terminalSend")).toHaveLength(2);
+    advance(w, 5);
+    await runTick(w);
+    expect(w.orca.calls.slice(callsBefore).filter((c) => c.verb === "terminalSend")).toHaveLength(2);
+    expect(creates(w)).toHaveLength(2); // coordinator + original reviewer, no relaunch or duplicate role
+  });
+
   for (const role of ["code-reviewer", "security-reviewer"]) {
     test(`${role} refuses uncommitted tracked source before creating a terminal`, async () => {
       const { w, r, wt } = await setup();
