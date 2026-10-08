@@ -1,7 +1,7 @@
 // src/cli/wire.ts — the only place a live Ctx is built (Tasks 12 and 13 use it too).
 import { lstat } from "node:fs/promises";
 import { join } from "node:path";
-import { loadConfig } from "../config/load";
+import { loadConfig, selectedConfigPath } from "../config/load";
 import { GhCli } from "../gh/cli";
 import { GitCli } from "../git/cli";
 import { TokenStore } from "../linear/auth";
@@ -76,7 +76,8 @@ export async function buildRealCtx(o: RealCtxOptions = { readOnly: false }): Pro
   const dirs = homeDirs();
   const clock = new SystemClock();
   const tokens = await linearTokens(o, dirs, clock);
-  const cfg = await loadConfig();
+  const configPath = await selectedConfigPath();
+  const cfg = await loadConfig(configPath);
   // REL-5: the deadline `tick` derives from the same start, so no Retry-After is waited past it
   const deadline = o.startedAt === undefined ? null : tickDeadline(cfg, o.startedAt);
   // Ruling R17: 20 s per request and two retries keep a hung Linear well inside the 180 s tick budget
@@ -103,5 +104,5 @@ export async function buildRealCtx(o: RealCtxOptions = { readOnly: false }): Pro
     gh: new GhCli(),
     ...(teamMeta ? { teamMeta } : {}),
   });
-  return Object.assign(o.readOnly ? readOnlyCtx(ctx) : ctx, { tokens, graphql, linearDown });
+  return Object.assign(o.readOnly ? readOnlyCtx(ctx) : ctx, { tokens, graphql, linearDown, configPath });
 }

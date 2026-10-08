@@ -7,6 +7,7 @@ import { createHash } from "node:crypto";
 import { chmod, lstat, mkdir, readFile, rename, symlink } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { z } from "zod";
+import { ConfigPathSchema, selectedConfigPath } from "../config/load";
 import type { Config } from "../config/schema";
 import { shellQuote } from "../kit/settings";
 import { readCredentials, writeCredentials } from "../linear/auth";
@@ -29,6 +30,8 @@ export const InstallStateSchema = z.object({
   viewUrls: z.array(z.string()),
   installedAt: z.string(),
   enabled: z.boolean(),
+  /** Absent on legacy installs, which keep their original cwd-based precheck. */
+  configPath: ConfigPathSchema.optional(),
 });
 export type InstallState = z.infer<typeof InstallStateSchema>;
 export interface InstallResult extends InstallState {
@@ -46,7 +49,11 @@ export const AUTOMATION_PROMPT =
 const VERSION = /^[0-9A-Za-z][0-9A-Za-z.+-]{0,63}$/;
 
 /** The precheck line Orca runs (D15): the whole tick, which never exits 0. */
-export const precheckCommand = (binPath: string): string => `${shellQuote([binPath])} tick --precheck`;
+export const precheckCommand = (binPath: string, configPath?: string): string => {
+  if (configPath !== undefined && !ConfigPathSchema.safeParse(configPath).success)
+    throw new WingmateError("config_path_invalid", "precheck config path is not an absolute safe path");
+  return `${configPath === undefined ? "" : `${shellQuote(["/usr/bin/env", `WINGMATE_CONFIG=${configPath}`])} `}${shellQuote([binPath])} tick --precheck`;
+};
 
 /** §4.3 exactly: `orca automations create …` (the client adds `--json`); `--disabled` unless `enabled`. */
 export function automationArgs(
@@ -54,6 +61,7 @@ export function automationArgs(
   binPath: string,
   workspaceRef: string,
   enabled: boolean,
+  configPath?: string,
 ): string[] {
   const d = cfg.defaults.dispatcher;
   return [
@@ -69,7 +77,7 @@ export function automationArgs(
     "existing",
     "--fresh-session",
     "--precheck",
-    precheckCommand(binPath),
+    precheckCommand(binPath, configPath),
     "--precheck-timeout",
     String(d.precheckTimeoutSec),
     "--missed-run-grace-minutes",
@@ -169,6 +177,10 @@ async function versionOf(worktreePath: string): Promise<string> {
 }
 
 export async function install(ctx: Ctx, o: InstallOptions): Promise<InstallResult> {
+  // Only the config provenance captured while building this operator context selects the installed precheck.
+  const configPath = ctx.configPath === undefined ? undefined : await selectedConfigPath(ctx.configPath);
+  if (configPath !== ctx.configPath)
+    throw new WingmateError("config_path_invalid", "loaded config path changed since context creation");
   if ((o.clientId === undefined) !== (o.clientSecret === undefined))
     throw new WingmateError("usage", "--client-id and --client-secret go together");
   if (o.clientId !== undefined && o.clientSecret !== undefined) {
@@ -188,7 +200,7 @@ export async function install(ctx: Ctx, o: InstallOptions): Promise<InstallResul
   const prev = await readInstallState(ctx.dirs).catch(() => null);
   const named = (await ctx.orca.automationsList()).filter((a) => a.name === AUTOMATION_NAME);
   const current = named.find((a) => a.id === prev?.automationId) ?? named[0];
-  const flags = automationArgs(ctx.cfg, binPath, `id:${wt.repoId}::${wt.path}`, false).slice(2);
+  const flags = automationArgs(ctx.cfg, binPath, `id:${wt.repoId}::${wt.path}`, false, configPath).slice(2);
   let automationId: string;
   if (current) {
     await ctx.orca.automationsEdit(current.id, flags);
@@ -215,6 +227,7 @@ export async function install(ctx: Ctx, o: InstallOptions): Promise<InstallResul
     viewUrls,
     installedAt: ctx.now(),
     enabled: false,
+    ...(configPath === undefined ? {} : { configPath }),
   };
   await writeAtomic(statePath(ctx.dirs), JSON.stringify(state, null, 2));
   if (o.enable) {

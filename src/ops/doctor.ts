@@ -200,7 +200,12 @@ async function automationPresent(ctx: Ctx): Promise<{ ok: boolean; detail: strin
     diffs.push(`id ${a.id} is not install.json's ${inst.automationId ?? "null"}`);
   if (a.name !== AUTOMATION_NAME) diffs.push("name");
   if (a.prompt != null && a.prompt !== AUTOMATION_PROMPT) diffs.push("prompt");
-  if (a.precheckCommand !== undefined && a.precheckCommand !== precheckCommand(inst.binPath))
+  if (inst.configPath !== undefined && ctx.configPath !== inst.configPath)
+    diffs.push("loaded config path differs from install.json");
+  if (
+    (inst.configPath !== undefined || a.precheckCommand !== undefined) &&
+    a.precheckCommand !== precheckCommand(inst.binPath, inst.configPath)
+  )
     diffs.push("precheck");
   if (a.precheckTimeoutSec != null && a.precheckTimeoutSec !== ctx.cfg.defaults.dispatcher.precheckTimeoutSec)
     diffs.push(`precheck timeout ${a.precheckTimeoutSec}`);

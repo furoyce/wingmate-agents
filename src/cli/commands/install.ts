@@ -25,6 +25,7 @@ export interface InstallCommandDeps extends OpsDeps {
 function print(r: InstallResult, out: (l: string) => void, cfg: Parameters<typeof viewRecipe>[0]): void {
   out(`installed wingmate ${r.version}`);
   out(`  binary      ${r.binPath} (sha256 ${r.sha256.slice(0, 16)}…)`);
+  if (r.configPath) out(`  config      ${r.configPath}`);
   out(`  worktree    ${r.worktreeId}`);
   out(`  automation  ${r.automationId ?? "none"} (${r.enabled ? "enabled" : "disabled"})`);
   if (r.repoSettings.length) {

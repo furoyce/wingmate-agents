@@ -25,6 +25,8 @@ wingmate doctor [--quick]                         # checks Linear, Orca, the ins
 
 Run them where `config/projects.yaml` is (the `wingmate-dispatcher` worktree or any checkout of this repository), or
 set `WINGMATE_CONFIG`. A FAIL line from `doctor` keeps `wingmate install --enable` from turning the automation on.
+New installs pin the actual config file's canonical path into the automation precheck. Use that same config for
+operator commands; doctor blocks a different selection. Trusted file contents may change normally without reinstalling.
 
 ## Documentation
 
