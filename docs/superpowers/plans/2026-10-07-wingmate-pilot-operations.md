@@ -79,43 +79,52 @@ Live acceptance cannot be reported complete from simulations or missing credenti
 
 ## Current state
 
-PR #2 engineering validation passed 839 tests with zero failures (73 files, 13,838 assertions), TypeScript, Biome,
-diff checks, compiled build and binary config validation. New kits use dispatcher-owned reviewers and method loop;
-legacy kits remain compatible. The installed automation remains disabled. PR #3 merged the runtime correction at
-`46d8b500d38abc623e66b8ca1a104c4e6ff6ae87`; the merged tree matched the tested head. The dedicated dispatcher was
-fast-forwarded and installed disabled at `2026-10-08T03:20:31.069Z`, binary SHA-256
-`0d4e5ed2adf9ccad70d59f43dd8a4a7c53ae92993a1b2cb2d4b805a0b27661f5`.
-Full doctor at `2026-10-08T03:21:47.992Z` passed every blocking check, including ten blocked and seven required allowed
-sandbox paths and notification confirmation. Evidence and hashed receipts are in
-`~/.local/share/wingmate/evidence/runtime-fix-20261008/`. JRF-417 was requeued through Todo/Ready; cycle 1 was archived,
-cycle 2 reused its clean worktree with a fresh coordinator and refreshed kit, and intake passed. Full scratch completion,
-JRF-404 ask/park/resume, native iOS UI relay and the other three repository pilots remain pending.
-Do not enable the automation merely because the engineering checks are green.
+Remote `main` includes the dispatcher role relay (PR #2, 839 tests), Bun correction (PR #3, 845), Linear reconciliation
+and ask-first guidance (PR #4, 852), disabled native UI foundation (PR #5, 871), per-repository trusted runtimes
+(PR #6, 888), and configuration pinning (PR #7, 893). Each merge preserved the exact tested tree. The latest implementation
+merge is `3ac97673c2a414816b4cf3d18d7e5aed9f779ce7`, matching tested head `3404f142da717ccc9653c1e9c90882b94efdf7cb`;
+893 tests, TypeScript, Biome, diff checks, compiled build and binary config validation passed.
 
-The runtime correction passed 845 tests with zero failures (73 files, 13,895 assertions) using the isolated Bun 1.4.2
-compiler. TypeScript, Biome, diff checks, compiled build and binary config validation passed. Independent review found
-no remaining blockers after requiring a valid HEAD before dispatcher gate mutations and testing nonzero child Git exits.
+The dedicated dispatcher was fast-forwarded and installed **disabled** at `2026-10-08T04:13:25.276Z`, binary SHA-256
+`0b27200c41d74e49f0c988048e4dbdb3b7d375aea77edba40bb177dfd7dc3f5b`. Its install receipt and live automation precheck
+pin `/Users/jujufugh/.config/wingmate/pilot-projects.yaml`. This owner-controlled private config selects persistent Node
+24 for Bouncr API and Node 22 for the other three pilots, leaving global Node/Bun defaults unchanged. Full doctor at
+`2026-10-08T04:14:45.873Z` passed every blocking check, including ten blocked and seven required allowed sandbox probes.
+Executing the actual precheck from `/tmp` with a conflicting inherited `WINGMATE_CONFIG` also succeeded with an idle tick
+(exit 1, as designed). Hashed receipts and the full test log are under
+`~/.local/share/wingmate/evidence/config-pinning-20261008/`; earlier runtime/native evidence is under
+`~/.local/share/wingmate/evidence/runtime-native-20261008/` and `runtime-fix-20261008/`.
 
-The retry exposed Linear event issues: app-authored comments may appear as ordinary user comments, and the live API
-returns history newest first despite `orderBy: createdAt`. PR #4 corrected reconciliation to use protected comment
-receipts and chronological event selection without giving app identities or body markers owner authority. It also
-completed coordinator gate examples and the explicit ask-first intake rule from spec §8.3. The correction merged at
-`d5c2825` after 852 tests with zero failures (73 files, 13,907 assertions), TypeScript, Biome and diff checks. Live history
-ordering was verified through a read-only app query.
+JRF-417 cycle 2 reused its clean worktree with a fresh coordinator and refreshed kit after cycle 1 was archived.
+Normal guidance followed by interrupt steering was proven on screen during intake; this is **assisted intake**.
+The coordinator parked at `2026-10-08T03:40:46.731Z` on question `01M4CSJ27VZ2K6P1ZP20KXHNC0`. The owner approved
+the one-file/seven-test plan in thread reply `27fbe379-7d4b-48a1-9dfd-947db2349b3c`; tick 18 at
+`2026-10-08T04:00:14.794Z` authenticated the answer and resumed the existing coordinator. The independent plan review
+passed, and the coordinator committed only `api/tests/friendCode.test.ts` at
+`19c70fb7c0752a2e54f7322cf4a7db80432713c6`. Coordinator checks passed under Node 24.21.0: API 56/56, API typecheck
+and mobile verify. The first independent code review returned FAIL because mobile verify rebuilds files and the reviewer
+is read-only; it found no implementation defect. Preserve that failed result and require a fresh independent review,
+followed by the CLI-computed pinned gates. Operator guidance was applied to distinguish read-only review from workspace
+rebuild validation; the coordinator preserved the first report and queued fresh request `01M4CVTW4ZXY3YS9Q5DFGY9740`
+at the same commit. This is assisted review recovery. Full scratch completion is still pending at this checkpoint.
 
-The dedicated dispatcher was installed disabled at `2026-10-08T03:35:03.254Z`, binary SHA-256
-`33920fdc7566f1379483111f93ad1b096d1cc4f1fa98f417f52870f83bb316ac`; quick doctor was clean at
-`2026-10-08T03:35:31.475Z`. In JRF-417 cycle 2, intake and plan passed. Bounded normal guidance followed by interrupt
-steering was delivered and proven on screen; this is assisted intake. Tracked source remained clean. The coordinator
-parked at `2026-10-08T03:40:46.731Z` on question `01M4CSJ27VZ2K6P1ZP20KXHNC0`. The owner approved the plan in
-thread reply `27fbe379-7d4b-48a1-9dfd-947db2349b3c`; manual tick 18 at `2026-10-08T04:00:14.794Z` authenticated the
-answer and resumed the existing coordinator for plan verification. No source changes had been made at that checkpoint. PR #5 merged the native UI relay foundation at `c15ec96a9c827354d5b789ffb20c68cfa1f8b97e` after 871 passing tests;
-its merged tree matched the tested head. Native policy remains disabled and live iOS acceptance is pending.
-A bounded read-only Node 24.21.0 probe under the unchanged JRF-417 Claude settings passed one sandboxed Bash call:
-parent/child Node, npm 11.19.0 and Git all worked with the explicit official `/tmp` toolchain PATH prefix. Kit and source
-hashes were unchanged; evidence is in `/tmp/wingmate-node24-exact-kit-probe-20261008T035932.965379Z/results.json`.
-This establishes a current-cycle validation path without rewriting its protected legacy kit. Full scratch completion
-and rollout remain pending; these engineering and planning results do not establish an accepted end-to-end pilot.
+The current legacy kit uses an explicit official `/tmp` Node 24 PATH prefix; its sealed settings were not rewritten.
+A bounded sandbox probe confirmed parent/child Node, npm and Git under those unchanged settings. The sandbox's codesign
+check reported an invalid signature, while independent owner-side verification of the identical binary passed and matched
+the official archive. Preserve that qualification rather than claiming reproduced binary corruption. Receipts are in
+the private runtime/native evidence directory above.
+
+Native policy remains unconfigured. The default adapter refuses execution; the isolated producer, execution host and
+foreground bundle/PID/AX contracts remain unimplemented. See [native prerequisites](../../native-ui-relay.md).
+JRF-404's resolved timing clarification does not replace its new ask/park/resume cycle or native UI proof.
+JR Learning Plus pilot JRF-418 and JR Travel Atlas pilot JRF-419 are scoped Todo tickets without Agent labels, so they
+remain unclaimed. Smart Dispatcher still needs its Crew overlap/reservation preflight before its pilot is queued.
+Its proposed dispatch-logic test has no observed collision, but concurrent append-only `WORK_LOG.md` entries and the
+repository's draft-PR-at-first-commit convention need an explicit trusted operator procedure. Wingmate publishes at
+finish and can reuse an existing draft, but does not refresh its body or mark it ready. Do not count a clean Crew run
+on an unchanged checkout as a reservation for future files, or claim that those lifecycle steps are automated.
+Complete scratch acceptance, JRF-404's lifecycle check and the other repository pilots before enabling automation;
+engineering checks and planning results alone do not establish end-to-end acceptance.
 
 ## Parallel validation fixes
 
