@@ -9,6 +9,7 @@ import { WingmateError } from "../shared/errors";
 import { IDENTIFIER_RE } from "../shared/ids";
 import { readText, writeAtomic } from "../state/fs";
 import { O_READ_NOFOLLOW, renameInWorktree, safeRel, worktreeDir } from "./local";
+import { SPAWN_ROLES } from "./settings";
 
 /** Monotonic within one process: intents written in the same millisecond still list (and execute) in write order. */
 const nextId = monotonicFactory();
@@ -21,6 +22,18 @@ const GateStage = z.enum(["intake", "plan", "planVerify", "implement", "validate
 const base = { id: Id, issue: z.string().regex(IDENTIFIER_RE), createdAt: z.string().datetime() };
 
 export const IntentSchema = z.discriminatedUnion("kind", [
+  z.object({
+    ...base,
+    kind: z.literal("spawn"),
+    payload: z
+      .object({
+        role: z.enum(SPAWN_ROLES),
+        spec: z.string().min(1).max(64000),
+        prefer: z.enum(["claude", "codex"]).nullable(),
+        deps: z.array(Id).max(32),
+      })
+      .strict(),
+  }),
   z.object({
     ...base,
     kind: z.literal("ask"),

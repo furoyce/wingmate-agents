@@ -68,6 +68,14 @@ export async function stopAgents(ctx: Ctx, r: WRecord): Promise<{ unverifiable: 
   }
   r.coordinator.terminalHandle = null;
   r.coordinator.paneKey = null;
+  for (const job of r.roleJobs) {
+    if (!unverifiable.length) job.launchUncertain = false;
+    if (!["starting", "running", "unverifiable"].includes(job.status)) continue;
+    job.status = unverifiable.length ? "unverifiable" : "failed";
+    job.verdict = "FAIL";
+    job.completedAt = ctx.now();
+    job.notified = true;
+  }
   return { unverifiable };
 }
 

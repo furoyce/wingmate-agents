@@ -106,7 +106,7 @@ export async function reconcile(ctx: Ctx): Promise<Reconciled> {
     const row = fleet.worktrees.find((w) => w.worktreeId === wt.id);
     let preview: string | undefined;
     // INT-2 + N3: the coordinator's row as re-resolved this tick (a restart may have re-issued its handle and pane), roles excluded
-    const roles = roleHandles(r, workers);
+    const roles = roleHandles(r, workers, t);
     const own = coordinatorRow(r, t, row, roles);
     if (own === "ambiguous" && !partial) ambiguous.add(r.identifier);
     if (

@@ -461,6 +461,8 @@ export function claudeSettings(i: SettingsInput): object {
       "Bash(orca orchestration task-create *)",
       ...SPAWN_DENY,
     );
+  const readOnly = i.role !== "coordinator" && i.role !== "worker";
+  if (readOnly) deny.push("Write", "Edit", "NotebookEdit");
   return {
     sandbox: {
       enabled: true,
@@ -494,6 +496,7 @@ export function claudeSettings(i: SettingsInput): object {
           `${c}/packed-refs*`,
         ],
         denyWrite: [
+          ...(readOnly ? [i.worktreePath, c, ...i.childWorktrees] : []),
           `${c}/config`,
           `${c}/hooks/**`,
           `${c}/info/**`,
@@ -505,6 +508,7 @@ export function claudeSettings(i: SettingsInput): object {
           ...COMMON_TOP_DENY.map((n) => `${c}/${n}`),
           ...COMMON_GLOB_DENY.map((g) => `${c}/${g}`),
           "~/.local/share/wingmate/**",
+          i.kitDir,
           "~/.config/wingmate/**",
           "~/.claude/**",
           "~/.codex/**",

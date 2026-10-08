@@ -4,6 +4,7 @@ import { z } from "zod";
 import { WingmateError } from "../shared/errors";
 import type { Dirs } from "../shared/paths";
 import { createExclusive, readText, writeAtomic } from "./fs";
+import { RoleJobSchema } from "./roles";
 
 export const STAGES = [
   "claimed",
@@ -81,6 +82,8 @@ export const RecordSchema = z.object({
     argv: z.array(z.string()),
     launch: z.object({ model: z.string().nullable(), effort: z.string().nullable() }),
     startedAt: Iso.nullable(),
+    usageSampleAt: Iso.optional(),
+    usageSampleWorking: z.boolean().optional(),
     childRunId: z.string().nullable(),
     attempt: z.number().int(),
     relaunches: z.number().int(),
@@ -99,6 +102,8 @@ export const RecordSchema = z.object({
     }),
   ),
   handoffs: z.object({ total: z.number().int(), thisCycle: z.number().int() }),
+  roleJobs: z.array(RoleJobSchema).default([]),
+  roleMode: z.enum(["legacy", "terminal-job"]).default("legacy"),
   questions: z.array(
     z.object({
       id: z.string(),

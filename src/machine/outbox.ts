@@ -12,12 +12,14 @@ import { scanText } from "../policy/secrets";
 import type { LinearIssue } from "../ports";
 import { WingmateError, errorCode, errorText } from "../shared/errors";
 import { PIPELINE, type WRecord } from "../state/records";
+import { rolePending } from "../state/roles";
 import type { Ctx } from "./context";
 import { isTickAbort } from "./guard";
 import { LinearWrites } from "./linearWrites";
 import { syncMirror } from "./mirror";
 import type { Reconciled } from "./reconcile";
 import { coordinatorMarker, deliver } from "./resume";
+import { startRole, verifyRoleGate } from "./roles";
 import { saveRecord } from "./save";
 import { addAttention, dropAttention, enterPipelineStage, stageOf, transition } from "./states";
 import { addNote, syncStatus } from "./status";
@@ -79,6 +81,8 @@ async function agentText(x: Run, rel: string): Promise<string> {
 }
 
 async function assertNoLiveWorkers(ctx: Ctx, r: WRecord): Promise<void> {
+  if (r.roleJobs.some(rolePending))
+    throw new WingmateError("workers_live", "dispatcher role jobs are still pending");
   if (!r.coordinator.childRunId) return;
   const live = (await ctx.orca.workerList(r.coordinator.childRunId)).filter((w) => w.verdict === "live");
   if (live.length)
@@ -113,6 +117,8 @@ async function copyEvidence(x: Run, rel: string): Promise<void> {
 async function gate(x: Run, i: Of<"gate">): Promise<void> {
   const { ctx, r } = x;
   const { stage, verdict } = i.payload;
+  if (r.roleMode === "terminal-job" && i.payload.method === "graph")
+    throw new WingmateError("graph_unavailable", "the terminal-job fallback uses method loop");
   const idx = PIPELINE.indexOf(stage);
   const missing = PIPELINE.slice(0, idx).filter((s) => !PASSED.has(r.gates[s].verdict ?? ""));
   if (missing.length)
@@ -128,6 +134,7 @@ async function gate(x: Run, i: Of<"gate">): Promise<void> {
     throw new WingmateError("verdict_not_allowed", "NA applies only to ui");
   if (verdict !== "NA" && !i.payload.evidencePath)
     throw new WingmateError("evidence_required", `${stage} ${verdict} names no evidence file`);
+  if (verdict === "PASS") await verifyRoleGate(ctx, r, stage, i.payload.dispatchId, i.payload.headSha);
   if (i.payload.evidencePath) await copyEvidence(x, i.payload.evidencePath);
   g.verdict = verdict;
   g.at = i.createdAt;
@@ -138,7 +145,8 @@ async function gate(x: Run, i: Of<"gate">): Promise<void> {
   if (verdict === "FAIL") g.failCount += 1;
   if (i.payload.method) r.method = i.payload.method;
   // §13.3(a) wants planVerify read from `worker-show` of the named Dispatch; that verification lands in slice 2
-  if (stage === "planVerify") addAttention(r, "plan_verify_unverified");
+  if (stage === "planVerify" && r.roleMode === "legacy") addAttention(r, "plan_verify_unverified");
+  else if (stage === "planVerify") dropAttention(r, "plan_verify_unverified");
   if (verdict !== "FAIL")
     enterPipelineStage(ctx, r, PIPELINE[Math.min(idx + 1, PIPELINE.length - 1)] ?? "pr");
   addNote(r, `gate ${stage} ${verdict}`);
@@ -228,6 +236,8 @@ async function finish(x: Run, i: Of<"finish">): Promise<void> {
  * with this record's coordinator terminal as its `coordinator_handle`; anything else is a counted failure (the id is not echoed).
  */
 async function adoptRun(x: Run, i: Of<"run">): Promise<void> {
+  if (x.r.roleMode === "terminal-job")
+    throw new WingmateError("role_mode", "dispatcher role jobs do not adopt Orca Runs");
   const handle = x.r.coordinator.terminalHandle;
   const run = (await x.ctx.orca.runList()).find((y) => y.id === i.payload.runId);
   if (!run) throw new WingmateError("run_unknown", "the named run is not in orca run-list");
@@ -271,6 +281,8 @@ async function followup(x: Run, i: Of<"followup">): Promise<void> {
 
 async function execute(x: Run, i: Intent): Promise<void> {
   switch (i.kind) {
+    case "spawn":
+      return startRole(x.ctx, x.r, i);
     case "note":
       if (scanText(i.payload.text).length) {
         addAttention(x.r, "secret_detected");
@@ -365,6 +377,10 @@ async function runIntent(x: Run, i: Intent): Promise<boolean> {
     await execute(x, i);
   } catch (err) {
     if (isTickAbort(err)) throw err;
+    if (i.kind === "spawn" && ["roles_busy", "provider_unavailable"].includes(errorCode(err))) {
+      addAttention(x.r, errorCode(err));
+      return false; // ordinary backpressure never quarantines a valid request
+    }
     await failed(x, i, err);
     return false;
   }
@@ -415,6 +431,14 @@ async function drain(x: Run, opts: OutboxOptions): Promise<void> {
     }
     if (i.kind === "handoff" && !opts.canHandoff) break; // stays pending for a later tick
     if (i.kind === "finish" && !opts.canResume) break; // so does a finish: its refusal would be a resume (§8.1)
+    if (
+      i.kind === "spawn" &&
+      (opts.canDeliver === false ||
+        !opts.canResume ||
+        x.rec.partial ||
+        x.rec.liveness.get(x.r.identifier) !== "idle")
+    )
+      break;
     if (!(await runIntent(x, i))) break;
     // parked, handed off, published — or no longer working at all (a second refused publish blocks): the rest waits
     if (x.res.parked || x.res.handoff || x.res.finished || !WORKING.has(stageOf(x.r))) break;

@@ -1,5 +1,6 @@
 // src/ops/views.ts — §11.5 the two shared saved views, created or updated idempotently by `install` as the Wingmate app (team
-// `workspace.team`, owner `workspace.owner`). Linear's API takes the filter but not the board/list display, so `install` prints the
+// `workspace.team`, owned by the app). Linear requires a new view's owner to match its creator; a client-credentials token therefore
+// cannot create one owned by `workspace.owner`. Linear's API takes the filter but not the board/list display, so `install` prints the
 // manual display steps with the URLs. Not part of LinearPort: install-only, over the app's GraphQL client.
 import { z } from "zod";
 import type { Config } from "../config/schema";
@@ -71,8 +72,18 @@ const Shape = {
       ),
     }),
   }),
-  create: z.object({ customViewCreate: z.object({ customView: z.object({ slugId: z.string().min(1) }) }) }),
-  update: z.object({ customViewUpdate: z.object({ customView: z.object({ slugId: z.string().min(1) }) }) }),
+  create: z.object({
+    customViewCreate: z.object({
+      success: z.boolean(),
+      customView: z.object({ slugId: z.string().min(1) }).nullish(),
+    }),
+  }),
+  update: z.object({
+    customViewUpdate: z.object({
+      success: z.boolean(),
+      customView: z.object({ slugId: z.string().min(1) }).nullish(),
+    }),
+  }),
 };
 function shaped<S extends z.ZodTypeAny>(schema: S, value: unknown, what: string): z.infer<S> {
   const r = schema.safeParse(value);
@@ -82,6 +93,17 @@ function shaped<S extends z.ZodTypeAny>(schema: S, value: unknown, what: string)
     "linear_shape",
     `${what}: ${i?.path.join(".") || "(root)"} ${i?.message ?? "invalid"}`,
   );
+}
+
+function savedSlug(
+  payload: { success: boolean; customView?: { slugId: string } | null | undefined },
+  mutation: string,
+): string {
+  if (!payload.success)
+    throw new WingmateError("linear_mutation_failed", `${mutation} returned success: false`);
+  if (!payload.customView)
+    throw new WingmateError("linear_shape", `${mutation}: successful payload has no customView`);
+  return payload.customView.slugId;
 }
 
 /** Creates or updates both shared views of team `workspace.team`; returns their URLs in `viewDefinitions` order. */
@@ -110,22 +132,28 @@ export async function upsertViews(cfg: Config, g: GraphQLLike): Promise<string[]
     );
     const input = { name: v.name, description: v.description, filterData: v.filterData, shared: true };
     const slugId = found
-      ? shaped(
-          Shape.update,
-          await g.query(
-            "mutation U($id: String!, $input: CustomViewUpdateInput!) { customViewUpdate(id: $id, input: $input) { success customView { slugId } } }",
-            { id: found.id, input },
-          ),
+      ? savedSlug(
+          shaped(
+            Shape.update,
+            await g.query(
+              "mutation U($id: String!, $input: CustomViewUpdateInput!) { customViewUpdate(id: $id, input: $input) { success customView { slugId } } }",
+              { id: found.id, input },
+            ),
+            "customViewUpdate",
+          ).customViewUpdate,
           "customViewUpdate",
-        ).customViewUpdate.customView.slugId
-      : shaped(
-          Shape.create,
-          await g.query(
-            "mutation C($input: CustomViewCreateInput!) { customViewCreate(input: $input) { success customView { slugId } } }",
-            { input: { ...input, teamId, ownerId: cfg.workspace.owner } },
-          ),
+        )
+      : savedSlug(
+          shaped(
+            Shape.create,
+            await g.query(
+              "mutation C($input: CustomViewCreateInput!) { customViewCreate(input: $input) { success customView { slugId } } }",
+              { input: { ...input, teamId } },
+            ),
+            "customViewCreate",
+          ).customViewCreate,
           "customViewCreate",
-        ).customViewCreate.customView.slugId;
+        );
     urls.push(`https://linear.app/${existing.organization.urlKey}/view/${slugId}`);
   }
   return urls;

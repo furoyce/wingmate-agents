@@ -258,7 +258,11 @@ describe("installKit", () => {
     expect(coordinator.permissions.deny).not.toContain("Bash(wingmate issue * spawn*)");
     for (const role of SPAWN_ROLES) {
       const s = readSettings(launch.roleSettings[role]);
-      expect(s.sandbox).toEqual(coordinator.sandbox); // same filesystem paths, network and sandbox switches
+      if (role === "worker") expect(s.sandbox).toEqual(coordinator.sandbox);
+      else {
+        expect(s.sandbox.filesystem.denyWrite).toEqual(expect.arrayContaining([repo, join(repo, ".git")]));
+        expect(s.permissions.deny).toEqual(expect.arrayContaining(["Write", "Edit", "NotebookEdit"]));
+      }
       for (const v of spawnVerbs) expect(s.permissions.deny).toContain(v);
       expect(s.permissions.deny).toContain("Bash(wingmate issue * spawn*)");
       expect(s.permissions.deny).toContain("Bash(*/wingmate issue * spawn*)");

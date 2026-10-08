@@ -420,6 +420,7 @@ function launchFile(i: InstallInput, repo: Repo, w: Worktree): Launch {
   for (const [p, t] of Object.entries(i.tiers ?? {})) if (t) tiers[p] = { model: t.model, effort: t.effort };
   tiers[r.provider] = { model: i.launch.model, effort: i.launch.effort };
   return {
+    spawnMode: "dispatcher",
     provider: r.provider,
     model: i.launch.model,
     effort: i.launch.effort,

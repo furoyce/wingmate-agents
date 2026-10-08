@@ -828,7 +828,7 @@ projects:
   <key>:
     linearProject: <uuid>
     repos:
-      <name>: { orcaRepo: <uuid>, github: <owner/repo>, base: origin/main, setup: <argv|none>,
+      <name>: { orcaRepo: <uuid>, github: <owner/repo>, base: origin/main, setup: <argv|argv sequence|none>,
                 gates: [<argv array>...],          # non-empty; schema refuses an empty list
                 requiredCheck: <ci check name|none>,
                 ui: { kind: web|ios|none, paths: [...], dev: <argv>, url: <url>, smokeRoutes: [...] },
@@ -839,6 +839,8 @@ projects:
     coexist: { prReview: existing-orca-automation|none, githubIssues: leave-to-agent-fix|none }   # informational for the brief
     autonomy / done / budgets / concurrency / timers   # overrides
 ```
+Setup commands run sequentially without a shell, stop on the first failure, and share the ten-minute setup cap and
+the tick's thirty-second launch reserve. A tick cutoff replays the sequence, so setup must tolerate retries.
 Secrets live in `~/.config/wingmate/credentials.json` (0600): Linear client id/secret and the cached app token.
 `config/tiers.yaml` (optional): `{ best: { claude?: {model, effort}, codex?: {model, effort} }, standard: { claude?:
 {model}, codex?: {model} } }`; a project may override `standard` under `projects.<key>.tiers.standard`.
@@ -898,7 +900,9 @@ Question comments @mention `workspace.owner` (and the assignee when different) u
 verified in §16; until verified, the subscription is the primary delivery path and the display name is written in
 plain text.
 
-### 11.5 Saved views (created/updated idempotently by `install`, `shared: true`, team JRF, owner = workspace owner)
+### 11.5 Saved views (created/updated idempotently by `install`, `shared: true`, team JRF, owned by Wingmate)
+Live validation on 2026-10-07 found that Linear requires the creator to own a new view. Install therefore omits
+`ownerId` and lets Linear assign the app actor; sharing keeps both views available to the workspace owner.
 - **Wingmate** — project ∈ pilots ∧ Lifecycle label set ∧ state type ∉ {completed, canceled}; display: board, grouped
   by the Lifecycle label group, ordered by priority (columns In-Agent / Needs-Human / Review-Ready / Blocked).
 - **Wingmate · Needs you** — same scope ∧ label ∈ {Needs-Human, Blocked, Review-Ready}; list, grouped by label,
@@ -1328,6 +1332,44 @@ user or VM.
 | Local binding inside the kit sandbox for a `ui.kind: web` dev server (`sandbox.network.allowLocalBinding`, not set by the kit) | web UI gates stay owner-reviewed until verified; then set it explicitly |
 | Egress of the `ui-smoke` tab (Orca's embedded browser runs outside the agent sandbox) | D14 residual (2026-10-07): web UI gates owner-reviewed; restrict the tab to loopback if Orca can |
 | `orca` reachable from inside the kit sandbox (`spawn`, `orchestration check`, `worker-list`) | verified 2026-10-07 (R36): unreachable — the kit denies Orca's runtime file (socket endpoint and auth token); the role-agent stages wait for dispatcher-executed spawn, and granting agents that file would hand them Orca's token (D14) |
+
+### 16.3 Slice-2 amendment: dispatcher role requests (2026-10-07, R33/R36)
+
+The live sandbox denies Orca's runtime file, so the direct spawn and worker lifecycle described in §8.1 cannot run
+inside a kit. New kits use the §16.1 fallback and force method `loop`. `spawn --role <review role> --spec <file>` writes
+an outbox request and immediately returns `{ok, mode:"terminal-job", requestId, status:"pending"}`. The coordinator
+queues a wave and ends its turn. `--deps` names earlier Wingmate request IDs from the same cycle and attempt.
+Only the trusted dispatcher checks current quota, resolves tier best, verifies kit integrity, refreshes sibling denies,
+and calls `terminal create` with a noninteractive provider CLI and a protected outer capture runner. Claude reviewer
+settings deny worktree/common-dir writes; Codex reviewers retain `read-only`. Graph workers are refused in this fallback.
+
+Role requests are explicitly unsupervised terminal jobs, not Orca Tasks or Dispatches. No component impersonates
+`worker_done`. The record stores cycle/attempt, request ID, role, provider, input HEAD, plan digest, terminal/pane,
+launch uncertainty, settlement, report digest and notification state. Persisting `starting` before terminal creation
+prevents duplicate launches after a lost response; uncertainty is surfaced for inspection. Known role handles and panes
+are excluded from coordinator adoption. An unreadable legacy worker list also prevents advance from rebinding (R33).
+
+The runner captures stdout, stderr, completion time and exit status outside the model sandbox. Only a successful final
+provider response beginning PASS/FAIL settles a review; tool output, errors, missing final messages and output over 8 MiB
+fail closed. Captures remain dispatcher-owned. The dispatcher mirrors advisory receipts and report text into `.wingmate/`
+and resumes an idle coordinator when the wave settles, within the resume budget. Partial/reconcile-only/paused ticks do
+not start roles. At most four requests are pending per issue; quota and dependency waits are uncounted backpressure.
+Stop/release/handoff retain the existing bulk close and process sweep for all issue processes.
+
+Pending review waves defer coordinator notes, idle nudges and stage recovery; owner overrides, integrity and hard
+budgets remain active. A trusted exit receipt settles launch uncertainty even when the create response was lost.
+Hard token caps compare the measured lower bound when aggregate usage is unknown.
+
+`gate planVerify --request <id>` derives its verdict from the verifier. Code/security reviewers run before
+`gate validate|security --request <id>`, which also runs the pinned deterministic commands. The dispatcher checks PASS
+against its protected result at HEAD (and the plan digest for planVerify), rather than an agent-written mirror. Publish
+checks code/security reviews again at the exact pushed HEAD. Code/security review launch, settlement and gate acceptance
+require clean committed tracked source/index outside `.wingmate`. Modified report evidence requires a fresh review.
+These checkpoints do not prevent a concurrent writer from modifying and restoring source between checks; an immutable
+review snapshot or separate isolation is needed to eliminate that shared-worktree residual.
+Measured role tokens/dollars and sampled coordinator minutes are recorded per session with provenance; incomplete totals
+remain null. Status and completion comments show this provenance. Web/iOS UI execution and live pilot acceptance remain
+subject to the existing §16 checks; this relay does not grant agent access to the Orca browser or runtime.
 
 ## 17. Glossary
 **Coordinator** — the per-issue terminal agent (tier best) owning the pipeline. **Worker** — a supervised sub-agent

@@ -189,7 +189,7 @@ describe("settings", () => {
       if (p === undefined) throw new Error("agentEnv lost a kit path");
       expect(coveredBy(fs.denyRead, p, "deny")).toEqual(["~/"]); // inside the deny region …
       expect(coveredBy(fs.allowRead, p)).toEqual(["/home/.local/share/wingmate/kit/JRF-404/**"]); // … carved out for reading
-      expect(coveredBy(fs.denyWrite, p, "deny")).toEqual(["~/.local/share/wingmate/**"]);
+      expect(coveredBy(fs.denyWrite, p, "deny")).toEqual(["~/.local/share/wingmate/**", input.kitDir]);
       expect(coveredBy(fs.allowWrite, p)).toEqual([]);
     }
     // only this issue's kit: another issue's kit, the records and the credentials stay unreadable
@@ -233,11 +233,11 @@ describe("settings", () => {
     for (const role of ["coordinator", ...SPAWN_ROLES] as const) {
       const fs = (claudeSettings({ ...input, role }) as Settings).sandbox.filesystem;
       for (const p of [`refs/replace/${sha}`, `refs/replace/${sha}.lock`, "refs/replace/x/y"])
-        expect([role, coveredBy(fs.denyWrite, `/repo/.git/${p}`, "deny")]).toEqual([
-          role,
-          ["/repo/.git/refs/replace/**"],
-        ]);
-      for (const p of COMMIT_WRITES) expect(coveredBy(fs.denyWrite, `/repo/.git/${p}`, "deny")).toEqual([]);
+        expect(coveredBy(fs.denyWrite, `/repo/.git/${p}`, "deny")).toContain("/repo/.git/refs/replace/**");
+      for (const p of COMMIT_WRITES)
+        expect(coveredBy(fs.denyWrite, `/repo/.git/${p}`, "deny")).toEqual(
+          role === "coordinator" || role === "worker" ? [] : ["/repo/.git"],
+        );
     }
     expect(isSiblingDeny("/repo/.git", "/repo/.git/refs/replace/**")).toBe(false); // `refreshSiblingDenies` re-lists only siblings
   });

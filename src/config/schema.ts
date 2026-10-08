@@ -2,12 +2,20 @@
 import { z } from "zod";
 import { WingmateError } from "../shared/errors";
 const Argv = z.array(z.string().min(1)).min(1);
+// Legacy single argv stays accepted; execution always receives an explicit sequence, never shell text.
+const Setup = z
+  .union([z.literal("none"), Argv, z.array(Argv).min(1)])
+  .default("none")
+  .transform((setup): "none" | string[][] => {
+    if (setup === "none") return setup;
+    return typeof setup[0] === "string" ? [setup as string[]] : (setup as string[][]);
+  });
 const Provider = z.enum(["claude", "codex", "cursor", "antigravity"]);
 export const RepoSchema = z.object({
   orcaRepo: z.string().uuid(),
   github: z.string().regex(/^[\w.-]+\/[\w.-]+$/),
   base: z.string().default("origin/main"),
-  setup: Argv.or(z.literal("none")).default("none"),
+  setup: Setup,
   gates: z.array(Argv).min(1, "gates must be a non-empty list of argv arrays"),
   requiredCheck: z.string().default("none"),
   ui: z

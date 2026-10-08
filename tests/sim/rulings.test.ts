@@ -11,7 +11,17 @@ import { readHeartbeat, requestStop } from "../../src/state/heartbeat";
 import { withRecordLock } from "../../src/state/lock";
 import { type WRecord, listRecords, readRecord, writeRecord } from "../../src/state/records";
 import { AGENT_SET_TITLE } from "../fakes/fakeOrca";
-import { OWNER, type World, advance, labeledByOwner, readyToFinish, runTick, todo, world } from "./harness";
+import {
+  OWNER,
+  type World,
+  advance,
+  labeledByOwner,
+  passReviews,
+  readyToFinish,
+  runTick,
+  todo,
+  world,
+} from "./harness";
 
 async function rec(w: World, identifier = "JRF-501"): Promise<WRecord> {
   const r = await readRecord(w.dirs, identifier);
@@ -601,6 +611,9 @@ describe("owner overrides (§7.4)", () => {
     expect(JSON.parse(refused.out).nextStep).toContain("gate implement");
     // the agent re-gates from implement at its new commit, then validate, ui and security, and finishes again
     w.git.heads.set(wt, "headsha2");
+    const reviewed = await rec(w);
+    await passReviews(w, reviewed, "headsha2", ["validate", "security"]);
+    await writeRecord(w.dirs, reviewed);
     writeFileSync(join(wt, ".wingmate", "evidence", "impl.md"), "renamed the endpoint");
     expect(
       (
@@ -631,7 +644,7 @@ describe("owner overrides (§7.4)", () => {
           note: null,
           method: null,
           headSha: "headsha2",
-          dispatchId: null,
+          dispatchId: stage === "ui" ? null : reviewed.gates[stage].dispatchId,
         },
       });
     await gate("validate", "PASS", ".wingmate/evidence/validate/report.txt");

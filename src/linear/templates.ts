@@ -19,7 +19,7 @@ export interface StatusInput {
   agents: { coordinator: number; workers: number };
   gates: [string, string | null, number][];
   pr: string | null;
-  cost: { tokens: number | null; costUsd: number | null; provenance: string };
+  cost: { tokens: number | null; costUsd: number | null; provenance: string; detail?: string };
   updatedAt: string;
   notes: string[];
 }
@@ -29,11 +29,12 @@ const glyph = (v: string | null): string =>
 
 export function renderStatus(s: StatusInput): string {
   const cost =
-    s.cost.costUsd != null
+    s.cost.detail ??
+    (s.cost.costUsd != null
       ? `$${s.cost.costUsd.toFixed(2)} (${s.cost.provenance})`
       : s.cost.tokens != null
         ? `${s.cost.tokens.toLocaleString()} tokens (${s.cost.provenance})`
-        : "— (unknown)";
+        : "— (unknown)");
   const head = `${MARK.status}\n**Wingmate · ${s.stage} · ${s.pipelineStage}** · waiting on: ${s.waitingOn ?? "nobody"} · next: ${s.nextAction}\n\n| | |\n|---|---|\n| Provider | ${s.provider}${s.model ? ` · ${s.model}` : ""}${s.effort ? ` · effort ${s.effort}` : ""} |\n| Worktree | ${s.worktree ?? "—"}${s.branch ? ` · \`${s.branch}\`` : ""} |\n| Agents | coordinator ${s.agents.coordinator} · workers ${s.agents.workers} |\n| Gates | ${s.gates.map(([n, v, a]) => `${n} ${glyph(v)}${a > 1 ? `(${a})` : ""}`).join(" · ")} |\n| PR | ${s.pr ?? "—"} |\n| Cost | ${cost} |\n| Updated | ${s.updatedAt} |\n`;
   const foot =
     "\n_How to respond: reply in the question thread · move back to In Progress to request changes · add `human` to stop._\n";
@@ -88,8 +89,9 @@ export const renderCompletion = (c: {
   gates: [string, string][];
   limitations: string[];
   followups: string[];
+  cost?: string;
 }): string =>
-  `${MARK.completion}\n**Ready for review.** ${c.prs.map((p) => `[${p.repo} PR](${p.url})`).join(" · ")}\n\n${c.summary}\n\nGates: ${c.gates.map(([n, v]) => `${n} ${v}`).join(" · ")}\n${c.limitations.length ? `\nLimitations: ${c.limitations.join("; ")}\n` : ""}${c.followups.length ? `\nFollow-ups created: ${c.followups.join(", ")}\n` : ""}\n_${REQUEST_CHANGES}_`;
+  `${MARK.completion}\n**Ready for review.** ${c.prs.map((p) => `[${p.repo} PR](${p.url})`).join(" · ")}\n\n${c.summary}\n\nGates: ${c.gates.map(([n, v]) => `${n} ${v}`).join(" · ")}\n${c.cost ? `\nUsage: ${c.cost}\n` : ""}${c.limitations.length ? `\nLimitations: ${c.limitations.join("; ")}\n` : ""}${c.followups.length ? `\nFollow-ups created: ${c.followups.join(", ")}\n` : ""}\n_${REQUEST_CHANGES}_`;
 
 export const renderHandoff = (h: {
   from: string;

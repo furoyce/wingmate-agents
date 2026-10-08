@@ -3,9 +3,11 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { gitTarget } from "../git/trust";
 import { verifyIntegrity } from "../kit/install";
+import { readIntentFiles } from "../kit/intents";
 import { timerState } from "../policy/timers";
 import { errorCode } from "../shared/errors";
 import { readText } from "../state/fs";
+import { rolePending } from "../state/roles";
 import { doHandoff } from "./handoff";
 import { kitHashes } from "./launch";
 import { block } from "./release";
@@ -16,6 +18,23 @@ import { type Advance, type StepOut, WORKING } from "./step";
 const INTEGRITY_STAGES = new Set(["claimed", "working", "awaiting-human"]);
 const minutesSince = (now: string, iso: string) => (Date.parse(now) - Date.parse(iso)) / 60_000;
 const inMinutes = (now: string, min: number) => new Date(Date.parse(now) + min * 60_000).toISOString();
+
+/** An intentionally idle coordinator waits for the current review wave, including quota-deferred requests. */
+export async function roleWavePending(a: Advance): Promise<boolean> {
+  const { r } = a;
+  if (r.roleMode !== "terminal-job" || r.stage !== "working" || !r.worktree || !existsSync(r.worktree.path))
+    return false;
+  if (r.roleJobs.some((j) => j.cycle === r.cycle && j.attempt === r.coordinator.attempt && rolePending(j)))
+    return true;
+  try {
+    return (await readIntentFiles(r.worktree.path)).intents.some(
+      (i) => i.kind === "spawn" && i.issue === r.identifier,
+    );
+  } catch (e) {
+    if (errorCode(e) !== "outbox_unsafe") throw e;
+    return false; // the outbox step reports unsafe paths; they never suspend the watchdog
+  }
+}
 
 /** claimed → working once the coordinator is proven to have started (§5.4 step 5). */
 async function started(a: Advance, how: string): Promise<void> {
@@ -122,6 +141,7 @@ export async function liveness(a: Advance): Promise<StepOut> {
   }
   dropAttention(r, "liveness_unverifiable", "coordinator_ambiguous");
   if (a.ro) return "next";
+  if (await roleWavePending(a)) return "next";
   if (a.live === "exited") return exited(a);
   if (a.live === "working") {
     // a working coordinator is activity (§9.6): its idle nudges start over
@@ -137,6 +157,7 @@ export async function liveness(a: Advance): Promise<StepOut> {
 export async function timers(a: Advance): Promise<StepOut> {
   const { ctx, r, project } = a;
   if (a.launched || a.ro) return "next";
+  if (await roleWavePending(a)) return "next";
   const now = ctx.now();
   const ts = timerState(r, now, project.timers);
   if (ts === "cap_passed" && !r.timers.graceEndsAt) {
@@ -221,13 +242,18 @@ export async function integrity(a: Advance): Promise<StepOut> {
 export async function budgets(a: Advance): Promise<StepOut> {
   const { ctx, r } = a;
   const hard = r.budget.hardTokens;
-  if (!hard || r.budget.capLifted || r.stage !== "working" || (r.usage.tokens ?? 0) <= hard) return "next";
+  // A partial measurement is a lower bound: unknown coordinator usage cannot erase a review that exceeded the cap.
+  const knownTokens = Math.max(
+    r.usage.tokens ?? 0,
+    r.usage.bySession.reduce((sum, session) => sum + (session.tokens ?? 0), 0),
+  );
+  if (!hard || r.budget.capLifted || r.stage !== "working" || knownTokens <= hard) return "next";
   await block(
     ctx,
     r,
     a.issue,
     "budget",
-    `${r.usage.tokens} tokens > hard cap ${hard}`,
+    `${r.usage.tokens === null ? "at least " : ""}${knownTokens} tokens > hard cap ${hard}`,
     "comment `continue` to lift the cap",
   );
   a.s.blocked.push(r.identifier);

@@ -419,6 +419,33 @@ describe("doctor — every check", () => {
     });
   });
 
+  test("Orca sandbox reachability reports the dispatcher relay and legacy limitation without certifying relay health", async () => {
+    const w = await healthy();
+    for (const reach of [true, false, null]) {
+      const rep = await doctor(
+        w.ctx,
+        opts({
+          probe: async () => ({
+            claude: { ok: true, detail: "sandbox controls hold", orcaReachable: reach },
+            codex: { ok: true, detail: "network blocked", readsBlocked: false },
+          }),
+        }),
+      );
+      const c = check(rep, "orca_from_sandbox");
+      expect(c).toMatchObject({ ok: reach === true, blocking: false });
+      expect(c?.detail).toContain("new kits");
+      expect(c?.detail).toContain("local spawn intents");
+      expect(c?.detail).toContain("dispatcher-launched reviewers");
+      expect(rep.orcaFromSandbox).toBe(reach ?? undefined);
+      expect(rep.ok).toBe(true); // The relay does not need direct sandbox access to Orca.
+      if (reach === true) expect(c?.detail).toContain("D14 residual");
+      else if (reach === false) {
+        expect(c?.detail).toContain("legacy kits");
+        expect(c?.detail).toContain("re-queue the issue");
+      } else expect(c?.detail).toContain("direct Orca access is unproven");
+    }
+  });
+
   test("notify_test: not run blocks; --notify-test posts one question as the app and sets Needs-Human; --confirm-notify records it across runs", async () => {
     const w = await healthy();
     writeFileSync(join(w.dirs.state, "doctor.json"), "{}");

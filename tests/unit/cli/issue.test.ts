@@ -16,7 +16,7 @@ import { parseArgv } from "../../../src/cli/index";
 import { loadConfig } from "../../../src/config/load";
 import { installKit, integrityHashes } from "../../../src/kit/install";
 import { listIntents } from "../../../src/kit/intents";
-import { type Launch, type Local, readLocal, writeLocal } from "../../../src/kit/local";
+import { type Launch, type Local, readLaunch, readLocal, writeLocal } from "../../../src/kit/local";
 import {
   SPAWN_ROLES,
   agentEnv,
@@ -1129,6 +1129,10 @@ describe("wingmate issue spawn (§8.1 amended: launch the role agent with the ki
       tiers: { claude: { model: "c", effort: "max" }, codex: { model: "gpt-x", effort: "xhigh" } },
       toolchainPaths: [],
     });
+    // Explicit compatibility coverage for kits installed before dispatcher spawning.
+    const legacyLaunch = await readLaunch(wt);
+    legacyLaunch.spawnMode = undefined;
+    await sealLaunch(wt, legacyLaunch);
     writeFileSync(join(wt, ".wingmate", "spec.md"), "review the diff");
     const env: Env = { HOME: home, WINGMATE_HOME: state, WINGMATE_ROLE: "coordinator" };
     const f = fakeOrca({ current: { worktree: { id: `r::${wt}`, path: wt } } });

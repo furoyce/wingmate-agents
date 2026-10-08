@@ -47,9 +47,9 @@ describe("brief", () => {
     expect(PROTOCOL_MD).toContain(
       "intake → plan → planVerify → implement → validate → ui → security → finish",
     );
-    // C8: spawn's waits can take ~10 minutes, past the Bash tool's 2-minute default; a timed-out call is checked, not repeated
-    expect(PROTOCOL_MD).toContain("with a Bash timeout of 600000 ms");
-    expect(PROTOCOL_MD).toContain("check `wingmate issue <id> show` before retrying");
+    expect(PROTOCOL_MD).toContain("Spawning only writes a local request");
+    expect(PROTOCOL_MD).toContain("Check `wingmate issue <id> show` before retrying");
+    expect(PROTOCOL_MD).toContain("not Orca Dispatches");
     for (const k of ["planVerifier", "codeReviewer", "securityReviewer", "uiReviewer", "worker"] as const)
       expect(PROMPTS[k].length).toBeGreaterThan(80);
     expect(PROMPTS.planVerifier).toContain("WITHOUT modifying");

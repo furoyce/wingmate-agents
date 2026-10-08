@@ -22,13 +22,23 @@ const COORDINATOR_AGENTS: ReadonlySet<string> = new Set(["claude", "codex"]);
 const NO_ROLES: ReadonlySet<string> = new Set();
 
 /** N3: the terminal handles of the child Run's role agents (worker-list `agentTerminalHandle`): never the coordinator. */
-export function roleHandles(r: WRecord, workers: ReadonlyMap<string, WorkerRow[]>): Set<string> {
+export function roleHandles(
+  r: WRecord,
+  workers: ReadonlyMap<string, WorkerRow[]>,
+  terminals: TerminalRow[] = [],
+): Set<string> {
   const run = r.coordinator.childRunId;
-  return new Set(
-    (run ? (workers.get(run) ?? []) : []).flatMap((w) =>
+  return new Set([
+    ...r.roleJobs.flatMap((j) =>
+      [
+        j.terminalHandle,
+        ...terminals.filter((t) => `${t.tabId}:${t.leafId}` === j.paneKey).map((t) => t.handle),
+      ].filter((h): h is string => h !== null),
+    ),
+    ...(run ? (workers.get(run) ?? []) : []).flatMap((w) =>
       w.agentTerminalHandle ? [w.agentTerminalHandle] : [],
     ),
-  );
+  ]);
 }
 
 /**
@@ -73,8 +83,18 @@ export function coordinatorRow(
   const pane = r.coordinator.paneKey;
   const byPane = pane ? terminals.find((t) => `${t.tabId}:${t.leafId}` === pane) : undefined;
   if (byPane) return byPane;
+  // An uncertain role create cannot be distinguished from a replacement coordinator.
+  if (unknownRoleTerminal(r, terminals)) return "ambiguous";
   const live = coordinatorCandidates(terminals, row, roles);
   return live.length > 1 ? "ambiguous" : live[0];
+}
+
+export function unknownRoleTerminal(r: WRecord, terminals: TerminalRow[]): boolean {
+  return r.roleJobs.some(
+    (j) =>
+      (j.launchUncertain || ["starting", "running", "unverifiable"].includes(j.status)) &&
+      !terminals.some((t) => t.handle === j.terminalHandle || `${t.tabId}:${t.leafId}` === j.paneKey),
+  );
 }
 
 /**

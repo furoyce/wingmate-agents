@@ -11,7 +11,13 @@ import type { WRecord } from "../state/records";
 import { type Ctx, remainingMs } from "./context";
 import { TickAbort, isTickAbort } from "./guard";
 import { kitNonce, prepareLaunch } from "./launch";
-import { type Liveness, coordinatorCandidates, roleHandles, worktreeGone } from "./liveness";
+import {
+  type Liveness,
+  coordinatorCandidates,
+  roleHandles,
+  unknownRoleTerminal,
+  worktreeGone,
+} from "./liveness";
 import { saveRecord } from "./save";
 import { addAttention, dropAttention, ensureAttempt, transition } from "./states";
 
@@ -244,10 +250,11 @@ async function liveCoordinator(
   wtId: string,
 ): Promise<{ term: TerminalRow; working: boolean } | "ambiguous" | null> {
   const terminals = await ctx.orca.terminalList(wtId);
+  if (unknownRoleTerminal(r, terminals)) return "ambiguous";
   if (!terminals.some((t) => t.handle !== r.coordinator.terminalHandle)) return null;
   const row = (await ctx.orca.worktreePs()).worktrees.find((w) => w.worktreeId === wtId);
   const run = r.coordinator.childRunId;
-  const roles = run ? roleHandles(r, new Map([[run, await ctx.orca.workerList(run)]])) : new Set<string>();
+  const roles = roleHandles(r, run ? new Map([[run, await ctx.orca.workerList(run)]]) : new Map(), terminals);
   const live = coordinatorCandidates(terminals, row, roles, r.coordinator.terminalHandle);
   if (live.length > 1) return "ambiguous";
   const term = live[0];

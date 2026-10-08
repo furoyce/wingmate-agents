@@ -9,6 +9,7 @@ import { resolveTier } from "../policy/providers";
 import { errorCode, errorText } from "../shared/errors";
 import { stopRequested } from "../state/heartbeat";
 import type { WRecord } from "../state/records";
+import { rolePending } from "../state/roles";
 import { claimLinear, launchProven, openClaimEntry, provisionAndLaunch } from "./claim";
 import { CLAIM_RESERVE_MS } from "./claims";
 import { type Ctx, remainingMs } from "./context";
@@ -22,12 +23,14 @@ import { syncMirror } from "./mirror";
 import { executeOutbox } from "./outbox";
 import type { Event, Reconciled } from "./reconcile";
 import { block, finishBlock, release, stopAgents } from "./release";
+import { deliver } from "./resume";
+import { collectRoles } from "./roles";
 import { readTracked, saveRecord } from "./save";
-import { addAttention, dropAttention, stageOf } from "./states";
+import { addAttention, dropAttention, enterPipelineStage, stageOf } from "./states";
 import { addNote, flushNotes, syncStatus } from "./status";
 import { type Advance, type StepOut, WORKING } from "./step";
 import type { Budget, TickSummary } from "./tick";
-import { timers, agentProgressed, budgets, integrity, liveness } from "./watch";
+import { timers, agentProgressed, budgets, integrity, liveness, roleWavePending } from "./watch";
 
 const ACTIVE = new Set(["claimed", "working", "awaiting-human", "review", "blocked"]);
 /** §7.4: the active records an owner's Blocked (or Needs-Human) label pauses. */
@@ -161,6 +164,8 @@ async function overrides(a: Advance): Promise<StepOut> {
   if (a.issue.state.name === a.r.linear.state && lifecycleOf(a) === a.r.linear.lifecycleLabel)
     a.r.linear.lastSeenUpdatedAt = a.issue.updatedAt;
   if (!a.r.paused) return "next";
+  a.r.coordinator.usageSampleAt = a.ctx.now();
+  a.r.coordinator.usageSampleWorking = false;
   // paused: no outbox, resume, relaunch, nudge or timers (§7.4), but the kit is still re-hashed every tick (C19, §6.3 step 6)
   await integrity(a);
   return "stop";
@@ -289,8 +294,11 @@ async function rebind(a: Advance): Promise<StepOut> {
   const wt = r.worktree;
   const from = r.coordinator.terminalHandle;
   if (!wt || !from) return "next";
+  // R33: a failed worker-list read cannot prove the remaining agent is the coordinator.
+  if (r.coordinator.childRunId && !a.rec.workers.has(r.coordinator.childRunId)) return "next";
   const row = a.rec.fleet.worktrees.find((x) => x.worktreeId === wt.id);
-  const t = coordinatorRow(r, a.rec.terminals.get(wt.id) ?? [], row, roleHandles(r, a.rec.workers));
+  const terminals = a.rec.terminals.get(wt.id) ?? [];
+  const t = coordinatorRow(r, terminals, row, roleHandles(r, a.rec.workers, terminals));
   if (!t || t === "ambiguous" || t.handle === from) return "next";
   r.coordinator.terminalHandle = t.handle;
   r.coordinator.paneKey = `${t.tabId}:${t.leafId}`;
@@ -301,6 +309,53 @@ async function rebind(a: Advance): Promise<StepOut> {
     data: { from, to: t.handle },
   });
   return "next";
+}
+
+async function collectRoleJobs(a: Advance): Promise<StepOut> {
+  if (a.r.roleMode !== "terminal-job" || !a.r.worktree || a.r.stage !== "working") return "next";
+  const before = JSON.stringify(a.r.usage);
+  await collectRoles(a.ctx, a.r, a.rec);
+  if (JSON.stringify(a.r.usage) !== before) a.dirty = true;
+  return "next";
+}
+
+async function notifyRoleJobs(a: Advance): Promise<StepOut> {
+  const { r } = a;
+  if (
+    a.ro ||
+    a.launched ||
+    a.budget.resumes <= 0 ||
+    a.live !== "idle" ||
+    r.stage !== "working" ||
+    !r.worktree
+  )
+    return "next";
+  const jobs = r.roleJobs.filter((j) => j.cycle === r.cycle && j.attempt === r.coordinator.attempt);
+  if (
+    jobs.some(rolePending) ||
+    (await readIntentFiles(r.worktree.path)).intents.some((i) => i.kind === "spawn")
+  )
+    return "next";
+  const fresh = jobs.filter((j) => !j.notified);
+  if (!fresh.length) return "next";
+  const text = `Dispatcher role results (terminal jobs):\n${fresh.map((j) => `${j.id} ${j.role}: ${j.verdict ?? "FAIL"}; report: ${j.reportPath ?? "unavailable"}`).join("\n")}\nRead .wingmate/roles.json and the reports before continuing. Use --request <id> to bind a review gate. A FAIL requires a fix and a fresh review; never invent a passing result.`;
+  if ((await deliver(a.ctx, r, "note", text, "idle", r.pipelineStage)) === "turn_started") {
+    for (const j of fresh) j.notified = true;
+    enterPipelineStage(a.ctx, r, r.pipelineStage);
+    a.budget.resumes -= 1;
+    a.s.resumes.push(r.identifier);
+    a.launched = true;
+  }
+  return "next";
+}
+
+/** Pending reviews defer notes and recovery, while integrity, budget and liveness errors remain visible. */
+async function waitForRoleJobs(a: Advance): Promise<StepOut> {
+  if (!(await roleWavePending(a))) return "next";
+  await liveness(a);
+  await integrity(a);
+  await budgets(a);
+  return "stop";
 }
 
 /** F2: a block whose Linear writes failed is finished first (the record is `blocked` on disk already). */
@@ -316,8 +371,11 @@ const STEPS = [
   overrides,
   blockNotice,
   replayClaim,
+  collectRoleJobs,
   outbox,
+  notifyRoleJobs,
   allowDepsGrant,
+  waitForRoleJobs,
   comments,
   liveness,
   timers,

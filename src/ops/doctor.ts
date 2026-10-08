@@ -43,7 +43,7 @@ export interface DoctorReport {
   checks: Check[];
   /** §13.3(c): whether Codex blocked a read outside its worktree (absent when not probed). */
   codexReadsBlocked?: boolean;
-  /** D14: whether the `orca` CLI answered from inside the Claude sandbox (absent when not probed). */
+  /** D14: whether the `orca` CLI answered from inside the Claude sandbox (absent when not proven); not relay health. */
   orcaFromSandbox?: boolean;
   notify?: NotifyState;
 }
@@ -355,10 +355,10 @@ export async function doctor(ctx: Ctx, o: DoctorOptions): Promise<DoctorReport> 
         "orca_from_sandbox",
         reach === true,
         reach === true
-          ? "reachable: spawn can start workers; D14 residual — an agent can start processes outside the sandbox through Orca"
+          ? "reachable: D14 residual — an agent can start processes outside the sandbox through Orca; new kits need no Orca access: they enqueue local spawn intents for dispatcher-launched reviewers"
           : reach === false
-            ? "unreachable: `wingmate issue spawn` cannot start workers from the sandbox (R22: dispatcher-executed spawn needed)"
-            : "unknown (no result line)",
+            ? "unreachable: new kits enqueue local spawn intents for dispatcher-launched reviewers; legacy kits that spawn through Orca cannot start roles (re-queue the issue to upgrade its kit)"
+            : "unknown (no result line): direct Orca access is unproven; new kits enqueue local spawn intents for dispatcher-launched reviewers",
         false,
       );
       if (outcome.codex === null)

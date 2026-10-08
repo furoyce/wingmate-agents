@@ -1,11 +1,13 @@
 // tests/sim/harness.ts — the simulation world: fake Linear/Orca/git with real worktrees, an injected clock, and the I1–I10
 // invariants asserted after every simulated tick.
 import { expect } from "bun:test";
+import { createHash } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { planHash } from "../../src/machine/roles";
 import { type TickOptions, type TickSummary, tick } from "../../src/machine/tick";
 import type { LinearIssue } from "../../src/ports";
-import { readRecord, writeRecord } from "../../src/state/records";
+import { type WRecord, readRecord, writeRecord } from "../../src/state/records";
 import { OWNER, addLabeledByOwner, todo } from "../fakes/issues";
 import { type World, makeWorld } from "../fakes/world";
 import { assertInvariants, snapshot } from "./invariants";
@@ -17,6 +19,48 @@ export const world = (): Promise<World> => makeWorld();
 /** The report `gate validate` writes (§8.2 stage 4): per pinned command `$ <argv>`, `exit <code>` and an output digest. */
 export const pinnedReport = (gates: string[][], codes: number[] = []): string =>
   `${gates.flatMap((g, i) => [`$ ${g.join(" ")}`, `exit ${codes[i] ?? 0}`, `sha256 ${"0".repeat(64)}`]).join("\n")}\n`;
+
+/** Simulate trusted final reviewer receipts; relay tests exercise their production separately. */
+export async function passReviews(
+  w: World,
+  r: WRecord,
+  head: string,
+  stages: ("planVerify" | "validate" | "security")[] = ["planVerify", "validate", "security"],
+) {
+  if (!r.worktree) throw new Error("worktree required");
+  for (const stage of stages) {
+    const id = `Review${r.roleJobs.length + 1}`;
+    const text = "PASS\nIndependent simulated review.";
+    const reportPath = `.wingmate/evidence/role-${id}.md`;
+    mkdirSync(join(r.worktree.path, ".wingmate/evidence"), { recursive: true });
+    writeFileSync(join(r.worktree.path, reportPath), text);
+    r.roleJobs.push({
+      id,
+      mode: "terminal-job",
+      role:
+        stage === "planVerify"
+          ? "plan-verifier"
+          : stage === "validate"
+            ? "code-reviewer"
+            : "security-reviewer",
+      cycle: r.cycle,
+      attempt: r.coordinator.attempt,
+      provider: "codex",
+      status: "succeeded",
+      terminalHandle: null,
+      paneKey: null,
+      headSha: head,
+      planHash: await planHash(r.worktree.path),
+      createdAt: w.ctx.now(),
+      completedAt: w.ctx.now(),
+      verdict: "PASS",
+      reportPath,
+      reportHash: createHash("sha256").update(text).digest("hex"),
+      notified: true,
+    });
+    r.gates[stage].dispatchId = id;
+  }
+}
 
 /** Make a working record publishable exactly as the CLI would have: gates PASS/NA at HEAD, validate evidence for every pinned command, one commit ahead, a summary file. */
 export async function readyToFinish(w: World, identifier: string) {
@@ -41,6 +85,7 @@ export async function readyToFinish(w: World, identifier: string) {
   writeFileSync(join(wt.path, ".wingmate", "evidence", "validate", "report.txt"), pinnedReport(gates));
   writeFileSync(join(wt.path, ".wingmate", "s.md"), "Implemented the leaderboard.");
   w.git.commits.set(wt.path, 1);
+  await passReviews(w, r, head);
   await writeRecord(w.dirs, r);
   return r;
 }

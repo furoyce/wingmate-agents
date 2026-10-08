@@ -35,7 +35,7 @@ export async function snapshot(w: World): Promise<Snapshot> {
       row && handle && !row.agents.some((a) => a.paneKey === r.coordinator.paneKey)
         ? (w.orca.previews.get(handle) ?? "")
         : undefined;
-    const roles = roleHandles(r, w.orca.workers);
+    const roles = roleHandles(r, w.orca.workers, terms);
     liveness.set(
       r.identifier,
       w.orca.partial ? "unverifiable" : coordinatorLiveness(r, terms, row, preview, roles),
@@ -135,6 +135,8 @@ function assertRecord(w: World, r: WRecord): void {
         (x) => x.agentTerminalHandle,
       ),
       ...w.orca.foreignAgents,
+      ...w.orca.roleTerminals,
+      ...roleHandles(r, w.orca.workers, w.orca.terminals.get(r.worktree.id) ?? []),
     ]);
     const agents = new Set(
       (w.orca.rows.get(r.worktree.id)?.agents ?? [])

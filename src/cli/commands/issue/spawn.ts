@@ -136,8 +136,6 @@ async function readPlan(argv: Argv, d: Deps): Promise<Plan | { refused: number }
       ),
     };
   if (worktree !== "current" || specFile === null) return { refused: d.refuse("usage", USAGE) };
-  if (prefer !== null && (role !== "worker" || !isLaunchable(prefer)))
-    return { refused: d.refuse("usage", "--prefer claude|codex applies to --role worker only") };
   if (deps !== null) {
     let parsed: unknown = null;
     try {
@@ -339,6 +337,42 @@ export async function spawnVerb(argv: Argv, d: Deps): Promise<number> {
   const plan = await readPlan(argv, d);
   if ("refused" in plan) return plan.refused;
   const launch = await readLaunch(d.cwd);
+  if (launch.spawnMode === "dispatcher") {
+    if (argv.flags.prefer !== undefined)
+      return d.refuse(
+        "provider_not_allowed",
+        "the review provider policy selects terminal-job providers; omit --prefer",
+      );
+    if (plan.role === "worker")
+      return d.refuse(
+        "graph_unavailable",
+        "terminal-job fallback uses method loop; only reviewers are launched",
+      );
+    if (argv.flags["dry-run"] === true) {
+      d.out({ ok: true, dryRun: true, mode: "terminal-job", role: plan.role });
+      return 0;
+    }
+    const intent = await writeIntent(d.cwd, {
+      issue: d.id,
+      kind: "spawn",
+      payload: {
+        role: plan.role,
+        spec: plan.spec,
+        prefer: plan.prefer as Launchable | null,
+        deps: plan.deps === null ? [] : DepsList.parse(JSON.parse(plan.deps)),
+      },
+    });
+    d.out({
+      ok: true,
+      mode: "terminal-job",
+      requestId: intent.id,
+      status: "pending",
+      next: "Queue the rest of this independent wave, then END YOUR TURN. The dispatcher resumes you with file receipts.",
+    });
+    return 0;
+  }
+  if (plan.prefer !== null && (plan.role !== "worker" || !isLaunchable(plan.prefer)))
+    return d.refuse("usage", "--prefer claude|codex applies to --role worker only");
   const changed = await kitChanges(d.cwd);
   if (changed.length)
     return d.refuse(
