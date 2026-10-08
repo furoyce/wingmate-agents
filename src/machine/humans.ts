@@ -7,7 +7,7 @@ import type { Ctx } from "./context";
 import { LinearWrites } from "./linearWrites";
 import type { Event } from "./reconcile";
 import { block } from "./release";
-import { deliver, relaunch } from "./resume";
+import { deliver, persistInbox, relaunch, sendPointerDetailed } from "./resume";
 import { addAttention, dropAttention, enterPipelineStage, transition } from "./states";
 import { addNote } from "./status";
 import { type Advance, type StepOut, WORKING } from "./step";
@@ -129,7 +129,19 @@ async function comment(a: Advance, e: CommentEvent): Promise<Seen> {
     case "note":
       if (WORKING.has(r.stage)) {
         if (a.ro) return "defer"; // C16 (§6.7): a reconcile-only tick starts no turn; the note stays unseen for the next normal tick
-        await deliver(ctx, r, "note", e.body, a.live ?? "exited", r.pipelineStage);
+        const mailbox = a.live === "working" && Boolean(r.coordinator.childRunId);
+        if (!mailbox && a.budget.resumes <= 0) return "defer";
+        const inbox = await persistInbox(ctx, r, "note", e.body, r.pipelineStage);
+        if (typeof inbox === "string") return "defer";
+        const pointer = `note ${inbox.id} — read ${inbox.rel} and continue from stage ${r.pipelineStage}.`;
+        const d = await sendPointerDetailed(ctx, r, "note", inbox, pointer, a.live ?? "exited");
+        if (d === "deferred" || d === "exited") return "defer";
+        if (!mailbox) {
+          // An accepted terminal input may start a turn even before Orca confirms it; do not reuse this idle snapshot.
+          a.budget.resumes -= 1;
+          a.s.resumes.push(r.identifier);
+          a.launched = true;
+        }
         addNote(r, "owner note delivered");
         a.dirty = true;
       }
@@ -147,6 +159,8 @@ async function comment(a: Advance, e: CommentEvent): Promise<Seen> {
  * is skipped; in `review` nothing advances — the comments are the feedback a later move back to In Progress delivers (§7.3).
  */
 export async function comments(a: Advance): Promise<StepOut> {
+  // An earlier resume invalidated this tick's liveness snapshot; leave comments unseen until the next reconcile.
+  if (a.launched) return "next";
   const { r } = a;
   let advance = r.stage !== "review";
   for (const e of a.evs) {
@@ -155,6 +169,8 @@ export async function comments(a: Advance): Promise<StepOut> {
     const seen = e.type === "answer" ? await answer(a, e) : await comment(a, e);
     if (seen === "defer") advance = false;
     if (advance) r.linear.lastSeenCommentAt = e.at;
+    // A resumed coordinator needs fresh liveness; a deferred note keeps the rest queued behind its unchanged cursor.
+    if (a.launched || (e.type === "comment" && e.cls === "note" && seen === "defer")) break;
     if (r.stage !== stage) break; // the rest were classified for the old stage: read them again next tick
     // F6: one answer delivery per tick — later answers wait for the next tick, which re-reads the pane first (§7.1 step 4)
     if (e.type === "answer" && seen === "defer") break;
