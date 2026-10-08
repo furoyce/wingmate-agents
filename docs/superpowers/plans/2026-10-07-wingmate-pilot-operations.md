@@ -1,8 +1,107 @@
 # Slice 2: pilot operations
 
-The owner requested slice-1 validation and continuation into slice 2 on 2026-10-07.
-Baseline at `92b4e07`: 803 tests pass; TypeScript and Biome pass. OAuth authentication and live metadata now work.
-The initial live queue comparison found no eligible Todo issues. The owner subsequently confirmed both notification channels.
+## Current state
+
+The latest remote implementation is [PR #9](https://github.com/furoyce/wingmate-agents/pull/9), merged at
+`90b9f31ebc4ecd8543e265782ef44ae9d2b57062` at `2026-10-08T04:58:31Z`. Its tree
+`5ae196f328b09bdad2c5d6a2e31a7bb6e5261184` matches tested head `688b239b013e64493fa5be129c90ecfcc718a538`:
+900 tests passed, 0 failed, with 14,408 assertions across 76 files; TypeScript, Biome, diff checks, compiled build and binary
+config validation passed. Oversized finish summaries now refuse instead of silently truncating; the exact whole-word
+completion excerpt is scanned before posting, and queued refusals deliver an actionable correction without bypassing
+the existing relaunch cap. The feature branch was deleted on GitHub; its Orca-managed worktree was retained.
+
+PR #8 merged at `09676c9f1f2c89d4fb5c810960c9e69cdb6ba41e`, preserving tested head
+`815f5329632b72db665c074f7f7760b042b9aabe` and tree `6e485363fd018a5f124df643270aeb4d788bcef0`.
+PR #8 updated the reviewer prompts and coordinator protocol to clarify read-only review responsibilities without changing
+gates, sandbox permissions or sealed kits, and documented the unimplemented native infrastructure. Its focused existing
+suite passed 72 tests; TypeScript, Biome, diff checks, compiled build and binary config validation passed.
+The prior implementation baseline (PR #7 at `3ac9767`)
+passed the full 893-test suite. Engineering validation is not end-to-end pilot acceptance.
+
+The current dispatcher is PR #9, installed **disabled** at `2026-10-08T05:01:44.678Z` while JRF-404 was parked, binary SHA-256
+`bd30f46bce1c6739e2f16f2c272254490cd74b8d36bcbe5120d949a180f8d3ab`. Its install receipt and live automation precheck
+pin `/Users/jujufugh/.config/wingmate/pilot-projects.yaml`. This owner-controlled private config selects persistent Node
+24 for Bouncr API and Node 22 for the other three pilots, leaving global Node/Bun defaults unchanged. Quick doctor at
+`2026-10-08T05:02:48.364Z` passed all blocking checks. The prior full doctor at `2026-10-08T04:14:45.873Z` passed ten blocked
+and seven required allowed sandbox probes. The actual precheck previously succeeded from `/tmp` with a conflicting
+inherited `WINGMATE_CONFIG` (idle tick exit 1, as designed). Latest release logs are under
+`~/.local/share/wingmate/evidence/finish-summary-20261008/`; its `SHA256SUMS` digest is
+`684049e68dec44806906cbcea1e5e6b26b1145cda6073335902c67485851a611`. Install, quick-doctor and disabled-automation/precheck
+receipts are under `finish-summary-install-20261008/`, manifest digest
+`86e1b2448f4c93f9a8612e778f53230e51e300f38a734723aeac6f33bdec132f`. Prior evidence remains under
+`review-guidance-20261008/`, `config-pinning-20261008/`, `runtime-native-20261008/` and `runtime-fix-20261008/` in the same
+private evidence directory. Existing sealed kits remain unchanged.
+
+JRF-417 cycle 2 reused its clean worktree with a fresh coordinator and refreshed kit after cycle 1 was archived.
+Normal guidance followed by interrupt steering was proven on screen during intake; this is **assisted intake**.
+The coordinator parked at `2026-10-08T03:40:46.731Z` on question `01M4CSJ27VZ2K6P1ZP20KXHNC0`. The owner approved
+the one-file/seven-test plan in thread reply `27fbe379-7d4b-48a1-9dfd-947db2349b3c`; tick 18 at
+`2026-10-08T04:00:14.794Z` authenticated the answer and resumed the existing coordinator. Independent plan review passed,
+and the coordinator committed only `api/tests/friendCode.test.ts` at `19c70fb7c0752a2e54f7322cf4a7db80432713c6`.
+Coordinator checks passed under Node 24.21.0: API 56/56, API typecheck and mobile verify.
+
+The first independent code review returned FAIL solely because mobile verify rebuilds files and the reviewer is
+read-only; it found no implementation defect. That failed report remains visible. Operator guidance separated source
+and evidence review from workspace rebuild validation; fresh request `01M4CVTW4ZXY3YS9Q5DFGY9740` returned PASS at the
+same commit. The CLI-computed validate gate passed every pinned command, and UI was correctly NA for the test-only diff.
+This is **assisted review recovery**, not an unassisted acceptance claim.
+
+The first security review also returned FAIL, based on a review-spec requirement to reject typed look-alike/invisible
+characters rather than normalize them. Independent reconciliation checked the approved contract: canonical codes must be
+rejected when invalid, while typed input follows the existing normalization rules. Production normalization and routes
+are unchanged by this one-file test commit. Preserve the failed result and disclose the existing non-ASCII cases;
+this correction does not approve every existing normalization choice. The review spec was clarified with operator assistance, and fresh independent
+security request `01M4CWN8Q7THDFPZNBCAE10F06` returned PASS at the unchanged commit. Tick 37 settled its protected report;
+tick 38 passed the computed security/publish checks and opened [Bouncr PR #3](https://github.com/furoyce/bouncr.lol/pull/3)
+at exact head `19c70fb7c0752a2e54f7322cf4a7db80432713c6`. The protected record is at `review` and Linear read-back confirms
+In Review with Review-Ready. A nonpartial bounded read returned five comments and one attachment, with no more pages,
+verifying the exact PR attachment and one completion comment bound to its confirmed dispatcher creation receipt.
+This demonstrates **assisted scratch publication**; formal unassisted and native acceptance
+remain incomplete. The dispatcher's truncated PR body was preserved and repaired by the trusted operator, with final
+read-back at the same head; this is additional publication assistance, without source or gate changes. Narrow hashed
+evidence, both review FAILs and the original/final PR bodies are preserved under
+`~/.local/share/wingmate/evidence/scratch-JRF-417-20261008/`.
+Parented follow-up JRF-421 is Backlog without an Agent label and separately tracks the
+non-ASCII normalization policy decision.
+
+JRF-417's legacy kit uses an explicit official `/tmp` Node 24 PATH prefix; its sealed settings were not rewritten.
+A bounded sandbox probe confirmed parent/child Node, npm and Git under those unchanged settings. The sandbox's codesign
+check reported an invalid signature, while independent owner-side verification of the identical binary passed and matched
+the official archive. Preserve that qualification rather than claiming reproduced binary corruption. Receipts are in
+the private runtime/native evidence directory above.
+
+JR Learning Plus JRF-418, JR Travel Atlas JRF-419 and Smart Dispatcher JRF-420 are prepared Todo pilots without Agent
+labels and remain unclaimed. Smart's actual Crew preflight exited 0 at `db16d95`; its `myFiles` was empty, so this was
+not a reservation for the planned scope. An assisted early-draft operator procedure is arranged for the repository's
+first-commit draft-PR convention and append-only `WORK_LOG.md` coordination. Wingmate publishes at finish and can reuse
+an existing draft, but does not refresh its body or mark it ready; those operator steps are not automated acceptance.
+
+The native infrastructure question remains pending: no VM is configured and no isolated producer or production adapter
+has passed acceptance. Native policy remains unconfigured and the default adapter refuses execution; foreground
+bundle/PID/AX contracts remain unimplemented. See [native prerequisites](../../native-ui-relay.md).
+
+JRF-404 was manually requeued through trusted owner actions, with read-back confirming Todo + Ready and the retained
+agent-ready label. Manual tick 1 at `2026-10-08T04:42:34.357Z` claimed it into new worktree `wm-jrf-404` from
+`3ea70aa443e0c5d7997085b6e27c99b847ef342a`, Wingmate cycle 1, with fresh coordinator session
+`007bf822-8f0f-4b5e-a808-78ea802017d3`. The legacy session was not resumed. Manual tick 2 at
+`2026-10-08T05:00:15.300Z` collected its ask and genuinely parked the coordinator at `2026-10-08T05:00:19.096Z`, question
+`01M4CY2BGQ8RNATJ0E35H1N81D`, Linear comment `5a2a8779-980d-4e15-8add-73b6c1ca2043`. The proposal is
+`.wingmate/question.md`; no implementation plan exists yet.
+
+Independent operator review added `.wingmate/approval-review.md`, correcting mixed-version writers and step-timed cohort
+minima, nullable bigint storage, latest-run scope and pause/background/completion timing. It requires real disposable DB
+validation and trusted native UI evidence before publication. At this checkpoint, the owner has been asked to approve
+the corrected scope; no answer has arrived, no approval or resume is claimed, and the record remains `awaiting-human`. The original question
+and sealed kit are unchanged. This is **operator-assisted proposal review**, not completed lifecycle or native acceptance.
+The original proposal, corrections, parked-record projection and qualified probe facts are preserved under
+`~/.local/share/wingmate/evidence/JRF-404-intake-20261008/`, manifest digest
+`9774c1ba28211a01cfb9c59f15efe4813e3f93c0bbf4e47774264b632fb69de3`.
+
+The fresh session confirmed plain, unprefixed Node 24.21.0 and npm 11.19.0. Baseline suites have **not** run. The disposable
+DB probe was rejected before execution by a configured permission rule, with no fuller reason recorded; no retry ran.
+This does not establish OS-level PostgreSQL unavailability or justify bypassing the validation requirement. Complete the
+remaining scratch/native acceptance, JRF-404's authenticated answer/resume check and the other repository pilots before
+enabling automation. Automation remains disabled, and JRF-418/419/420 remain unclaimed without Agent labels.
 
 ## Engineering sequence
 
@@ -53,9 +152,9 @@ Live acceptance cannot be reported complete from simulations or missing credenti
 - Baseline full doctor sandbox probes passed: Claude blocked all ten denied probes and allowed the five required ones;
   Codex network isolation passed with the previously accepted outside-worktree read residual. Orca is unreachable from
   the kit sandbox. Bouncr web folder trust and the initial heartbeat remain warnings.
-- Live scan and an independent Orca read agreed: the pilot queues contain no eligible Todo issues. Bouncr has JRF-403
-  in Todo without an Agent label; the other three projects have no Todo issues. Legacy JRF-401/402/404 remain outside
-  Todo and were not claimed.
+- The initial live scan and an independent Orca read agreed: at that time the pilot queues contained no eligible Todo
+  issues. Bouncr had JRF-403 in Todo without an Agent label; the other three projects had no Todo issues. Legacy
+  JRF-401/402/404 were outside Todo and were not claimed.
 - Notification fixture JRF-416 was created as the app, the owner subscribed, and doctor posted its notification test
   and set Needs-Human. The owner confirmed both notifications; quick doctor recorded confirmation at
   `2026-10-08T03:04:41.910Z` with no blocking failures. Needs-Human was removed and the fixture moved to Done.
@@ -76,55 +175,6 @@ Live acceptance cannot be reported complete from simulations or missing credenti
   outbox, gates and record snapshots. The system's default Bun was left unchanged. This verifies runtime compatibility,
   not completion of the scratch workflow. Install now requires Bun 1.4.2 or newer; compiled executables disable automatic
   project configuration/environment loading. Doctor requires role-context and child-Git probes before pilot retry.
-
-## Current state
-
-Remote `main` includes the dispatcher role relay (PR #2, 839 tests), Bun correction (PR #3, 845), Linear reconciliation
-and ask-first guidance (PR #4, 852), disabled native UI foundation (PR #5, 871), per-repository trusted runtimes
-(PR #6, 888), and configuration pinning (PR #7, 893). Each merge preserved the exact tested tree. The latest implementation
-merge is `3ac97673c2a414816b4cf3d18d7e5aed9f779ce7`, matching tested head `3404f142da717ccc9653c1e9c90882b94efdf7cb`;
-893 tests, TypeScript, Biome, diff checks, compiled build and binary config validation passed.
-
-The dedicated dispatcher was fast-forwarded and installed **disabled** at `2026-10-08T04:13:25.276Z`, binary SHA-256
-`0b27200c41d74e49f0c988048e4dbdb3b7d375aea77edba40bb177dfd7dc3f5b`. Its install receipt and live automation precheck
-pin `/Users/jujufugh/.config/wingmate/pilot-projects.yaml`. This owner-controlled private config selects persistent Node
-24 for Bouncr API and Node 22 for the other three pilots, leaving global Node/Bun defaults unchanged. Full doctor at
-`2026-10-08T04:14:45.873Z` passed every blocking check, including ten blocked and seven required allowed sandbox probes.
-Executing the actual precheck from `/tmp` with a conflicting inherited `WINGMATE_CONFIG` also succeeded with an idle tick
-(exit 1, as designed). Hashed receipts and the full test log are under
-`~/.local/share/wingmate/evidence/config-pinning-20261008/`; earlier runtime/native evidence is under
-`~/.local/share/wingmate/evidence/runtime-native-20261008/` and `runtime-fix-20261008/`.
-
-JRF-417 cycle 2 reused its clean worktree with a fresh coordinator and refreshed kit after cycle 1 was archived.
-Normal guidance followed by interrupt steering was proven on screen during intake; this is **assisted intake**.
-The coordinator parked at `2026-10-08T03:40:46.731Z` on question `01M4CSJ27VZ2K6P1ZP20KXHNC0`. The owner approved
-the one-file/seven-test plan in thread reply `27fbe379-7d4b-48a1-9dfd-947db2349b3c`; tick 18 at
-`2026-10-08T04:00:14.794Z` authenticated the answer and resumed the existing coordinator. The independent plan review
-passed, and the coordinator committed only `api/tests/friendCode.test.ts` at
-`19c70fb7c0752a2e54f7322cf4a7db80432713c6`. Coordinator checks passed under Node 24.21.0: API 56/56, API typecheck
-and mobile verify. The first independent code review returned FAIL because mobile verify rebuilds files and the reviewer
-is read-only; it found no implementation defect. Preserve that failed result and require a fresh independent review,
-followed by the CLI-computed pinned gates. Operator guidance was applied to distinguish read-only review from workspace
-rebuild validation; the coordinator preserved the first report and queued fresh request `01M4CVTW4ZXY3YS9Q5DFGY9740`
-at the same commit. This is assisted review recovery. Full scratch completion is still pending at this checkpoint.
-
-The current legacy kit uses an explicit official `/tmp` Node 24 PATH prefix; its sealed settings were not rewritten.
-A bounded sandbox probe confirmed parent/child Node, npm and Git under those unchanged settings. The sandbox's codesign
-check reported an invalid signature, while independent owner-side verification of the identical binary passed and matched
-the official archive. Preserve that qualification rather than claiming reproduced binary corruption. Receipts are in
-the private runtime/native evidence directory above.
-
-Native policy remains unconfigured. The default adapter refuses execution; the isolated producer, execution host and
-foreground bundle/PID/AX contracts remain unimplemented. See [native prerequisites](../../native-ui-relay.md).
-JRF-404's resolved timing clarification does not replace its new ask/park/resume cycle or native UI proof.
-JR Learning Plus pilot JRF-418 and JR Travel Atlas pilot JRF-419 are scoped Todo tickets without Agent labels, so they
-remain unclaimed. Smart Dispatcher still needs its Crew overlap/reservation preflight before its pilot is queued.
-Its proposed dispatch-logic test has no observed collision, but concurrent append-only `WORK_LOG.md` entries and the
-repository's draft-PR-at-first-commit convention need an explicit trusted operator procedure. Wingmate publishes at
-finish and can reuse an existing draft, but does not refresh its body or mark it ready. Do not count a clean Crew run
-on an unchanged checkout as a reservation for future files, or claim that those lifecycle steps are automated.
-Complete scratch acceptance, JRF-404's lifecycle check and the other repository pilots before enabling automation;
-engineering checks and planning results alone do not establish end-to-end acceptance.
 
 ## Parallel validation fixes
 
