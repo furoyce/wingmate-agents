@@ -209,7 +209,7 @@ export async function startRole(
   await writeAtomic(join(dir, "prompt.txt"), prompt);
   const q = (name: string) => shellQuote([join(dir, name)]);
   // Redirection belongs to this trusted outer shell, not to a command run by the model.
-  const runner = `#!/bin/sh\numask 077\n${shellQuote(argv)} < ${q("prompt.txt")} > ${q("stdout")} 2> ${q("stderr")}\nwingmate_role_exit=$?\ndate -u '%Y-%m-%dT%H:%M:%SZ' > ${q("completed-at")}\nprintf '%s\\n' "$wingmate_role_exit" > ${q("exit.tmp")}\nmv ${q("exit.tmp")} ${q("exit")}\nexit "$wingmate_role_exit"\n`;
+  const runner = `#!/bin/sh\numask 077\n${shellQuote(argv)} < ${q("prompt.txt")} > ${q("stdout")} 2> ${q("stderr")}\nwingmate_role_exit=$?\ndate -u '+%Y-%m-%dT%H:%M:%SZ' > ${q("completed-at")}\nprintf '%s\\n' "$wingmate_role_exit" > ${q("exit.tmp")}\nmv ${q("exit.tmp")} ${q("exit")}\nexit "$wingmate_role_exit"\n`;
   await writeAtomic(join(dir, "runner.sh"), runner);
   r.roleJobs.push(job);
   await saveRecord(ctx, r); // before an uncertain mutation: no duplicate create on replay

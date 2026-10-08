@@ -223,9 +223,20 @@ describe("slice 2 dispatcher role relay", () => {
       mode: 0o700,
     });
     const runner = join(roleJobDir(w.ctx, r, job.id), "runner.sh");
-    expect((await run(["sh", runner], { cwd: wt, env: { PATH: `${bin}:${process.env.PATH}` } })).code).toBe(
-      0,
-    );
+    const startedAt = Date.now();
+    const result = await run(["sh", runner], {
+      cwd: wt,
+      inheritEnv: false,
+      env: { PATH: `${bin}:/usr/bin:/bin`, HOME: w.root },
+      timeoutMs: 5000,
+    });
+    const finishedAt = Date.now();
+    expect(result).toMatchObject({ code: 0, stderr: "", timedOut: false });
+    const completed = readFileSync(join(roleJobDir(w.ctx, r, job.id), "completed-at"), "utf8").trim();
+    expect(completed).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
+    const completedAt = Date.parse(completed);
+    expect(completedAt).toBeGreaterThanOrEqual(Math.floor(startedAt / 1000) * 1000);
+    expect(completedAt).toBeLessThanOrEqual(finishedAt);
     advance(w, 5);
     expect((await runTick(w)).resumes).toEqual([ID]);
     r = await record(w);
