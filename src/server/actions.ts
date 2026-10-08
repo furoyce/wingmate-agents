@@ -6,8 +6,10 @@ import type { Config } from "../config/schema";
 import { setPause } from "../ops/pause";
 import type { LinearPort } from "../ports";
 import { WingmateError } from "../shared/errors";
+import { newUuid } from "../shared/ids";
 import type { Dirs } from "../shared/paths";
-import { readText } from "../state/fs";
+import type { Clock } from "../shared/time";
+import { readText, writeAtomic } from "../state/fs";
 import { RecordSchema } from "../state/records";
 
 export interface ActionResponse {
@@ -62,6 +64,8 @@ export async function handleAnswerQuestion(
   identifier: string,
   questionId: string,
   answerText: string,
+  linearClient?: LinearPort | null,
+  clock?: Clock,
 ): Promise<ActionResponse> {
   const recordFile = join(dirs.records, `${identifier}.json`);
   const content = await readText(recordFile);
@@ -75,6 +79,7 @@ export async function handleAnswerQuestion(
     throw new WingmateError("worktree_missing", `Record ${identifier} has no worktree attached`);
   }
 
+  // 1. Deliver answer file to worktree inbox
   const inboxDir = join(worktreePath, ".wingmate", "inbox");
   await mkdir(inboxDir, { recursive: true });
 
@@ -82,10 +87,36 @@ export async function handleAnswerQuestion(
   const answerMarkdown = `# Answer for ${questionId}\n\n${answerText.trim()}\n`;
   await writeFile(answerFile, answerMarkdown, "utf8");
 
+  // 2. Post comment to Linear if linearClient is available
+  let commentId: string | null = null;
+  const q = record.questions.find((x) => x.id === questionId);
+  if (linearClient && record.linearId) {
+    try {
+      const res = await linearClient.createComment(record.linearId, answerText.trim(), {
+        id: newUuid(),
+        ...(q?.commentId ? { parentId: q.commentId } : {}),
+      });
+      commentId = res.id;
+    } catch {
+      // Non-fatal if worktree inbox file is already recorded
+    }
+  }
+
+  // 3. Update record state to resume agent immediately
+  if (q) {
+    q.status = "answered";
+    q.answeredAt = (clock?.now() ?? new Date()).toISOString();
+    if (commentId) q.answerCommentId = commentId;
+  }
+  if (record.stage === "awaiting-human") {
+    record.stage = "working";
+  }
+  await writeAtomic(recordFile, JSON.stringify(record, null, 2));
+
   return {
     ok: true,
-    message: `Answer recorded for question ${questionId}. Dispatcher will resume ${identifier} on next tick.`,
-    data: { identifier, questionId, file: answerFile },
+    message: `Answer recorded for question ${questionId}. Agent resumed in worktree.`,
+    data: { identifier, questionId, file: answerFile, commentId },
   };
 }
 

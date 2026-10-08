@@ -156,10 +156,16 @@ export async function startServer(options: ServerOptions = {}): Promise<Wingmate
           const action = path.replace("/api/actions/", "");
           const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
 
+          const broadcastUpdate = () => {
+            const payload = JSON.stringify({ type: "records_updated", at: clock.now().toISOString() });
+            for (const send of sseClients) send(payload);
+          };
+
           if (action === "promote") {
             const linearId = String(body.linearId || "");
             const providerLabel = String(body.providerLabel || "agent-ready");
             const result = await handlePromoteIssue(linearClient, cfg, linearId, providerLabel);
+            broadcastUpdate();
             return new Response(JSON.stringify(result), {
               headers: { "Content-Type": "application/json" },
             });
@@ -169,7 +175,15 @@ export async function startServer(options: ServerOptions = {}): Promise<Wingmate
             const identifier = String(body.identifier || "");
             const questionId = String(body.questionId || "");
             const answerText = String(body.answerText || "");
-            const result = await handleAnswerQuestion(dirs, identifier, questionId, answerText);
+            const result = await handleAnswerQuestion(
+              dirs,
+              identifier,
+              questionId,
+              answerText,
+              linearClient,
+              clock,
+            );
+            broadcastUpdate();
             return new Response(JSON.stringify(result), {
               headers: { "Content-Type": "application/json" },
             });
@@ -179,6 +193,7 @@ export async function startServer(options: ServerOptions = {}): Promise<Wingmate
             const scope = String(body.scope || "global");
             const on = Boolean(body.on ?? true);
             const result = await handleTogglePause(dirs, scope, on);
+            broadcastUpdate();
             return new Response(JSON.stringify(result), {
               headers: { "Content-Type": "application/json" },
             });
