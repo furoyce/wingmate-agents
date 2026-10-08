@@ -627,6 +627,10 @@ describe("owner overrides (§7.4)", () => {
         ])
       ).code,
     ).toBe(0);
+    // Dispatcher-mode gates are queued only: wait for canonical implement acceptance before later gates/finish.
+    advance(w, 5);
+    expect((await runTick(w)).resumes).toEqual(["JRF-501"]);
+    expect((await readLocal(wt)).gates.implement?.verdict).toBe("PASS");
     mkdirSync(join(wt, ".wingmate", "evidence", "security"), { recursive: true });
     writeFileSync(join(wt, ".wingmate", "evidence", "security", "report.txt"), "secrets: 0\n");
     const gate = (

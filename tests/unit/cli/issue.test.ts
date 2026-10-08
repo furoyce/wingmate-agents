@@ -148,6 +148,88 @@ const refusal = (r: { code: number; out: string }): Refusal => {
 };
 
 describe("wingmate issue", () => {
+  test("every dispatcher gate queues an ACK without changing local gates or stage, including computed checks and UI NA", async () => {
+    for (const stage of STAGES) {
+      const wt = await worktree({ git: true });
+      try {
+        const head = await headOf(wt);
+        writeLaunch(wt, { spawnMode: "dispatcher", baseSha: head });
+        const local = await passGates(wt, head, STAGES.slice(0, STAGES.indexOf(stage)));
+        local.record.pipelineStage = stage;
+        await writeLocal(wt, local);
+        writeFileSync(join(wt, ".wingmate/stage.json"), "unchanged until dispatcher ACK\n");
+        writeFileSync(join(wt, ".wingmate/evidence/gate.md"), "Scoped evidence.");
+        const role =
+          stage === "planVerify"
+            ? "plan-verifier"
+            : stage === "validate"
+              ? "code-reviewer"
+              : "security-reviewer";
+        writeFileSync(
+          join(wt, ".wingmate/roles.json"),
+          JSON.stringify([
+            {
+              id: "Review1",
+              mode: "terminal-job",
+              role,
+              cycle: 1,
+              attempt: 1,
+              provider: "codex",
+              status: "succeeded",
+              terminalHandle: null,
+              paneKey: null,
+              headSha: head,
+              planHash: null,
+              createdAt: "2026-10-06T10:00:00Z",
+              completedAt: "2026-10-06T10:01:00Z",
+              verdict: "PASS",
+              reportPath: ".wingmate/evidence/gate.md",
+              reportHash: null,
+              notified: true,
+            },
+          ]),
+        );
+        const args = [
+          "gate",
+          stage,
+          ...(["planVerify", "validate", "security"].includes(stage)
+            ? ["--request", "Review1"]
+            : stage === "ui"
+              ? ["--verdict", "NA", "--note", "no UI change"]
+              : [
+                  "--verdict",
+                  "PASS",
+                  "--evidence",
+                  ".wingmate/evidence/gate.md",
+                  ...(stage === "intake" ? ["--method", "loop"] : []),
+                ]),
+        ];
+        const result = await runVerb(wt, args);
+        expect(result.code).toBe(0);
+        const output = JSON.parse(result.out);
+        expect(output).toMatchObject({
+          ok: true,
+          stage,
+          pending: true,
+          verdict: stage === "ui" ? "NA" : "PASS",
+        });
+        expect(output.next).toContain("END YOUR TURN");
+        expect(output.next).toContain("HEAD");
+        expect(await readLocal(wt)).toEqual(local);
+        expect(readFileSync(join(wt, ".wingmate/stage.json"), "utf8")).toBe(
+          "unchanged until dispatcher ACK\n",
+        );
+        expect(await listIntents(wt)).toMatchObject([
+          { id: output.intentId, kind: "gate", payload: { stage, acknowledge: true, headSha: head } },
+        ]);
+        expect(refusal(await runVerb(wt, args)).code).toBe("gate_pending");
+        expect(await listIntents(wt)).toHaveLength(1);
+      } finally {
+        rmSync(wt, { recursive: true, force: true });
+      }
+    }
+  });
+
   test("dispatcher gates refuse an unavailable HEAD without writing state or intents", async () => {
     const wt = await worktree();
     writeLaunch(wt, { spawnMode: "dispatcher" });

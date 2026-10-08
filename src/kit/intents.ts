@@ -73,6 +73,8 @@ export const IntentSchema = z.discriminatedUnion("kind", [
       method: z.enum(["loop", "graph"]).nullable(),
       headSha: z.string().nullable(),
       dispatchId: z.string().nullable(),
+      /** New dispatcher CLI gates wait for a durable canonical decision and its delivery. */
+      acknowledge: z.boolean().optional(),
     }),
   }),
   z.object({ ...base, kind: z.literal("note"), payload: z.object({ text: z.string().min(1).max(2000) }) }),
