@@ -75,6 +75,27 @@ async function readPausedScopes(ctx: Ctx): Promise<string[]> {
   return parsed;
 }
 
+/** App comments can have an ordinary user id. Only protected creation receipts prove they are ours, across every cycle. */
+async function dispatcherCommentIds(ctx: Ctx): Promise<Map<string, Set<string>>> {
+  const ids = new Map<string, Set<string>>();
+  for (const entry of await ctx.journal.all()) {
+    const receipt = entry.receipt;
+    if (
+      entry.kind !== "commentCreate" ||
+      !receipt ||
+      typeof receipt !== "object" ||
+      !("id" in receipt) ||
+      typeof receipt.id !== "string" ||
+      !receipt.id
+    )
+      continue;
+    const own = ids.get(entry.issue) ?? new Set<string>();
+    own.add(receipt.id);
+    ids.set(entry.issue, own);
+  }
+  return ids;
+}
+
 export async function reconcile(ctx: Ctx): Promise<Reconciled> {
   const records = await listRecords(ctx.dirs);
   const projectIds = Object.values(ctx.cfg.projects).map((p) => p.linearProject);
@@ -155,7 +176,9 @@ export async function reconcile(ctx: Ctx): Promise<Reconciled> {
       candidates.push({ issue, verdict: pre });
       continue;
     }
-    const history: LinearHistoryEntry[] = await ctx.linear.issueHistory(issue.id, EPOCH);
+    const history = (await ctx.linear.issueHistory(issue.id, EPOCH)).sort((a, b) =>
+      a.createdAt.localeCompare(b.createdAt),
+    );
     candidates.push({ issue, verdict: evaluateCandidate(issue, { ...baseCtx, history }) });
   }
 
@@ -176,10 +199,7 @@ export async function reconcile(ctx: Ctx): Promise<Reconciled> {
           since,
         )
       : [];
-  const agentGroupLabelIds = new Set(
-    ctx.meta.labels.filter((l) => l.parentId === ctx.meta.agentGroupId).map((l) => l.id),
-  );
-  const groupLabelIds = new Set([...ctx.meta.lifecycleIds, ...agentGroupLabelIds]);
+  const ownComments = comments.length ? await dispatcherCommentIds(ctx) : new Map<string, Set<string>>();
   const humanLabelId = ctx.meta.labels.find((l) => l.name === ctx.cfg.labels.agent.human)?.id;
   for (const r of activeRecords) {
     const issue = issuesById.get(r.linearId);
@@ -192,11 +212,9 @@ export async function reconcile(ctx: Ctx): Promise<Reconciled> {
     // entry that produced the observed change must be an approver (or the GitHub integration) and no agent of
     // this issue may have been active at that entry's own time. No matching entry → not authorized.
     const latestEntry = (pred: (h: LinearHistoryEntry) => boolean): LinearHistoryEntry | undefined => {
-      for (let i = hist.length - 1; i >= 0; i--) {
-        const h = hist[i];
-        if (h && pred(h)) return h;
-      }
-      return undefined;
+      let latest: LinearHistoryEntry | undefined;
+      for (const h of hist) if (pred(h) && (!latest || h.createdAt > latest.createdAt)) latest = h;
+      return latest;
     };
     const byApprover = (h: LinearHistoryEntry) =>
       !h.botActorId && !!h.actorId && approvers.includes(h.actorId);
@@ -216,16 +234,20 @@ export async function reconcile(ctx: Ctx): Promise<Reconciled> {
         at: entry?.createdAt ?? issue.updatedAt,
       });
     }
-    const life = issue.labels.find((l) => ctx.meta.lifecycleIds.has(l.id))?.name ?? null;
+    const lifecycle = issue.labels.find((l) => ctx.meta.lifecycleIds.has(l.id));
+    const life = lifecycle?.name ?? null;
     const agents = issue.labels.filter((l) => l.parentId === ctx.meta.agentGroupId).map((l) => l.name);
     // The `human` label is the owner's kill switch (§7.4): report it even when the Lifecycle label is unchanged,
     // otherwise a release request that leaves Lifecycle alone would never reach the tick.
     const humanAdded = agents.includes(ctx.cfg.labels.agent.human);
     if (life !== r.linear.lifecycleLabel || humanAdded) {
-      const entry = latestEntry(
-        (h) =>
-          h.addedLabelIds.some((id) => groupLabelIds.has(id)) ||
-          h.removedLabelIds.some((id) => groupLabelIds.has(id)),
+      const entry = latestEntry((h) =>
+        // Match the observed Lifecycle change, never an unrelated later Agent-label edit. A cleared Lifecycle must come
+        // from a removal without a replacement; an added one must name the exact label currently observed.
+        lifecycle
+          ? h.addedLabelIds.includes(lifecycle.id)
+          : h.removedLabelIds.some((id) => ctx.meta.lifecycleIds.has(id)) &&
+            !h.addedLabelIds.some((id) => ctx.meta.lifecycleIds.has(id)),
       );
       // §13.3(i): `human` is the owner's kill switch, "honored at the next tick". Stopping work is the safe direction, so an
       // approver adding it counts whatever an agent was doing at the time; the activity rule guards answers and closes.
@@ -241,7 +263,10 @@ export async function reconcile(ctx: Ctx): Promise<Reconciled> {
       });
     }
     const fresh = comments
-      .filter((x) => x.issueId === r.linearId && x.createdAt > seenFrom(r))
+      .filter(
+        (x) =>
+          x.issueId === r.linearId && x.createdAt > seenFrom(r) && !ownComments.get(r.identifier)?.has(x.id),
+      )
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
     for (const c of fresh) {
       const cls = classifyComment(c, r, approvers, activeAt);

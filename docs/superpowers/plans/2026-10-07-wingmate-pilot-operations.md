@@ -81,14 +81,29 @@ Live acceptance cannot be reported complete from simulations or missing credenti
 
 PR #2 engineering validation passed 839 tests with zero failures (73 files, 13,838 assertions), TypeScript, Biome,
 diff checks, compiled build and binary config validation. New kits use dispatcher-owned reviewers and method loop;
-legacy kits remain compatible. The installed automation remains disabled. The runtime compatibility correction must
-be merged, installed and checked before retrying JRF-417 through a fresh dispatcher cycle. Full scratch completion,
+legacy kits remain compatible. The installed automation remains disabled. PR #3 merged the runtime correction at
+`46d8b500d38abc623e66b8ca1a104c4e6ff6ae87`; the merged tree matched the tested head. The dedicated dispatcher was
+fast-forwarded and installed disabled at `2026-10-08T03:20:31.069Z`, binary SHA-256
+`0d4e5ed2adf9ccad70d59f43dd8a4a7c53ae92993a1b2cb2d4b805a0b27661f5`.
+Full doctor at `2026-10-08T03:21:47.992Z` passed every blocking check, including ten blocked and seven required allowed
+sandbox paths and notification confirmation. Evidence and hashed receipts are in
+`~/.local/share/wingmate/evidence/runtime-fix-20261008/`. JRF-417 was requeued through Todo/Ready; cycle 1 was archived,
+cycle 2 reused its clean worktree with a fresh coordinator and refreshed kit, and intake passed. Full scratch completion,
 JRF-404 ask/park/resume, native iOS UI relay and the other three repository pilots remain pending.
 Do not enable the automation merely because the engineering checks are green.
 
 The runtime correction passed 845 tests with zero failures (73 files, 13,895 assertions) using the isolated Bun 1.4.2
 compiler. TypeScript, Biome, diff checks, compiled build and binary config validation passed. Independent review found
 no remaining blockers after requiring a valid HEAD before dispatcher gate mutations and testing nonzero child Git exits.
+
+The retry exposed Linear event issues: app-authored comments may appear as ordinary user comments, and the live API
+returns history newest first despite `orderBy: createdAt`. Reconciliation must use protected comment receipts and
+chronological event selection, without giving app identities or body markers owner authority. The coordinator command
+reference also needs complete gate examples and the explicit ask-first intake rule from spec §8.3.
+The event and protocol correction passed 852 tests with zero failures (73 files, 13,907 assertions), TypeScript,
+Biome and diff checks. Live history ordering was verified through a read-only app query. The scratch coordinator
+received one bounded guidance message to finish planning and use the ask-first question; this attempt therefore
+includes assisted intake and must not be described as an entirely unassisted workflow.
 
 ## Parallel validation fixes
 
