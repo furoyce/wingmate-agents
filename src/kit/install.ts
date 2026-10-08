@@ -2,7 +2,7 @@
 import { createHash } from "node:crypto";
 import { type Stats, existsSync } from "node:fs";
 import { lstat, mkdir, readFile, readdir, readlink } from "node:fs/promises";
-import { join, relative } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { z } from "zod";
 import type { Config, ProjectConfig } from "../config/schema";
 import { DISPATCHER_GIT_ENV } from "../git/cli";
@@ -10,6 +10,13 @@ import { verifyGitLinks } from "../git/trust";
 import { policyHash } from "../native/protocol";
 import { WingmateError, errorCode } from "../shared/errors";
 import { run } from "../shared/exec";
+import {
+  type Runtime,
+  type RuntimeScope,
+  resolveRuntime,
+  runtimeKitDir,
+  writeRuntime,
+} from "../shared/runtime";
 import { readText, writeAtomic } from "../state/fs";
 import type { WRecord } from "../state/records";
 import { type BriefTicket, renderBrief } from "./brief";
@@ -51,10 +58,14 @@ export interface InstallInput {
   allowDeps?: boolean;
   /** SEC-1: the credential-named keys of the owner's user-level Claude env (`userClaudeCredentialEnv`), blanked in every settings file. */
   blankEnv?: readonly string[];
+  runtimeScope?: RuntimeScope;
+  /** Internal dependency injection for isolated tests; never read from CLI flags or environment. */
+  runtimeKitRoot?: string | undefined;
 }
 
 export interface InstallResult {
   hashes: Record<string, string>;
+  runtime?: Runtime | undefined;
   /** `skipped_tracked`: the repo tracks `.claude/settings.local.json`, so the courtesy copy was not merged into it (F15). */
   courtesySettings: "written" | "skipped_tracked";
 }
@@ -391,7 +402,11 @@ export async function refreshSiblingDenies(
   return siblings;
 }
 
-async function writeKitDir(i: InstallInput, settings: Record<Role, object>): Promise<void> {
+async function writeKitDir(
+  i: InstallInput,
+  settings: Record<Role, object>,
+  runtime?: Runtime,
+): Promise<void> {
   await mkdir(join(i.kitDir, "gh-empty"), { recursive: true });
   await mkdir(join(i.kitDir, "no-hooks"), { recursive: true });
   await writeAtomic(
@@ -407,21 +422,23 @@ async function writeKitDir(i: InstallInput, settings: Record<Role, object>): Pro
   );
   await writeAtomic(
     join(i.kitDir, "env.json"),
-    JSON.stringify(agentEnv(i.kitDir, "coordinator", i.blankEnv), null, 2),
+    JSON.stringify(agentEnv(i.kitDir, "coordinator", i.blankEnv, runtime), null, 2),
   );
+  await writeRuntime(i.kitDir, runtime);
 }
 
 type Repo = ProjectConfig["repos"][string];
 type Worktree = NonNullable<WRecord["worktree"]>;
 
 /** `.wingmate/launch.json`: what `gate` and `spawn` need, resolved at claim (§8.0, §8.1, §9.2). */
-function launchFile(i: InstallInput, repo: Repo, w: Worktree): Launch {
+function launchFile(i: InstallInput, repo: Repo, w: Worktree, runtime?: Runtime): Launch {
   const r = i.record;
   const tiers: Launch["tiers"] = {};
   for (const [p, t] of Object.entries(i.tiers ?? {})) if (t) tiers[p] = { model: t.model, effort: t.effort };
   tiers[r.provider] = { model: i.launch.model, effort: i.launch.effort };
   return {
     spawnMode: "dispatcher",
+    ...(runtime ? { runtime } : {}),
     provider: r.provider,
     model: i.launch.model,
     effort: i.launch.effort,
@@ -449,7 +466,7 @@ function launchFile(i: InstallInput, repo: Repo, w: Worktree): Launch {
  * The coordinator's settings and one per spawned role (§8.1): the same paths and network, each role's own deny list. The other
  * worktrees' gitdirs and branches are listed once, so the six files agree (F7, F10); `refreshSiblingDenies` re-lists them later.
  */
-function agentSettings(i: InstallInput, repo: Repo, w: Worktree): Record<Role, object> {
+function agentSettings(i: InstallInput, repo: Repo, w: Worktree, runtime?: Runtime): Record<Role, object> {
   const known = otherWorktrees(w.gitCommonDir, w.gitdirName);
   const base: SettingsInput = {
     worktreePath: i.worktreePath,
@@ -460,6 +477,9 @@ function agentSettings(i: InstallInput, repo: Repo, w: Worktree): Record<Role, o
     baseBranch: repo.base,
     kitDir: i.kitDir,
     toolchainPaths: i.toolchainPaths,
+    runtimeReadPaths: runtime?.readPaths,
+    runtimePath: runtime?.path,
+    runtimeAnchorReadPath: join(runtimeKitDir(i.record.identifier, i.runtimeKitRoot), "runtime.json"),
     allowedDomains: [...i.cfg.defaults.sandbox.allowedDomains, ...repo.sandbox.allowedDomains],
     role: "coordinator",
     siblingGitdirs: known.gitdirs,
@@ -497,7 +517,24 @@ export async function installKit(i: InstallInput): Promise<InstallResult> {
       "fix config/projects.yaml or re-route the issue",
     );
   const common = w.gitCommonDir;
-  const settings = agentSettings(i, repo, w); // before any write: a settings_invalid leaves nothing half-installed
+  if (repo.runtimeBinPaths.length) {
+    const expectedKit = runtimeKitDir(r.identifier, i.runtimeKitRoot);
+    if (
+      resolve(i.kitDir) !== expectedKit ||
+      (i.runtimeScope?.stateRoot && resolve(i.runtimeScope.stateRoot) !== dirname(dirname(expectedKit)))
+    )
+      throw new WingmateError(
+        "runtime_invalid",
+        "repository runtime configuration requires the OS-account default Wingmate state; custom state roots are not supported for runtime kits",
+      );
+  }
+  const runtime = await resolveRuntime(repo.runtimeBinPaths, {
+    home: i.runtimeScope?.home ?? process.env.HOME ?? "/",
+    stateRoot: i.runtimeScope?.stateRoot,
+    repositoryRoots: [wt, common, dirname(common)],
+    protectedRoots: [wt, common, dirname(common), i.kitDir, ...(i.runtimeScope?.protectedRoots ?? [])],
+  });
+  const settings = agentSettings(i, repo, w, runtime); // before any write: invalid settings/runtime leave nothing half-installed
   for (const d of ["evidence", "inbox", "outbox", "ticket", "prompts"])
     await mkdir(join(wm, d), { recursive: true });
   await writeAtomic(join(wm, "PROTOCOL.md"), PROTOCOL_MD);
@@ -524,7 +561,7 @@ export async function installKit(i: InstallInput): Promise<InstallResult> {
   for (const [k, v] of Object.entries(PROMPTS)) await writeAtomic(join(wm, "prompts", `${k}.md`), v);
   await writeAtomic(join(wm, "gates.json"), JSON.stringify({}, null, 2));
   await writeAtomic(join(wm, "native-ui.json"), JSON.stringify(r.nativeUiJobs, null, 2));
-  await writeAtomic(join(wm, "launch.json"), JSON.stringify(launchFile(i, repo, w), null, 2));
+  await writeAtomic(join(wm, "launch.json"), JSON.stringify(launchFile(i, repo, w, runtime), null, 2));
   await writeAtomic(join(wm, "ticket", "title.md"), i.issue.title);
   await writeAtomic(join(wm, "ticket", "description.md"), i.issue.description ?? "");
   await writeAtomic(
@@ -545,7 +582,7 @@ export async function installKit(i: InstallInput): Promise<InstallResult> {
     questions: [],
     run: null,
   });
-  await writeKitDir(i, settings);
+  await writeKitDir(i, settings, runtime);
   // F15: a tracked courtesy file stays as the repo has it — merging would show as a local change and trip `kit_tampered`; the
   // authoritative settings are the kit dir's
   const tracked = await isTracked(wt, COURTESY_FILE);
@@ -559,5 +596,5 @@ export async function installKit(i: InstallInput): Promise<InstallResult> {
   await appendExclude(common, [".wingmate/", COURTESY_FILE, ...created.map((f) => `/${f}`)]);
   const hashes = await integrityHashes(wt, common);
   await writeAtomic(join(wm, "integrity.json"), JSON.stringify({ commonDir: common, hashes }, null, 2));
-  return { hashes, courtesySettings: tracked ? "skipped_tracked" : "written" };
+  return { hashes, runtime, courtesySettings: tracked ? "skipped_tracked" : "written" };
 }

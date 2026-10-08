@@ -1,6 +1,6 @@
 // tests/unit/config/schema.test.ts
 import { describe, expect, test } from "bun:test";
-import { ConfigSchema, withDefaults } from "../../../src/config/schema";
+import { ConfigSchema, RepoSchema, withDefaults } from "../../../src/config/schema";
 import { NativePolicySchema } from "../../../src/native/protocol";
 import { WingmateError } from "../../../src/shared/errors";
 const minimal = {
@@ -74,6 +74,24 @@ describe("ConfigSchema", () => {
     expect(() => withDefaults(raw)).not.toThrow();
     raw.defaults.dispatcher.precheckTimeoutSec = 200;
     expect(() => withDefaults(raw)).toThrow("cannot fit this dispatcher's tick budget");
+  });
+  test("runtime bin prefixes are optional literal absolute paths, never environment maps or shell text", () => {
+    const repo = minimal.projects.bouncr.repos.api;
+    expect(RepoSchema.parse(repo).runtimeBinPaths).toEqual([]);
+    expect(RepoSchema.parse({ ...repo, runtimeBinPaths: ["/opt/scoped node/bin"] }).runtimeBinPaths).toEqual([
+      "/opt/scoped node/bin",
+    ]);
+    for (const runtimeBinPaths of [
+      "/opt/node/bin",
+      { PATH: "/opt/node/bin" },
+      [""],
+      ["~/bin"],
+      ["./bin"],
+      ["/one:/two"],
+      ["/opt/*/bin"],
+      ["/opt/node\n/bin"],
+    ])
+      expect(() => RepoSchema.parse({ ...repo, runtimeBinPaths })).toThrow();
   });
   test("normalizes legacy setup argv and accepts an explicit sequence or none", () => {
     const repo = minimal.projects.bouncr.repos.api;

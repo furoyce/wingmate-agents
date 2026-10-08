@@ -71,6 +71,8 @@ export interface Ctx {
   kitDirFor(identifier: string): string;
   /** Read-only paths of the agents' toolchain for the sandbox `allowRead` (§13.3 b). */
   toolchainPaths: string[];
+  /** Internal test dependency only; production runtime receipts anchor to the OS-account default state. */
+  runtimeKitRoot?: string | undefined;
   sweep: SweepFn;
   publishImpl(): Promise<{ publish: PublishFn }>;
   /** REL-1: set by `tick` for its own run; absent outside a tick (no bound). */

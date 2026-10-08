@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { join } from "node:path";
-import { GitCli } from "../../../git/cli";
+import { GitCli, type Runner } from "../../../git/cli";
 import { parseAddedLines } from "../../../git/diff";
 import { writeIntent } from "../../../kit/intents";
 import {
@@ -18,7 +18,8 @@ import { type Finding, scanAddedLines, scanText } from "../../../policy/secrets"
 import type { BranchHistory } from "../../../ports";
 import { errorCode } from "../../../shared/errors";
 import { type RunResult, run } from "../../../shared/exec";
-import { writeAtomic } from "../../../state/fs";
+import { issueRuntime } from "../../../shared/runtime";
+import { readText, writeAtomic } from "../../../state/fs";
 import type { Argv } from "../../index";
 import type { Out, Refuse } from "../issue";
 // src/cli/commands/issue/gate.ts — `wingmate issue <id> gate <stage>` (§8.1): order enforced, judgment gates need evidence,
@@ -27,7 +28,14 @@ import { readNativeJobs } from "./nativeUi";
 
 const ORDER = ["intake", "plan", "planVerify", "implement", "validate", "ui", "security", "pr"] as const;
 type Stage = (typeof ORDER)[number];
-type Deps = { cwd: string; local: Local; id: string; refuse: Refuse; out: Out };
+type Deps = {
+  cwd: string;
+  local: Local;
+  id: string;
+  refuse: Refuse;
+  out: Out;
+  runtimeKitRoot?: string | undefined;
+};
 const HEAD_BOUND = ["validate", "security", "ui"] as const;
 const EMPTY = {
   verdict: null,
@@ -41,24 +49,24 @@ const EMPTY = {
 };
 
 /** `git rev-parse HEAD`, or null outside a repository or before the first commit. */
-export async function gitHead(cwd: string): Promise<string | null> {
-  const r = await run(["git", "rev-parse", "--verify", "-q", "HEAD"], { cwd, timeoutMs: 30_000 });
+export async function gitHead(cwd: string, exec: Runner = run): Promise<string | null> {
+  const r = await exec(["git", "rev-parse", "--verify", "-q", "HEAD"], { cwd, timeoutMs: 30_000 });
   return r.code === 0 ? r.stdout.trim() || null : null;
 }
 
 /** The diff base: launch.json's claim-time `baseSha` (§8.1), else the merge-base with origin/HEAD; null when neither resolves. */
-export async function diffBase(cwd: string, launch: Launch): Promise<string | null> {
+export async function diffBase(cwd: string, launch: Launch, exec: Runner = run): Promise<string | null> {
   if (launch.baseSha) {
-    const r = await run(["git", "cat-file", "-e", `${launch.baseSha}^{commit}`], { cwd, timeoutMs: 30_000 });
+    const r = await exec(["git", "cat-file", "-e", `${launch.baseSha}^{commit}`], { cwd, timeoutMs: 30_000 });
     if (r.code === 0) return launch.baseSha;
   }
-  const mb = await run(["git", "merge-base", "HEAD", "origin/HEAD"], { cwd, timeoutMs: 30_000 });
+  const mb = await exec(["git", "merge-base", "HEAD", "origin/HEAD"], { cwd, timeoutMs: 30_000 });
   return mb.code === 0 ? mb.stdout.trim() || null : null;
 }
 
 /** Paths changed between `base` and HEAD (committed work only — that is what the dispatcher publishes); null when git fails. */
-export async function changedNames(cwd: string, base: string): Promise<string[] | null> {
-  const r = await run(["git", "diff", "--name-only", "-z", "--diff-filter=ACMRD", `${base}...HEAD`], {
+export async function changedNames(cwd: string, base: string, exec: Runner = run): Promise<string[] | null> {
+  const r = await exec(["git", "diff", "--name-only", "-z", "--diff-filter=ACMRD", `${base}...HEAD`], {
     cwd,
     timeoutMs: 60_000,
   });
@@ -95,14 +103,18 @@ const tail = (s: string, n: number) =>
     .join("\n");
 
 /** Runs every pinned command (argv, no shell, 30 min each). Output is prefixed with `| ` so only our own lines start with `exit `. */
-async function validateReport(cwd: string, launch: Launch): Promise<{ ok: boolean; lines: string[] }> {
+async function validateReport(
+  cwd: string,
+  launch: Launch,
+  exec: Runner = run,
+): Promise<{ ok: boolean; lines: string[] }> {
   if (!launch.pinnedGates.length) return { ok: false, lines: ["no pinned gates in launch.json"] };
   const lines: string[] = [];
   let ok = true;
   for (const cmd of launch.pinnedGates) {
     let r: RunResult;
     try {
-      r = await run(cmd, { cwd, timeoutMs: 30 * 60_000 });
+      r = await exec(cmd, { cwd, timeoutMs: 30 * 60_000 });
     } catch (e) {
       r = { code: 127, stdout: "", stderr: (e as Error).message, timedOut: false, truncated: false };
     }
@@ -129,15 +141,19 @@ const REWRITE =
  * scan and the path guard also over every commit since the base and its message, read as publish reads them (F3, F4), so a fix
  * committed on top fails here as it would be refused there.
  */
-async function securityReport(cwd: string, launch: Launch): Promise<{ ok: boolean; lines: string[] }> {
-  const base = await diffBase(cwd, launch);
+async function securityReport(
+  cwd: string,
+  launch: Launch,
+  exec: Runner = run,
+): Promise<{ ok: boolean; lines: string[] }> {
+  const base = await diffBase(cwd, launch, exec);
   if (!base)
     return {
       ok: false,
       lines: ["diff: unavailable (no baseSha in launch.json, no merge-base with origin/HEAD)"],
     };
-  const names = await changedNames(cwd, base);
-  const diff = await run(["git", "diff", "--no-ext-diff", "--no-color", "--unified=0", `${base}...HEAD`], {
+  const names = await changedNames(cwd, base, exec);
+  const diff = await exec(["git", "diff", "--no-ext-diff", "--no-color", "--unified=0", `${base}...HEAD`], {
     cwd,
     timeoutMs: 120_000,
   });
@@ -145,7 +161,7 @@ async function securityReport(cwd: string, launch: Launch): Promise<{ ok: boolea
     return { ok: false, lines: [`diff: git diff ${base}...HEAD failed`] };
   let history: BranchHistory;
   try {
-    history = await new GitCli().historyChanges(cwd, base, "HEAD");
+    history = await new GitCli(exec).historyChanges(cwd, base, "HEAD");
   } catch (e) {
     return { ok: false, lines: [`diff: git log ${base}..HEAD failed (${errorCode(e)})`] };
   }
@@ -252,7 +268,15 @@ export async function gateVerb(argv: Argv, d: Deps): Promise<number> {
   const method = f("method");
   if (method !== null && method !== "loop" && method !== "graph")
     return d.refuse("usage", "--method loop|graph");
-  const head = await gitHead(d.cwd);
+  const computedLaunch =
+    computed && (await readText(join(d.cwd, ".wingmate/launch.json"))) !== null
+      ? await readLaunch(d.cwd)
+      : null;
+  const runtime = computedLaunch ? await issueRuntime(d.id, computedLaunch, d.runtimeKitRoot) : undefined;
+  const exec: Runner = runtime
+    ? (argv, opts) => run(argv, { ...opts, env: { ...opts?.env, PATH: runtime.path } })
+    : run;
+  const head = await gitHead(d.cwd, exec);
   const dispatcher = await dispatcherMode(d.cwd);
   if (dispatcher && !head)
     return d.refuse(
@@ -311,9 +335,11 @@ export async function gateVerb(argv: Argv, d: Deps): Promise<number> {
     if (verdict === "FAIL" && g.failCount >= 2)
       return d.refuse("gate_retry_exhausted", "native UI failed twice; ask the owner");
   } else if (computed) {
-    const launch = await readLaunch(d.cwd);
+    const launch = computedLaunch ?? (await readLaunch(d.cwd));
     const res =
-      stage === "validate" ? await validateReport(d.cwd, launch) : await securityReport(d.cwd, launch);
+      stage === "validate"
+        ? await validateReport(d.cwd, launch, exec)
+        : await securityReport(d.cwd, launch, exec);
     evidencePath = join(".wingmate", "evidence", stage, "report.txt");
     await writeAtomic(join(d.cwd, evidencePath), `${res.lines.join("\n")}\n`);
     verdict = res.ok && (!job || job.verdict === "PASS") ? "PASS" : "FAIL";

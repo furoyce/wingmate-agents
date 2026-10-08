@@ -10,7 +10,7 @@ import { newUlid, newUuid } from "../shared/ids";
 import type { WRecord } from "../state/records";
 import { type Ctx, remainingMs } from "./context";
 import { TickAbort, isTickAbort } from "./guard";
-import { kitNonce, prepareLaunch } from "./launch";
+import { kitNonce, prepareLaunch, runtimeForLaunch } from "./launch";
 import {
   type Liveness,
   coordinatorCandidates,
@@ -330,7 +330,12 @@ export async function relaunch(
   }
   try {
     await prepareLaunch(ctx, r);
-    const env = agentEnv(ctx.kitDirFor(r.identifier), "coordinator", userClaudeCredentialEnv(ctx.home));
+    const env = agentEnv(
+      ctx.kitDirFor(r.identifier),
+      "coordinator",
+      userClaudeCredentialEnv(ctx.home),
+      await runtimeForLaunch(ctx, r),
+    );
     const command = launchCommand(argv, env);
     const term = await ctx.orca.terminalCreate(wt.id, `wingmate ${r.identifier}`, command);
     r.coordinator.terminalHandle = term.handle;

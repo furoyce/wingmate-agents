@@ -27,6 +27,8 @@ export interface IssueDeps {
   cwd?: string;
   /** The process environment (absent → `process.env`): `spawn` reads WINGMATE_ROLE and derives the kit dir from `homeDirs()`. */
   env?: Env;
+  /** Internal test dependency only; no CLI/environment override for the trusted runtime receipt root. */
+  runtimeKitRoot?: string | undefined;
   /**
    * Orca access. Absent → the real Orca. Injected (tests) → exactly what is given, never the real binary: `workerList` backs the
    * `workers_live` check of `ask`/`finish`; `exec` runs the Orca verbs of `spawn` (`account list`, `run-create`, `terminal
@@ -48,6 +50,7 @@ type Ctx = {
   id: string;
   orca: NonNullable<IssueDeps["orca"]>;
   env: Env;
+  runtimeKitRoot?: string | undefined;
 };
 
 const out: Out = (o) => {
@@ -294,7 +297,18 @@ async function consumeVerb(c: Ctx): Promise<number> {
 }
 
 const VERBS = new Map<string, (c: Ctx) => Promise<number>>([
-  ["gate", (c) => gateVerb(c.argv, { cwd: c.cwd, local: c.local, id: c.id, refuse, out })],
+  [
+    "gate",
+    (c) =>
+      gateVerb(c.argv, {
+        cwd: c.cwd,
+        local: c.local,
+        id: c.id,
+        refuse,
+        out,
+        runtimeKitRoot: c.runtimeKitRoot,
+      }),
+  ],
   ["ask", askVerb],
   ["note", noteVerb],
   [
@@ -313,6 +327,7 @@ const VERBS = new Map<string, (c: Ctx) => Promise<number>>([
             throw new WingmateError("orca_unavailable", "no Orca runner is configured for spawn");
           }),
         env: c.env,
+        runtimeKitRoot: c.runtimeKitRoot,
       });
     },
   ],
@@ -363,7 +378,15 @@ async function dispatch(argv: Argv, deps: IssueDeps): Promise<number> {
       `--${repeated.join(", --")} may be given only once`,
       `wingmate issue ${id} ${name} …`,
     );
-  return verb({ argv: a, cwd, local, id, orca: deps.orca ?? realOrca(), env: deps.env ?? process.env });
+  return verb({
+    argv: a,
+    cwd,
+    local,
+    id,
+    orca: deps.orca ?? realOrca(),
+    env: deps.env ?? process.env,
+    runtimeKitRoot: deps.runtimeKitRoot,
+  });
 }
 
 export async function issueCommand(argv: Argv, deps: IssueDeps = {}): Promise<number> {

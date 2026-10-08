@@ -29,11 +29,21 @@ import { type Availability, availability } from "../../../policy/quota";
 import { WingmateError } from "../../../shared/errors";
 import { IDENTIFIER_RE, newUuid } from "../../../shared/ids";
 import { homeDirs } from "../../../shared/paths";
+import { type Runtime, issueRuntime } from "../../../shared/runtime";
 import { readText } from "../../../state/fs";
 import type { Argv } from "../../index";
 import type { Env, OrcaExec, Out, Refuse } from "../issue";
 
-type Deps = { cwd: string; local: Local; id: string; refuse: Refuse; out: Out; exec: OrcaExec; env: Env };
+type Deps = {
+  cwd: string;
+  local: Local;
+  id: string;
+  refuse: Refuse;
+  out: Out;
+  exec: OrcaExec;
+  env: Env;
+  runtimeKitRoot?: string | undefined;
+};
 const PROMPT_FILE: Record<SpawnRole, string> = {
   "plan-verifier": "planVerifier",
   "code-reviewer": "codeReviewer",
@@ -290,6 +300,7 @@ async function launchRole(
   pick: { provider: Launchable; tier: Tier | null },
   kit: Kit,
   worktreeId: string,
+  runtime?: Runtime,
 ): Promise<{ handle: string } | { refused: number }> {
   const argv = roleArgv({
     provider: pick.provider,
@@ -302,7 +313,7 @@ async function launchRole(
   const create = ARGV.terminalCreate(
     worktreeId,
     `wingmate ${d.id} ${plan.role}`,
-    launchCommand(argv, agentEnv(kit.kitDir, plan.role)),
+    launchCommand(argv, agentEnv(kit.kitDir, plan.role, [], runtime)),
   );
   const { handle } = OrcaClient.mapTerminalCreate(rec(await d.exec(create, { timeoutMs: 60_000 })));
   const notReady = (why: string, closed: string) => ({
@@ -389,6 +400,7 @@ export async function spawnVerb(argv: Argv, d: Deps): Promise<number> {
     );
   const kit = await kitPaths(d, launch, plan.role);
   if ("refused" in kit) return kit.refused;
+  const runtime = await issueRuntime(d.id, launch, d.runtimeKitRoot);
   const pick = await pickProvider(d, plan, launch);
   if ("refused" in pick) return pick.refused;
   const { provider, tier, fallback } = pick;
@@ -399,7 +411,7 @@ export async function spawnVerb(argv: Argv, d: Deps): Promise<number> {
   const wt = await currentWorktree(d, launch);
   if ("refused" in wt) return wt.refused;
   const runId = await ensureRun(d);
-  const term = await launchRole(d, plan, pick, kit, wt.id);
+  const term = await launchRole(d, plan, pick, kit, wt.id, runtime);
   if ("refused" in term) return term.refused;
   const unconfirmed = `orca orchestration worker-list --run ${runId} --json (check before spawning again)`;
   const header = `Role: ${plan.role} for ${d.id}. Read .wingmate/prompts/${PROMPT_FILE[plan.role]}.md first.\n\n`;

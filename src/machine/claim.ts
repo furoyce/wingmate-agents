@@ -28,7 +28,7 @@ import {
 import { type Ctx, remainingMs } from "./context";
 import { allowDepsGranted } from "./grants";
 import { TickAbort, isTickAbort } from "./guard";
-import { kitNonce, prepareLaunch } from "./launch";
+import { kitNonce, prepareLaunch, runtimeForLaunch } from "./launch";
 import { LinearWrites } from "./linearWrites";
 import { block } from "./release";
 import { MIN_WAIT_MS, assertWaitBudget, waitForTui } from "./resume";
@@ -579,6 +579,12 @@ async function installAndSetup(
     toolchainPaths: ctx.toolchainPaths,
     allowDeps: await allowDepsGranted(ctx, r, issue),
     blankEnv: userClaudeCredentialEnv(ctx.home),
+    runtimeKitRoot: ctx.runtimeKitRoot,
+    runtimeScope: {
+      home: ctx.home,
+      stateRoot: ctx.dirs.state,
+      protectedRoots: [ctx.dirs.state, ctx.dirs.config],
+    },
   });
   await ctx.ledger.append({
     at: ctx.now(),
@@ -598,7 +604,7 @@ async function installAndSetup(
   else if (repo.setup !== "none") {
     const startedAt = Date.now();
     // SEC-1: the owner's credential variables are blank for the setup too (it runs outside the sandbox, as the owner)
-    const env = agentEnv(kitDir, "coordinator", userClaudeCredentialEnv(ctx.home));
+    const env = agentEnv(kitDir, "coordinator", userClaudeCredentialEnv(ctx.home), res.runtime);
     for (const [index, argv] of repo.setup.entries()) {
       const { timeoutMs, tickLimited } = setupCommandBudget(ctx, startedAt);
       // No useful tick time: defer the whole sequence to the next replay, just as for a single setup command.
@@ -694,7 +700,10 @@ async function createCoordinator(ctx: Ctx, r: WRecord, tier: Tier): Promise<void
     : await ctx.orca.terminalCreate(
         wt.id,
         title,
-        launchCommand(r.coordinator.argv, agentEnv(kitDir, "coordinator", userClaudeCredentialEnv(ctx.home))),
+        launchCommand(
+          r.coordinator.argv,
+          agentEnv(kitDir, "coordinator", userClaudeCredentialEnv(ctx.home), await runtimeForLaunch(ctx, r)),
+        ),
       );
   r.coordinator.terminalHandle = term.handle;
   r.coordinator.paneKey = `${term.tabId}:${term.leafId}`;

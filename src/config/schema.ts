@@ -7,6 +7,7 @@ import {
   NativePolicySchema,
 } from "../native/protocol";
 import { WingmateError } from "../shared/errors";
+import { RuntimeBinPath } from "../shared/runtime";
 const Argv = z.array(z.string().min(1)).min(1);
 // Legacy single argv stays accepted; execution always receives an explicit sequence, never shell text.
 const Setup = z
@@ -22,6 +23,7 @@ export const RepoSchema = z.object({
   github: z.string().regex(/^[\w.-]+\/[\w.-]+$/),
   base: z.string().default("origin/main"),
   setup: Setup,
+  runtimeBinPaths: z.array(RuntimeBinPath).default([]),
   gates: z.array(Argv).min(1, "gates must be a non-empty list of argv arrays"),
   requiredCheck: z.string().default("none"),
   ui: z

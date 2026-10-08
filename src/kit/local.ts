@@ -6,6 +6,7 @@ import { lstat, mkdir, open, realpath, rename, unlink } from "node:fs/promises";
 import { isAbsolute, join, normalize, relative, sep } from "node:path";
 import { z } from "zod";
 import { WingmateError } from "../shared/errors";
+import { RuntimeSchema } from "../shared/runtime";
 import { readText, writeAtomic } from "../state/fs";
 
 export const LocalSchema = z.object({
@@ -44,6 +45,7 @@ const Path = z.string().min(1);
 /** `.wingmate/launch.json`, written by `installKit` (integrity-protected) and read by `gate` and `spawn`; every field is required. */
 export const LaunchSchema = z.object({
   spawnMode: z.literal("dispatcher").optional(),
+  runtime: RuntimeSchema.optional(),
   provider: z.enum(["claude", "codex"]),
   model: Model,
   effort: z.string().min(1),
