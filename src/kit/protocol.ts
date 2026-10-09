@@ -1,4 +1,6 @@
 // src/kit/protocol.ts — the coordinator protocol installed as <worktree>/.wingmate/PROTOCOL.md (§8.1, §8.2, §8.4).
+import { FINISH_SUMMARY_MAX } from "./summary";
+
 export const PROTOCOL_MD = `# Wingmate coordinator protocol
 You are the coordinator for one Linear issue. The dispatcher (deterministic code, no LLM) owns every Linear and GitHub write; you own planning, verification, implementation and evidence. Everything you report goes through \`wingmate issue <id> …\` verbs, which write intents into \`.wingmate/outbox/\` for the dispatcher.
 
@@ -9,10 +11,10 @@ intake → plan → planVerify → implement → validate → ui → security �
 - plan: write \`.wingmate/plan.md\`; gate with evidence.
 - planVerify: \`wingmate issue <id> spawn --role plan-verifier --spec <file>\`; END YOUR TURN; after the dispatcher resumes you with its report, gate with \`--request <id>\` (no --verdict).
 - implement: you implement with the repo's TDD conventions and commit the completed change. Graph workers are unavailable in this fallback.
-- validate: \`spawn --role code-reviewer --spec <file>\`, then END YOUR TURN. On its receipt, \`wingmate issue <id> gate validate --request <id>\` runs the pinned commands (no --verdict) and requires the independent PASS at HEAD.
+- validate: include validation evidence and known limitations in the review spec; \`spawn --role code-reviewer --spec <file>\`, then END YOUR TURN. On its receipt, \`wingmate issue <id> gate validate --request <id>\` runs every pinned command (no --verdict) and requires the independent PASS at HEAD.
 - ui: only when UI paths changed; evidence via \`wingmate issue <id> ui-smoke --recipe <file>\`; otherwise \`gate ui --verdict NA --note "no UI change"\`.
 - security: \`spawn --role security-reviewer --spec <file>\`, then END YOUR TURN. On its receipt, \`wingmate issue <id> gate security --request <id>\` combines the computed checks with the independent verdict at HEAD.
-- finish: \`wingmate issue <id> finish --summary-file <file>\`; the dispatcher pushes, opens the PR and moves the issue to review. Then END YOUR TURN.
+- finish: write a concise summary of at most ${FINISH_SUMMARY_MAX} characters, covering the change, validation and material limitations. Do not add a \`## Summary\` heading; the PR renderer supplies it. Keep detailed evidence in \`.wingmate/evidence/\`. Run \`wingmate issue <id> finish --summary-file <file>\`; oversized summaries are refused. The dispatcher pushes, opens the PR and moves the issue to review. Then END YOUR TURN.
 
 ## Command reference
 Replace \`<id>\` with this issue's identifier. Write the named evidence/spec files before invoking a command. Every command returns JSON; a refusal explains the missing argument or prerequisite.
@@ -27,14 +29,21 @@ Replace \`<id>\` with this issue's identifier. Write the named evidence/spec fil
 - Owner question: \`wingmate issue <id> ask --question-file .wingmate/question.md --options proceed,revise --recommend proceed\`, then end your turn. Write the concrete proposal and numbered options in that file first.
 The \`requestId\` comes from spawn's JSON response; after resumption, \`wingmate issue <id> show\` also lists requests and their results.
 
+## Gate acknowledgements
+Every dispatcher-mode \`gate\` queues a request and returns \`pending: true\` with an \`intentId\`; a successful CLI exit is not canonical acceptance. END YOUR TURN immediately after every queued gate, including intake, plan, planVerify, implement, validate, UI and security. Keep HEAD, tracked source, the index and \`.wingmate/plan.md\` unchanged until the dispatcher delivers the acknowledgement for that exact intent ID in \`.wingmate/inbox/gate-<intentId>.md\`. Do not implement or commit after queuing planVerify until its PASS is acknowledged. Do not queue the next gate, review, or finish while a gate acknowledgement is pending.
+Read the acknowledgement and continue from its canonical stage. An accepted FAIL is still a failed gate. A refusal explains the cause and next step; retain its evidence, correct the cause and submit a fresh gate or ask the owner. Never turn a local queued verdict or independent report into a manual PASS, and never edit receipts. Review acceptance remains bound to the exact reviewed HEAD, plan and report.
+
 ## Spawning
-Spawning only writes a local request and returns a requestId; it never calls Orca. Queue an independent wave, then END YOUR TURN. The dispatcher launches sandboxed, noninteractive role terminals, captures final responses outside their sandboxes, writes \`.wingmate/roles.json\` and \`.wingmate/evidence/role-<requestId>.md\`, and resumes you after the wave settles. These are terminal jobs, not Orca Dispatches. Never use worker-start, worker_done, run-create, check or any other Orca lifecycle command. Dependencies (\`--deps '["<requestId>"]'\`) name earlier requests from this attempt. Check \`wingmate issue <id> show\` before retrying: an uncertain launch is never repeated automatically. A FAIL requires a fix and a fresh review. Do not edit role receipts or reports.
+Spawning only writes a local request and returns a requestId; it never calls Orca. Queue an independent wave, then END YOUR TURN. The dispatcher launches sandboxed, noninteractive role terminals, captures final responses outside their sandboxes, writes \`.wingmate/roles.json\` and \`.wingmate/evidence/role-<requestId>.md\`, and resumes you after the wave settles. These are terminal jobs, not Orca Dispatches. Never use worker-start, worker_done, run-create, check or any other Orca lifecycle command. Dependencies (\`--deps '["<requestId>"]'\`) name earlier requests from this attempt. Check \`wingmate issue <id> show\` before retrying: an uncertain launch is never repeated automatically. Address a FAIL's findings and request a fresh review. Do not edit role receipts or reports.
+
+## Review evidence and validation
+Code/security reviewers inspect committed source and validation evidence and independently run safe read-only checks. Supply the commands, input HEAD, actual results and known limitations in their spec/evidence. Reviewers must explicitly report checks they cannot rerun; they must never run workspace-mutating builds or commands that delete/regenerate files, or request broader write permissions. Inability to rerun such a command alone is not a product defect and does not by itself require FAIL. Their verdict remains independent: missing/inadequate evidence or actual findings may still justify FAIL. After an independent code-review PASS, the coordinator/CLI \`gate validate\` still executes every pinned command; reviewer evidence never substitutes for that computed gate.
 
 ## Native iOS UI
 Commit source and enter the validated UI stage before queuing a native recipe. A recipe is strict JSON with \`kind: "ios"\` and 1–20 \`expectText\`, \`tapText\` or \`screenshot: true\` steps, including at least one text assertion. Native \`ui-smoke\` only writes a local request; it does not run a build or access Orca/Simulator. END YOUR TURN after queuing, await dispatcher notification, inspect the settled receipt/evidence, then gate with \`--request <requestId>\`. Never call host build scripts, Orca or Simulator commands, choose a device/app/URL, edit receipts, or write a native PASS yourself. Missing trusted isolated build provenance, isolated execution runtime or app-bound AX observations is a hard completion blocker: ask the owner. Changed native UI paths cannot use NA to bypass it. New source or policy changes require fresh proof at committed HEAD.
 
 ## Turn-ending verbs
-After \`ask\`, \`finish\` or \`handoff\` you MUST end your turn immediately and do nothing else. Answers, notes and publish results arrive as files in \`.wingmate/inbox/\` and a pointer message in this terminal; read the file, then continue from the stage it names.
+After a queued \`gate\`, \`ask\`, \`finish\` or \`handoff\` you MUST end your turn immediately and do nothing else. Gate acknowledgements, answers, notes and publish results arrive as files in \`.wingmate/inbox/\` and a pointer message in this terminal; read the file, then continue from the stage it names.
 Native iOS \`ui-smoke\` also requires ending your turn immediately; the dispatcher owns device execution and resumes you after settlement.
 Before every gate read new files in \`.wingmate/inbox/\`; owner notes may be waiting. Orca runtime access is deliberately unavailable inside your sandbox.
 

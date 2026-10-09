@@ -1,10 +1,12 @@
 // src/machine/outbox.ts — executes the intents the `issue` verbs wrote into the worktree (§6.3 step 2, §8.1), each re-validated
 // against the dispatcher's own record and Orca (§13.3 a), in order, with quarantine for files that can never execute.
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { type Intent, consumeIntent, outboxDirs, quarantineIntent, readIntentFiles } from "../kit/intents";
 import { readNoFollow, worktreeFile } from "../kit/local";
+import { readFinishSummary } from "../kit/summary";
 import { MARK } from "../linear/markers";
 import { renderQuestion } from "../linear/templates";
 import { OrcaError } from "../orca/cli";
@@ -16,10 +18,10 @@ import { rolePending } from "../state/roles";
 import type { Ctx } from "./context";
 import { isTickAbort } from "./guard";
 import { LinearWrites } from "./linearWrites";
-import { syncMirror } from "./mirror";
+import { mirrorCanonicalGates, syncMirror } from "./mirror";
 import { executeNativeUi, verifyNativeUiGate } from "./nativeUi";
 import type { Reconciled } from "./reconcile";
-import { coordinatorMarker, deliver } from "./resume";
+import { coordinatorMarker, deliver, persistInbox, sendPointerDetailed } from "./resume";
 import { startRole, verifyRoleGate } from "./roles";
 import { saveRecord } from "./save";
 import { addAttention, dropAttention, enterPipelineStage, stageOf, transition } from "./states";
@@ -34,7 +36,7 @@ export interface OutboxResult {
   quarantined: number;
   parked: boolean;
   finished: boolean;
-  /** §8.1 `finish`: a refused publish pointed the coordinator at its finding in this tick — one of the tick's resumes. */
+  /** A gate decision or refused publish delivered a pointer — one of the tick's resumes. */
   resumed: boolean;
   /** A `handoff` intent for the tick to perform (§9.4, or a reroute with `repo`). */
   handoff: Of<"handoff"> | null;
@@ -154,6 +156,166 @@ async function gate(x: Run, i: Of<"gate">): Promise<void> {
   addNote(r, `gate ${stage} ${verdict}`);
 }
 
+const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
+
+function gateNextStep(i: Of<"gate">, e: WingmateError): string {
+  if (e.nextStep) return e.nextStep;
+  const role =
+    i.payload.stage === "planVerify"
+      ? "plan-verifier"
+      : i.payload.stage === "validate"
+        ? "code-reviewer"
+        : i.payload.stage === "security"
+          ? "security-reviewer"
+          : null;
+  return role && e.code.startsWith("review_")
+    ? `request a fresh ${role} at the current committed HEAD and plan; END YOUR TURN, then gate ${i.payload.stage} with its new --request ID`
+    : "inspect the canonical stage and refusal, correct the cause, then submit a fresh gate; ask the owner if blocked";
+}
+
+/** Save the exact decision before any pointer; delivery retries never execute the gate again. */
+async function decideGate(x: Run, i: Of<"gate">): Promise<void> {
+  let error: WingmateError | null = null;
+  try {
+    await gate(x, i);
+  } catch (e) {
+    if (!(e instanceof WingmateError) || isInfra(e)) throw e;
+    error = e;
+  }
+  x.r.gateDelivery = {
+    id: i.id,
+    intentHash: digest(i),
+    cycle: x.r.cycle,
+    attempt: x.r.coordinator.attempt,
+    stage: i.payload.stage,
+    accepted: error === null,
+    gateHash: error ? null : digest(x.r.gates[i.payload.stage]),
+    verdict: i.payload.verdict,
+    headSha: i.payload.headSha,
+    dispatchId: i.payload.dispatchId,
+    code: error?.code ?? null,
+    message: error?.message ?? `gate ${i.payload.stage} ${i.payload.verdict} accepted by the dispatcher`,
+    nextStep: error ? gateNextStep(i, error) : null,
+  };
+  if (error) {
+    x.res.failed += 1;
+    addAttention(x.r, error.code);
+  } else {
+    x.res.executed += 1;
+    x.r.timers.lastActivityAt = x.ctx.now();
+  }
+  await saveRecord(x.ctx, x.r);
+}
+
+/**
+ * The protected receipt, not the advisory inbox, binds this decision to an exact intent. A deferred/failed send keeps it pending;
+ * an exited coordinator follows advance's existing bounded liveness recovery. No new gate is granted on delivery replay.
+ */
+async function settleGateDelivery(x: Run): Promise<void> {
+  const { ctx, r } = x;
+  const receipt = r.gateDelivery;
+  if (!receipt) return;
+  // Re-read after the external wait/send: a same-ID file edited meanwhile was never the accepted request.
+  const current = (await readIntentFiles(x.wt)).intents.find((intent) => intent.id === receipt.id);
+  const bindingChanged = current !== undefined && digest(current) !== receipt.intentHash;
+  if (current) {
+    if (receipt.accepted && !bindingChanged) await consumeIntent(x.wt, receipt.id);
+    else await quarantineIntent(x.wt, `${receipt.id}.json`, "failed");
+  }
+  const settled = (await ctx.ledger.readIssue(r.identifier)).some(
+    (event) =>
+      ["intent_executed", "intent_failed"].includes(event.type) &&
+      event.data.id === receipt.id &&
+      event.data.intentHash === receipt.intentHash &&
+      event.data.cycle === receipt.cycle &&
+      event.data.attempt === receipt.attempt &&
+      event.data.gateDelivery === true,
+  );
+  if (!settled)
+    await ctx.ledger.append({
+      at: ctx.now(),
+      issue: r.identifier,
+      type: receipt.accepted && !bindingChanged ? "intent_executed" : "intent_failed",
+      data: {
+        kind: "gate",
+        id: receipt.id,
+        intentHash: receipt.intentHash,
+        cycle: receipt.cycle,
+        attempt: receipt.attempt,
+        gateDelivery: true,
+        code: bindingChanged ? "gate_intent_changed" : receipt.code,
+        counted: false,
+      },
+    });
+  r.gateDelivery = null;
+  await saveRecord(ctx, r);
+}
+
+async function deliverGateDecision(x: Run, i: Intent | undefined): Promise<void> {
+  const { ctx, r } = x;
+  const receipt = r.gateDelivery;
+  if (!receipt) return;
+  const deliveredBefore = (await ctx.ledger.readIssue(r.identifier)).some(
+    (event) =>
+      event.type === "delivered" &&
+      event.data.kind === "gate" &&
+      event.data.inboxId === receipt.id &&
+      event.data.deliveryKey === receipt.intentHash &&
+      event.data.cycle === receipt.cycle &&
+      event.data.attempt === receipt.attempt &&
+      ["input_accepted", "turn_started"].includes(String(event.data.stage)),
+  );
+  if (deliveredBefore) {
+    await mirrorCanonicalGates(r);
+    await syncMirror(r);
+    await settleGateDelivery(x);
+    return; // durable transport proof: finish bookkeeping without starting another turn
+  }
+  if (x.rec.liveness.get(r.identifier) !== "idle") return;
+  const changed =
+    receipt.cycle !== r.cycle ||
+    receipt.attempt !== r.coordinator.attempt ||
+    (i !== undefined && digest(i) !== receipt.intentHash) ||
+    (receipt.accepted && digest(r.gates[receipt.stage]) !== receipt.gateHash);
+  if (changed) {
+    receipt.accepted = false;
+    receipt.gateHash = null;
+    receipt.code = "gate_ack_changed";
+    receipt.message = "the intent or canonical gate changed after the dispatcher recorded its decision";
+    receipt.nextStep =
+      "inspect the canonical stage and submit a fresh gate; this acknowledgement cannot grant or restore a gate";
+    await saveRecord(ctx, r);
+  }
+  await mirrorCanonicalGates(r);
+  await syncMirror(r);
+  const text = [
+    `Gate intent ${receipt.id}: ${receipt.accepted ? "ACCEPTED" : "REFUSED"}.`,
+    `Stage: ${receipt.stage}; submitted verdict: ${receipt.verdict}; HEAD: ${receipt.headSha ?? "none"}; review request: ${receipt.dispatchId ?? "none"}.`,
+    `${receipt.code ? `${receipt.code}: ` : ""}${receipt.message}.`,
+    receipt.nextStep ??
+      (r.gates[receipt.stage].failCount >= 2 && receipt.verdict === "FAIL"
+        ? "This gate has failed twice; ask the owner before another attempt."
+        : "The canonical decision is recorded; continue from the stage named above."),
+    "Do not edit gate receipts. Keep HEAD and the plan unchanged while any gate acknowledgement is pending.",
+  ].join("\n");
+  const inbox = await persistInbox(ctx, r, "gate", text, r.pipelineStage, receipt.id);
+  if (inbox === "unsafe") return;
+  const delivered =
+    inbox === "gone"
+      ? "exited"
+      : await sendPointerDetailed(
+          ctx,
+          r,
+          "gate",
+          { ...inbox, deliveryKey: receipt.intentHash },
+          `gate ${receipt.id} ${receipt.accepted ? "accepted" : "refused"} — read ${inbox.rel} and continue from stage ${r.pipelineStage}.`,
+          x.rec.liveness.get(r.identifier) ?? "exited",
+        );
+  if (delivered === "deferred" || delivered === "exited") return;
+  x.res.resumed = true;
+  await settleGateDelivery(x);
+}
+
 /** §7.1 step 2: post (or, for `--append`/`--reask`, edit) the question, `Needs-Human`, park, and sweep all but the session. */
 async function ask(x: Run, i: Of<"ask">): Promise<void> {
   const { ctx, r, issue, w } = x;
@@ -223,8 +385,7 @@ async function finish(x: Run, i: Of<"finish">): Promise<void> {
   const { ctx, r } = x;
   if (r.stage !== "working") throw new WingmateError("stage_mismatch", `finish while ${r.stage}`);
   await assertNoLiveWorkers(ctx, r);
-  const sf = await worktreeFile(x.wt, i.payload.summaryFile);
-  if (!sf.ok) throw new WingmateError("file_invalid", sf.error);
+  await readFinishSummary(x.wt, i.payload.summaryFile);
   enterPipelineStage(ctx, r, "pr");
   const { publish } = await ctx.publishImpl();
   x.res.finished = await publish(ctx, r, x.issue, i, x.rec);
@@ -354,6 +515,37 @@ async function failed(x: Run, i: Intent, err: unknown): Promise<void> {
   const { ctx, r } = x;
   if (i.kind === "gate" && err instanceof WingmateError && err.code === "stage_prerequisite")
     return gateRefused(x, i, err);
+  if (i.kind === "finish" && err instanceof WingmateError && err.code === "summary_too_long") {
+    x.res.failed += 1;
+    if (x.opts.canDeliver === false) return; // keep it pending until a normal tick can deliver the refusal
+    const text = `finish was refused by the dispatcher: ${err.message}. ${err.nextStep}`;
+    const inbox = await persistInbox(ctx, r, "note", text, r.pipelineStage);
+    if (inbox === "unsafe") return;
+    const delivered =
+      inbox === "gone"
+        ? "exited"
+        : await sendPointerDetailed(
+            ctx,
+            r,
+            "note",
+            inbox,
+            `finish refused — read ${inbox.rel}, shorten the summary and run finish again`,
+            x.rec.liveness.get(r.identifier) ?? "exited",
+          );
+    // An exited coordinator is recovered only by advance's bounded liveness policy, never by an intent retry.
+    if (delivered === "deferred" || delivered === "exited") return;
+    x.res.resumed = true;
+    // Persist and deliver the correction before consuming: a failed or deferred pointer leaves the intent retryable.
+    await consumeIntent(x.wt, i.id);
+    await ctx.ledger.append({
+      at: ctx.now(),
+      issue: r.identifier,
+      type: "intent_failed",
+      data: { kind: i.kind, id: i.id, code: err.code, counted: false },
+    });
+    addNote(r, "finish refused: summary_too_long");
+    return;
+  }
   x.res.failed += 1;
   const code = errorCode(err);
   const consumed = CONSUMED_ON_FAILURE.has(code);
@@ -431,6 +623,14 @@ async function drain(x: Run, opts: OutboxOptions): Promise<void> {
   dropAttention(x.r, "outbox_unsafe");
   const { intents, invalid } = await readIntentFiles(x.wt);
   for (const bad of invalid) await quarantine(x, bad.file, "invalid", { error: bad.error.slice(0, 200) });
+  if (x.r.gateDelivery) {
+    if (opts.canResume && opts.canDeliver !== false && !x.rec.partial)
+      await deliverGateDecision(
+        x,
+        intents.find((i) => i.id === x.r.gateDelivery?.id),
+      );
+    return; // a pending decision is delivered before any later intent, never replaced by another gate
+  }
   for (const i of intents) {
     if (i.issue !== x.r.identifier) {
       await quarantine(x, `${i.id}.json`, "invalid", { error: `an intent for ${i.issue}` });
@@ -438,6 +638,24 @@ async function drain(x: Run, opts: OutboxOptions): Promise<void> {
     }
     if (i.kind === "handoff" && !opts.canHandoff) break; // stays pending for a later tick
     if (i.kind === "finish" && !opts.canResume) break; // so does a finish: its refusal would be a resume (§8.1)
+    if (i.kind === "gate" && i.payload.acknowledge) {
+      if (
+        !opts.canResume ||
+        opts.canDeliver === false ||
+        x.rec.partial ||
+        x.rec.liveness.get(x.r.identifier) !== "idle"
+      )
+        break;
+      try {
+        await decideGate(x, i);
+      } catch (e) {
+        if (isTickAbort(e)) throw e;
+        await failed(x, i, e);
+        break;
+      }
+      await deliverGateDecision(x, i);
+      break; // one decision pointer starts a turn; no second gate/delivery in this tick
+    }
     if (
       (i.kind === "spawn" || i.kind === "native-ui") &&
       (opts.canDeliver === false ||

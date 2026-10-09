@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { GitCli, type Runner } from "../../../git/cli";
 import { parseAddedLines } from "../../../git/diff";
-import { writeIntent } from "../../../kit/intents";
+import { readIntentFiles, writeIntent } from "../../../kit/intents";
 import {
   type Launch,
   type Local,
@@ -252,6 +253,17 @@ export async function gateVerb(argv: Argv, d: Deps): Promise<number> {
   if (!stage || !ORDER.includes(stage) || stage === "pr")
     return d.refuse("usage", "gate <intake|plan|planVerify|implement|validate|ui|security> …");
   const f = (k: string) => (typeof argv.flags[k] === "string" ? (argv.flags[k] as string) : null);
+  const dispatcher = await dispatcherMode(d.cwd);
+  const pending =
+    dispatcher && existsSync(join(d.cwd, ".wingmate/outbox"))
+      ? (await readIntentFiles(d.cwd, false)).intents.find((i) => i.kind === "gate")
+      : null;
+  if (pending)
+    return d.refuse(
+      "gate_pending",
+      `gate ${pending.id} is still awaiting the dispatcher`,
+      "END YOUR TURN NOW; keep HEAD and the plan unchanged until its dispatcher acknowledgement arrives",
+    );
   const native = stage === "ui" && (await readLaunch(d.cwd)).ui.kind === "ios" && f("verdict") !== "NA";
   const computed = stage === "validate" || stage === "security";
   if (native && argv.flags.verdict !== undefined)
@@ -277,7 +289,6 @@ export async function gateVerb(argv: Argv, d: Deps): Promise<number> {
     ? (argv, opts) => run(argv, { ...opts, env: { ...opts?.env, PATH: runtime.path } })
     : run;
   const head = await gitHead(d.cwd, exec);
-  const dispatcher = await dispatcherMode(d.cwd);
   if (dispatcher && !head)
     return d.refuse(
       "git_head_unavailable",
@@ -363,7 +374,7 @@ export async function gateVerb(argv: Argv, d: Deps): Promise<number> {
     verdict = j.verdict;
     evidencePath = j.evidencePath;
   }
-  d.local.gates[stage] = {
+  const gate = {
     verdict,
     failCount: g.failCount + (verdict === "FAIL" ? 1 : 0),
     at: new Date().toISOString(),
@@ -373,21 +384,41 @@ export async function gateVerb(argv: Argv, d: Deps): Promise<number> {
     method: method ?? g.method,
     dispatchId,
   };
-  if (verdict !== "FAIL") d.local.record.pipelineStage = ORDER[Math.min(idx + 1, ORDER.length - 1)] as string;
-  await writeLocal(d.cwd, d.local);
-  await writeStage(d.cwd, { pipelineStage: d.local.record.pipelineStage, via: "gate" });
-  await writeIntent(d.cwd, {
+  if (!dispatcher) {
+    d.local.gates[stage] = gate;
+    if (verdict !== "FAIL")
+      d.local.record.pipelineStage = ORDER[Math.min(idx + 1, ORDER.length - 1)] as string;
+    await writeLocal(d.cwd, d.local);
+    await writeStage(d.cwd, { pipelineStage: d.local.record.pipelineStage, via: "gate" });
+  }
+  const intent = await writeIntent(d.cwd, {
     issue: d.id,
     kind: "gate",
-    payload: { stage, verdict, evidencePath, note, method, headSha: head, dispatchId },
+    payload: {
+      stage,
+      verdict,
+      evidencePath,
+      note,
+      method,
+      headSha: head,
+      dispatchId,
+      ...(dispatcher ? { acknowledge: true } : {}),
+    },
   });
-  const failCount = d.local.gates[stage]?.failCount ?? 0;
+  const failCount = gate.failCount;
   d.out({
     ok: true,
     stage,
     verdict,
     failCount,
-    ...(verdict === "FAIL" && failCount >= 2
+    ...(dispatcher
+      ? {
+          pending: true,
+          intentId: intent.id,
+          next: "END YOUR TURN NOW; keep HEAD and the plan unchanged until this gate's dispatcher acknowledgement arrives. A queued verdict is not an accepted gate.",
+        }
+      : {}),
+    ...(!dispatcher && verdict === "FAIL" && failCount >= 2
       ? { next: `ask required before another attempt: wingmate issue ${d.id} ask …` }
       : {}),
   });

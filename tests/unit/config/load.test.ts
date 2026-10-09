@@ -1,7 +1,22 @@
 // tests/unit/config/load.test.ts
 import { describe, expect, test } from "bun:test";
-import { loadConfig } from "../../../src/config/load";
+import { mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { loadConfig, selectedConfigPath } from "../../../src/config/load";
 describe("loadConfig", () => {
+  test("selected config captures a canonical file from a relative selection and rejects missing/non-file/control paths", async () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "wm-config-source-")));
+    const selected = join(dir, "selected.yaml");
+    writeFileSync(selected, "synthetic config fixture");
+    symlinkSync(selected, join(dir, "alias.yaml"));
+    expect(await selectedConfigPath("./alias.yaml", dir)).toBe(selected);
+    mkdirSync(join(dir, "directory"));
+    for (const path of ["missing.yaml", "directory"])
+      await expect(selectedConfigPath(path, dir)).rejects.toMatchObject({ code: "config_missing" });
+    for (const path of ["", "selected.yaml\n", "selected\0.yaml", "selected\t.yaml"])
+      await expect(selectedConfigPath(path, dir)).rejects.toMatchObject({ code: "config_path_invalid" });
+  });
   test("loads the committed pilot config with four projects", async () => {
     const cfg = await loadConfig("config/projects.yaml");
     expect(Object.keys(cfg.projects).sort()).toEqual([

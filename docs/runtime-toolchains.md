@@ -17,6 +17,19 @@ Use actual absolute directory names. `~`, environment expansion, relative paths,
 characters and sandbox glob syntax are rejected. This field accepts directories only; it cannot inject arbitrary
 environment variables or shell commands. An absent or empty list preserves the existing runtime behavior.
 
+If scoped runtimes live in a separate trusted config, reinstall with that selection so the scheduled dispatcher uses
+it too (a plain install leaves automation disabled):
+
+```sh
+WINGMATE_CONFIG="/absolute/path/pilot-projects.yaml" wingmate install
+WINGMATE_CONFIG="/absolute/path/pilot-projects.yaml" wingmate doctor --quick
+```
+
+New installs record the canonical selected file in `install.json` and explicitly set it in the automation precheck,
+independent of its cwd or inherited `WINGMATE_CONFIG`. Doctor's blocking `automation_present` check compares the loaded
+config path, install receipt and live precheck. A different selection requires reinstalling; trusted file contents may
+change normally. Legacy receipts without a path retain their previous precheck until reinstalled.
+
 At kit installation, the dispatcher resolves symlinks and prepends these directories, in order, to **its own PATH**.
 Empty inherited PATH segments are omitted. All remaining entries must be absolute directories; relative entries
 (such as `.` or `bin`) and entries inside the current repository/worktree are rejected. The resolved PATH is pinned for setup, the initial coordinator, successor coordinators, all reviewer terminals, legacy

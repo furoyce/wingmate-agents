@@ -24,10 +24,17 @@ import { mirrorNativeJobs, recoverNativeUi } from "./nativeUi";
 import { executeOutbox } from "./outbox";
 import type { Event, Reconciled } from "./reconcile";
 import { block, finishBlock, release, stopAgents } from "./release";
-import { deliver } from "./resume";
+import { persistInbox, sendPointerDetailed } from "./resume";
 import { collectRoles } from "./roles";
 import { readTracked, saveRecord } from "./save";
-import { addAttention, dropAttention, enterPipelineStage, stageOf } from "./states";
+import {
+  addAttention,
+  dropAttention,
+  ensureAttempt,
+  enterPipelineStage,
+  stageOf,
+  transition,
+} from "./states";
 import { addNote, flushNotes, syncStatus } from "./status";
 import { type Advance, type StepOut, WORKING } from "./step";
 import type { Budget, TickSummary } from "./tick";
@@ -192,8 +199,17 @@ async function replayClaim(a: Advance): Promise<StepOut> {
   const { ctx, r } = a;
   if (r.stage !== "claimed" || a.ro) return "next";
   const open = await openClaimEntry(ctx, r);
-  if (!open) return "next";
   const how = await startedByItself(a);
+  if (!open) {
+    // The initial send may be input_accepted with a confirmed journal. Record real agent progress before consuming its gate.
+    if (how) {
+      await transition(ctx, r, "working", "turn_started", how);
+      ensureAttempt(ctx, r);
+      dropAttention(r, "launch_unconfirmed");
+      a.dirty = true;
+    }
+    return "next";
+  }
   if (how) {
     await launchProven(ctx, r, open.id, how);
     a.dirty = true;
@@ -285,6 +301,28 @@ async function outbox(a: Advance): Promise<StepOut> {
   return o.parked || o.finished || !WORKING.has(r.stage) ? "stop" : "next";
 }
 
+/** Gate-wait is intentional idle time, not permission for another note, review notification, nudge or timer handoff. */
+async function waitForGateAck(a: Advance): Promise<StepOut> {
+  const { r } = a;
+  if (!WORKING.has(r.stage)) return "next"; // a pending receipt must not hide owner continue/answer recovery
+  let pending = !!r.gateDelivery;
+  if (!pending && r.worktree && existsSync(r.worktree.path)) {
+    try {
+      pending = (await readIntentFiles(r.worktree.path)).intents.some(
+        (i) => i.issue === r.identifier && i.kind === "gate" && i.payload.acknowledge,
+      );
+    } catch (e) {
+      if (errorCode(e) !== "outbox_unsafe") throw e;
+    }
+  }
+  if (!pending) return "next";
+  // Retain uncertainty reporting and the existing bounded exited-coordinator recovery, never an unrelated idle turn.
+  if (a.live === "exited" || a.live === "unverifiable") await liveness(a);
+  await integrity(a);
+  await budgets(a);
+  return "stop";
+}
+
 /**
  * INT-2 + N3 (§4.4): Orca re-issued the coordinator's terminal handle (a restart re-attached its terminals): the record follows the
  * live terminal `coordinatorRow` found by its pane key, else as the worktree's one live agent that is no role agent (ledger
@@ -320,6 +358,21 @@ async function collectRoleJobs(a: Advance): Promise<StepOut> {
   return "next";
 }
 
+/** Only a real accepted terminal input consumes this idle snapshot; compatibility delivery also represents no-send deferrals. */
+async function resultNotification(a: Advance, text: string): Promise<boolean> {
+  const inbox = await persistInbox(a.ctx, a.r, "note", text, a.r.pipelineStage);
+  if (typeof inbox === "string") return false;
+  const sent = await sendPointerDetailed(
+    a.ctx,
+    a.r,
+    "note",
+    inbox,
+    `note ${inbox.id} — read ${inbox.rel} and continue from stage ${a.r.pipelineStage}.`,
+    "idle",
+  );
+  return sent === "input_accepted" || sent === "turn_started";
+}
+
 async function notifyNativeUi(a: Advance): Promise<StepOut> {
   if (
     a.ro ||
@@ -343,7 +396,7 @@ async function notifyNativeUi(a: Advance): Promise<StepOut> {
   )
     return "next";
   const text = `Dispatcher native UI results:\n${fresh.map((j) => `${j.id}: ${j.status}; evidence: ${j.evidencePath}`).join("\n")}\nRead .wingmate/native-ui.json and its evidence. Gate UI with --request <id>; a failed or unverifiable run cannot prove PASS. Native artifacts require trusted isolated-build provenance; never run repository build scripts or Orca emulator commands on the host.`;
-  if ((await deliver(a.ctx, a.r, "note", text, "idle", a.r.pipelineStage)) === "turn_started") {
+  if (await resultNotification(a, text)) {
     for (const j of fresh) j.notified = true;
     await mirrorNativeJobs(a.r);
     a.budget.resumes -= 1;
@@ -374,7 +427,7 @@ async function notifyRoleJobs(a: Advance): Promise<StepOut> {
   const fresh = jobs.filter((j) => !j.notified);
   if (!fresh.length) return "next";
   const text = `Dispatcher role results (terminal jobs):\n${fresh.map((j) => `${j.id} ${j.role}: ${j.verdict ?? "FAIL"}; report: ${j.reportPath ?? "unavailable"}`).join("\n")}\nRead .wingmate/roles.json and the reports before continuing. Use --request <id> to bind a review gate. A FAIL requires a fix and a fresh review; never invent a passing result.`;
-  if ((await deliver(a.ctx, r, "note", text, "idle", r.pipelineStage)) === "turn_started") {
+  if (await resultNotification(a, text)) {
     for (const j of fresh) j.notified = true;
     enterPipelineStage(a.ctx, r, r.pipelineStage);
     a.budget.resumes -= 1;
@@ -415,6 +468,7 @@ const STEPS = [
   replayClaim,
   collectRoleJobs,
   outbox,
+  waitForGateAck,
   notifyNativeUi,
   notifyRoleJobs,
   allowDepsGrant,

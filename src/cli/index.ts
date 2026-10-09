@@ -6,11 +6,12 @@ export interface Argv {
   cmd: string[];
   flags: Record<string, FlagValue>;
 }
-/** A repeated flag's values accumulate; a valueless occurrence among them makes the flag `true` (malformed, so callers refuse it). */
+/** Repeated values accumulate. Mixing valued and valueless forms is a sticky `false` sentinel, refused before dispatch. */
 function addFlag(flags: Record<string, FlagValue>, k: string, v: string | true): void {
   const cur = flags[k];
   if (cur === undefined) flags[k] = v;
-  else if (typeof cur === "boolean" || v === true) flags[k] = true;
+  else if (cur === false) return;
+  else if (typeof cur === "boolean" || v === true) flags[k] = cur === true && v === true;
   else flags[k] = [...(Array.isArray(cur) ? cur : [cur]), v];
 }
 export function parseArgv(args: string[]): Argv {
@@ -49,6 +50,13 @@ const registry: Record<string, () => Promise<Handler>> = {
   status: async () => (await import("./commands/status")).statusCommand,
   ui: async () => (await import("./commands/ui")).uiCommand,
 };
+export interface MainDeps {
+  handlers?: Record<string, () => Promise<Handler>>;
+  out?: (text: string) => void;
+  err?: (text: string) => void;
+}
+const USAGE = `usage: wingmate <${Object.keys(registry).join("|")}> …\n`;
+const HELP = `${USAGE}\nwingmate tick [--precheck] [--dry-run] [--json]\nwingmate scan [--dry-run] [--json]\nwingmate issue <identifier> <verb> …\n`;
 
 /** Every error a command lets escape: `code: message` on stderr (never a stack trace, never stdout), exit 2. */
 export function reportError(
@@ -68,17 +76,34 @@ export function reportError(
   return 2;
 }
 
-export async function main(args: string[]): Promise<number> {
+export async function main(args: string[], deps: MainDeps = {}): Promise<number> {
+  const out = deps.out ?? ((text: string) => process.stdout.write(text));
+  const err = deps.err ?? ((text: string) => process.stderr.write(text));
+  // Inspect raw tokens before parsing: help must never import a command or construct a credentialed context.
+  // End-of-options syntax is unsupported; refuse it instead of guessing whether a later token is actionable.
+  if (args.includes("--") || args.some((arg) => arg.startsWith("--help="))) {
+    err(USAGE);
+    return 2;
+  }
+  if (args.includes("--help")) {
+    out(HELP);
+    return 0;
+  }
   const argv = parseArgv(args);
+  if (Object.values(argv.flags).includes(false)) {
+    err(USAGE);
+    return 2;
+  }
   const top = argv.cmd[0];
-  const load = top ? registry[top] : undefined;
+  const handlers = deps.handlers ?? registry;
+  const load = top && Object.hasOwn(handlers, top) ? handlers[top] : undefined;
   if (!load) {
-    process.stderr.write(`usage: wingmate <${Object.keys(registry).join("|")}> …\n`);
+    err(USAGE);
     return 2;
   }
   try {
     return await (await load())(argv);
   } catch (e) {
-    return reportError(e);
+    return reportError(e, err);
   }
 }

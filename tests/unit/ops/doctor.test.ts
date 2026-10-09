@@ -5,7 +5,7 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { writeCredentials } from "../../../src/linear/auth";
 import { type DoctorOptions, type DoctorReport, defaultProbe, doctor } from "../../../src/ops/doctor";
-import { install, readInstallState } from "../../../src/ops/install";
+import { install, precheckCommand, readInstallState } from "../../../src/ops/install";
 import { WingmateError } from "../../../src/shared/errors";
 import { fakeExec, ok } from "../../fakes/fakeExec";
 import { labeledByOwner, runTick, todo, world } from "../../sim/harness";
@@ -120,6 +120,30 @@ const opts = (over: Partial<DoctorOptions> = {}): DoctorOptions => ({
 const check = (rep: DoctorReport, name: string) => rep.checks.find((c) => c.name === name);
 
 describe("doctor — every check", () => {
+  test("a pinned install checks the loaded config path and live precheck; legacy installs stay compatible", async () => {
+    const w = await healthy();
+    const state = await readInstallState(w.dirs);
+    const a = w.orca.automations[0];
+    if (!state || !a) throw new Error("healthy install missing");
+    expect(check(await doctor(w.ctx, opts()), "automation_present")?.ok).toBe(true);
+    const configPath = join(w.root, "selected.yaml");
+    writeFileSync(configPath, "synthetic trusted config");
+    writeFileSync(join(w.dirs.state, "install.json"), JSON.stringify({ ...state, configPath }));
+    a.precheckCommand = precheckCommand(state.binPath, configPath);
+    w.ctx.configPath = configPath;
+    expect(check(await doctor(w.ctx, opts()), "automation_present")?.ok).toBe(true);
+    w.ctx.configPath = join(w.root, "other.yaml");
+    expect(check(await doctor(w.ctx, opts()), "automation_present")).toMatchObject({
+      ok: false,
+      blocking: true,
+    });
+    expect(check(await doctor(w.ctx, opts()), "automation_present")?.detail).toContain("loaded config path");
+    w.ctx.configPath = configPath;
+    a.precheckCommand = precheckCommand(state.binPath);
+    expect(check(await doctor(w.ctx, opts()), "automation_present")?.detail).toContain("precheck");
+    Reflect.deleteProperty(a, "precheckCommand");
+    expect(check(await doctor(w.ctx, opts()), "automation_present")?.detail).toContain("precheck");
+  });
   test("a healthy host passes every blocking check; the report is written to doctor.json", async () => {
     const w = await healthy();
     const rep = await doctor(w.ctx, opts());

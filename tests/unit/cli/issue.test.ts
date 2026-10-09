@@ -34,6 +34,8 @@ import { resolveRuntime, writeRuntime } from "../../../src/shared/runtime";
 import { newRecord } from "../../../src/state/records";
 
 const GIT_ID = ["-c", "user.name=t", "-c", "user.email=t@example.invalid"];
+// Real default-state kits may exist for this fixture's issue ID; never read their runtime receipts.
+const RUNTIME_KIT_ROOT = mkdtempSync(join(tmpdir(), "wm-issue-trusted-kit-"));
 const git = (wt: string, ...args: string[]) => run(["git", "-C", wt, ...GIT_ID, ...args]);
 const headOf = async (wt: string) => (await git(wt, "rev-parse", "HEAD")).stdout.trim();
 async function worktree(opts: { git?: boolean } = {}) {
@@ -127,13 +129,12 @@ const capture = async (fn: () => Promise<number>) => {
     process.stdout.write = orig;
   }
 };
-const testKitRoot = mkdtempSync(join(tmpdir(), "wm-test-kit-root-"));
 const runVerb = (wt: string, args: string[], deps: Partial<IssueDeps> = {}) =>
   capture(() =>
     issueCommand(parseArgv(["issue", "JRF-404", ...args]), {
       cwd: wt,
       orca: noWorkers,
-      runtimeKitRoot: testKitRoot,
+      runtimeKitRoot: RUNTIME_KIT_ROOT,
       ...deps,
     }),
   );
@@ -147,6 +148,88 @@ const refusal = (r: { code: number; out: string }): Refusal => {
 };
 
 describe("wingmate issue", () => {
+  test("every dispatcher gate queues an ACK without changing local gates or stage, including computed checks and UI NA", async () => {
+    for (const stage of STAGES) {
+      const wt = await worktree({ git: true });
+      try {
+        const head = await headOf(wt);
+        writeLaunch(wt, { spawnMode: "dispatcher", baseSha: head });
+        const local = await passGates(wt, head, STAGES.slice(0, STAGES.indexOf(stage)));
+        local.record.pipelineStage = stage;
+        await writeLocal(wt, local);
+        writeFileSync(join(wt, ".wingmate/stage.json"), "unchanged until dispatcher ACK\n");
+        writeFileSync(join(wt, ".wingmate/evidence/gate.md"), "Scoped evidence.");
+        const role =
+          stage === "planVerify"
+            ? "plan-verifier"
+            : stage === "validate"
+              ? "code-reviewer"
+              : "security-reviewer";
+        writeFileSync(
+          join(wt, ".wingmate/roles.json"),
+          JSON.stringify([
+            {
+              id: "Review1",
+              mode: "terminal-job",
+              role,
+              cycle: 1,
+              attempt: 1,
+              provider: "codex",
+              status: "succeeded",
+              terminalHandle: null,
+              paneKey: null,
+              headSha: head,
+              planHash: null,
+              createdAt: "2026-10-06T10:00:00Z",
+              completedAt: "2026-10-06T10:01:00Z",
+              verdict: "PASS",
+              reportPath: ".wingmate/evidence/gate.md",
+              reportHash: null,
+              notified: true,
+            },
+          ]),
+        );
+        const args = [
+          "gate",
+          stage,
+          ...(["planVerify", "validate", "security"].includes(stage)
+            ? ["--request", "Review1"]
+            : stage === "ui"
+              ? ["--verdict", "NA", "--note", "no UI change"]
+              : [
+                  "--verdict",
+                  "PASS",
+                  "--evidence",
+                  ".wingmate/evidence/gate.md",
+                  ...(stage === "intake" ? ["--method", "loop"] : []),
+                ]),
+        ];
+        const result = await runVerb(wt, args);
+        expect(result.code).toBe(0);
+        const output = JSON.parse(result.out);
+        expect(output).toMatchObject({
+          ok: true,
+          stage,
+          pending: true,
+          verdict: stage === "ui" ? "NA" : "PASS",
+        });
+        expect(output.next).toContain("END YOUR TURN");
+        expect(output.next).toContain("HEAD");
+        expect(await readLocal(wt)).toEqual(local);
+        expect(readFileSync(join(wt, ".wingmate/stage.json"), "utf8")).toBe(
+          "unchanged until dispatcher ACK\n",
+        );
+        expect(await listIntents(wt)).toMatchObject([
+          { id: output.intentId, kind: "gate", payload: { stage, acknowledge: true, headSha: head } },
+        ]);
+        expect(refusal(await runVerb(wt, args)).code).toBe("gate_pending");
+        expect(await listIntents(wt)).toHaveLength(1);
+      } finally {
+        rmSync(wt, { recursive: true, force: true });
+      }
+    }
+  });
+
   test("dispatcher gates refuse an unavailable HEAD without writing state or intents", async () => {
     const wt = await worktree();
     writeLaunch(wt, { spawnMode: "dispatcher" });
@@ -613,6 +696,32 @@ describe("wingmate issue", () => {
       kind: "finish",
       payload: { summaryFile: ".wingmate/s.md", title: "T", draft: true, repos: ["api"] },
     });
+  });
+
+  test("finish refuses oversized summaries without an intent, and accepts exactly 4000 characters", async () => {
+    const wt = await worktree({ git: true });
+    writeLaunch(wt, { baseSha: await headOf(wt) });
+    const h = await commit(wt, { "src/a.ts": "1\n" });
+    const local = await passGates(wt, h);
+    for (const [summary, length] of [
+      ["a".repeat(4001), "4001"],
+      ["🦉".repeat(2001), "4002"],
+      ["界".repeat(30000), "at least"],
+    ] as const) {
+      writeFileSync(join(wt, ".wingmate", "s.md"), summary);
+      const fail = refusal(await runVerb(wt, ["finish", "--summary-file", ".wingmate/s.md"]));
+      expect(fail.code).toBe("summary_too_long");
+      expect(fail.message).toContain(length);
+      expect(fail.message).toContain("maximum is 4000");
+      expect(fail.nextStep).toContain("shorten .wingmate/s.md");
+      expect(await listIntents(wt)).toEqual([]);
+      expect((await readLocal(wt)).gates).toEqual(local.gates);
+    }
+    // Preserve the former UTF-16 string limit, including multi-byte UTF-8 content.
+    writeFileSync(join(wt, ".wingmate", "s.md"), "🦉".repeat(2000));
+    const ok = await runVerb(wt, ["finish", "--summary-file", ".wingmate/s.md"]);
+    expect(ok.code).toBe(0);
+    expect(await listIntents(wt)).toHaveLength(1);
   });
 
   test("ask validates --recommend, --append/--reask, live workers and the question file; writes stage.json", async () => {

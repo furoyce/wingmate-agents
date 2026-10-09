@@ -5,6 +5,10 @@ import { z } from "zod";
 export const NATIVE_CLEANUP_RESERVE_MS = 40_000;
 export const NATIVE_DELIVERY_RESERVE_MS = 35_000;
 export const NATIVE_ADMISSION_HEADROOM_MS = 10_000;
+export const NATIVE_CAPTURE_MAX_BYTES = 16 * 1024 * 1024;
+// These are total wall budgets, including subprocess termination/drain grace, within the unchanged 40-second reserve.
+export const NATIVE_DEVICE_CLEANUP_MS = 25_000;
+export const NATIVE_LEASE_CLEANUP_MS = 5_000;
 
 export const Sha = z.string().regex(/^[a-f0-9]{40}$/);
 export const Digest = z.string().regex(/^[a-f0-9]{64}$/);
@@ -72,6 +76,39 @@ export const ArtifactReceiptSchema = z
   })
   .strict();
 
+// An opaque, non-secret adapter reference to one isolated runtime lease. It is not an endpoint, path or attestation shortcut.
+// Only the trusted adapter issues/resolves it; profile changes must not redirect recovery to a different runtime.
+export const NativeRuntimeBindingSchema = z
+  .object({
+    version: z.literal(1),
+    id: z.string().regex(/^[A-Za-z0-9_.:-]{1,200}$/),
+    profileHash: Digest,
+  })
+  .strict()
+  .readonly();
+export type NativeRuntimeBinding = z.infer<typeof NativeRuntimeBindingSchema>;
+export const NativeRuntimeRequestSchema = z
+  .object({ requestId: RequestId, worktreeId: z.string().min(1).max(4096), profileHash: Digest })
+  .strict()
+  .readonly();
+export type NativeRuntimeRequest = z.infer<typeof NativeRuntimeRequestSchema>;
+// A read-only lookup must distinguish verified absence from an unavailable broker/lease registry.
+export const NativeRuntimeLookupSchema = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("absent"), request: NativeRuntimeRequestSchema }).strict(),
+  z
+    .object({
+      status: z.literal("bound"),
+      request: NativeRuntimeRequestSchema,
+      binding: NativeRuntimeBindingSchema,
+    })
+    .strict(),
+]);
+export type NativeRuntimeLookup = z.infer<typeof NativeRuntimeLookupSchema>;
+export const sameRuntimeBinding = (a: NativeRuntimeBinding, b: NativeRuntimeBinding): boolean =>
+  a.version === b.version && a.id === b.id && a.profileHash === b.profileHash;
+export const runtimeBindingHash = (binding: NativeRuntimeBinding): string =>
+  hash(JSON.stringify([binding.version, binding.id, binding.profileHash]));
+
 export const NativeJobSchema = z.object({
   id: RequestId,
   issue: z.string(),
@@ -81,6 +118,10 @@ export const NativeJobSchema = z.object({
   headSha: Sha,
   policyHash: Digest,
   executionIsolationHash: Digest,
+  runtimeBinding: NativeRuntimeBindingSchema.nullable().default(null),
+  runtimeAcquireUncertain: z.boolean().default(false),
+  runtimeReleased: z.boolean().default(true),
+  deviceCleanupComplete: z.boolean().default(false),
   recipeHash: Digest,
   requestedAt: z.string().datetime(),
   status: z.enum(["running", "succeeded", "failed", "unverifiable"]),
@@ -92,6 +133,8 @@ export const NativeJobSchema = z.object({
   notified: z.boolean(),
 });
 export type NativeJob = z.infer<typeof NativeJobSchema>;
+/** Runtime routing belongs only in protected dispatcher state, never the advisory agent mirror. */
+export const nativeJobViews = (jobs: NativeJob[]) => jobs.map(({ runtimeBinding: _binding, ...job }) => job);
 
 export const NativeReceiptSchema = z
   .object({
@@ -104,6 +147,7 @@ export const NativeReceiptSchema = z
     headSha: Sha,
     policyHash: Digest,
     recipeHash: Digest,
+    runtimeBindingHash: Digest.nullable().default(null),
     appHash: Digest.nullable(),
     appPid: z.number().int().positive().nullable(),
     udid: z.string().uuid().nullable(),

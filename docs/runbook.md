@@ -12,6 +12,8 @@ Conventions used throughout:
 - Commands that read the config (`stop`, `pause`/`resume`, `status --project`, `install`, `doctor`) must run where
   `config/projects.yaml` is. That means the `wingmate-dispatcher` worktree or any checkout of this repository.
   Alternatively, set `WINGMATE_CONFIG=<path>`.
+  New installs record the canonical path of the selected file, including relative `WINGMATE_CONFIG` selections.
+  Use that same file for `doctor` and later installs; a changed selection is a blocking mismatch until reinstalled.
 
 Contents:
 
@@ -38,8 +40,11 @@ Contents:
 **The dispatcher.** It is the Orca automation `wingmate-dispatcher`, which runs every 5 minutes (`*/5 * * * *`) in the
 long-lived `wingmate-dispatcher` worktree:
 
-- Its precheck runs `<state>/bin/wingmate-<version> tick --precheck`, with a timeout of
-  `defaults.dispatcher.precheckTimeoutSec` (default 240 s).
+- Its precheck runs `/usr/bin/env WINGMATE_CONFIG=<pinned-config-path> <state>/bin/wingmate-<version> tick --precheck`,
+  with safely quoted paths and a timeout of `defaults.dispatcher.precheckTimeoutSec` (default 240 s). The pinned path
+  overrides the automation shell's config environment and does not depend on its cwd. Legacy install receipts without
+  a config path retain their original precheck until reinstalled. The owner may update trusted file contents normally;
+  the path selection is pinned, not a content snapshot.
 - The precheck never exits 0, so the automation's agent never starts. It exits 1 after acting or when idle, and 2 on an
   error or while paused.
 - Orca's run history for the automation shows each run's precheck output: the tick summary as JSON (`outcome`,
@@ -586,7 +591,8 @@ Until then, these are the real spend signals:
      `<state>/bin/wingmate-<version>`. A running tick keeps its old binary; a new file replaces the old one by rename;
      the compiled executable ignores runtime `.env`, `bunfig.toml`, `tsconfig.json` and `package.json` files;
    - it points `~/.local/bin/wingmate` at the new binary;
-   - it edits the automation's precheck to the new path;
+   - it records the actual loaded config file's canonical absolute path in `install.json` and edits the automation's
+     precheck to use that file with the new binary; doctor checks the loaded path, install receipt and live precheck agree;
    - it keeps `core.useReplaceRefs=false` set in each pilot repository's own config (a deliberate setting: Orca's
      checkouts then follow no replace ref an agent plants; doctor's blocking `replace_refs_disabled` reads it back). It
      writes only where the value is not false already, because that config is in every issue's integrity set: a change

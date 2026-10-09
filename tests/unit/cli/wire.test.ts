@@ -3,9 +3,18 @@
 // with `linearOptional` (install, stop, doctor) keep running without any Linear credentials, and every other context (tick) refuses
 // `linear_app_required`. Temp homes only; `fetch` is a fake, so nothing reaches Linear.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { tickCommand } from "../../../src/cli/commands/tick";
 import { parseArgv } from "../../../src/cli/index";
 import { type RealCtxOptions, buildRealCtx, linearTokens } from "../../../src/cli/wire";
@@ -152,6 +161,23 @@ async function live<T>(
 // A built context opens its pino log file under the temp home asynchronously, so these homes are kept, as the fake world keeps its
 // own: removing one right after a build would race that open.
 describe("buildRealCtx credential rules (Task 13)", () => {
+  test("the real context retains the actual config selected by a relative environment path", async () => {
+    const selected = join(root, "selected-config.yaml");
+    writeFileSync(selected, readFileSync("config/projects.yaml", "utf8"));
+    const saved = process.env.WINGMATE_CONFIG;
+    process.env.WINGMATE_CONFIG = relative(process.cwd(), selected);
+    try {
+      await live(KEY, async () => {
+        const ctx = await buildRealCtx({ readOnly: false, linearOptional: true });
+        expect(ctx.configPath).toBe(realpathSync(selected));
+        process.env.WINGMATE_CONFIG = "/later/unrelated/config.yaml";
+        expect(ctx.configPath).toBe(realpathSync(selected));
+      });
+    } finally {
+      if (saved === undefined) Reflect.deleteProperty(process.env, "WINGMATE_CONFIG");
+      else process.env.WINGMATE_CONFIG = saved;
+    }
+  });
   test("read-only without credentials.json: every Linear read carries the personal key (bare, F6: never as Bearer), and the context still refuses every write", async () => {
     await live(KEY, async (calls) => {
       const ctx = await buildRealCtx({ readOnly: true });

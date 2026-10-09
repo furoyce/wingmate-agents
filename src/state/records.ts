@@ -44,6 +44,26 @@ const Gate = z.object({
   note: z.string().nullable().default(null),
 });
 
+/** One outbox gate decision awaiting delivery; only the dispatcher writes this protected receipt. */
+const GateDelivery = z.object({
+  id: z.string().regex(/^[0-9A-Za-z]{1,64}$/),
+  intentHash: z.string().regex(/^[0-9a-f]{64}$/),
+  cycle: z.number().int().positive(),
+  attempt: z.number().int().nonnegative(),
+  stage: z.enum(PIPELINE),
+  accepted: z.boolean(),
+  gateHash: z
+    .string()
+    .regex(/^[0-9a-f]{64}$/)
+    .nullable(),
+  verdict: z.enum(["PASS", "FAIL", "NA"]),
+  headSha: z.string().nullable(),
+  dispatchId: z.string().nullable(),
+  code: z.string().nullable(),
+  message: z.string(),
+  nextStep: z.string().nullable(),
+});
+
 /** The §5.1 record, schema version 1. */
 export const RecordSchema = z.object({
   schemaVersion: z.literal(1),
@@ -119,6 +139,7 @@ export const RecordSchema = z.object({
     }),
   ),
   gates: z.object(Object.fromEntries(PIPELINE.map((s) => [s, Gate])) as Record<PipelineStage, typeof Gate>),
+  gateDelivery: GateDelivery.nullable().optional(),
   prs: z.array(
     z.object({
       repo: z.string(),

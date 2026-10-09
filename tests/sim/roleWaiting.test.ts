@@ -78,7 +78,11 @@ describe("review waves intentionally idle the coordinator", () => {
     expect(resumed.roleJobs[0]?.notified).toBe(true);
     expect(resumed.timers.stageStartedAt).toBe(w.ctx.now());
     expect(resumed.timers.lastActivityAt).toBe(w.ctx.now());
-    expect(resumed.linear.lastSeenCommentAt).not.toBe(waiting.linear.lastSeenCommentAt);
+    expect(resumed.linear.lastSeenCommentAt).toBe(waiting.linear.lastSeenCommentAt);
+    w.orca.setAgentState(resumed.worktree?.id ?? "", resumed.coordinator.paneKey ?? "", "done", w.ctx.now());
+    advance(w, 5);
+    expect((await runTick(w)).resumes).toEqual([ID]);
+    expect((await record(w)).r.linear.lastSeenCommentAt).not.toBe(waiting.linear.lastSeenCommentAt);
   });
 
   test("quota-deferred requests do not nudge, relaunch or hand off before launching and settling", async () => {
