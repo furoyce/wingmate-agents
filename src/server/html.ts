@@ -7,31 +7,7 @@ export function renderDashboardHtml(): string {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Wingmate Console · Architect Pipeline</title>
   <style>
-    :root, body[data-theme="dark"] {
-      --bg: #090D16;
-      --surface: #111726;
-      --surface-elevated: #182235;
-      --surface-hover: #1F2C45;
-      --border: #23314B;
-      --border-subtle: #192337;
-      --text: #F1F5F9;
-      --text-muted: #94A3B8;
-      --text-dim: #64748B;
-      --accent: #38BDF8;
-      --accent-glow: rgba(56, 189, 248, 0.15);
-      --success: #10B981;
-      --success-glow: rgba(16, 185, 129, 0.15);
-      --warning: #F59E0B;
-      --warning-glow: rgba(245, 158, 11, 0.15);
-      --danger: #EF4444;
-      --purple: #A855F7;
-      --purple-glow: rgba(168, 85, 247, 0.15);
-      --card-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
-      --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    }
-
-    body[data-theme="light"] {
+    :root, body[data-theme="light"] {
       --bg: #F8FAFC;
       --surface: #FFFFFF;
       --surface-elevated: #F1F5F9;
@@ -51,6 +27,54 @@ export function renderDashboardHtml(): string {
       --purple: #7C3AED;
       --purple-glow: rgba(124, 58, 237, 0.12);
       --card-shadow: 0 4px 16px rgba(15, 23, 42, 0.06);
+      --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+
+    body[data-theme="dark"] {
+      --bg: #090D16;
+      --surface: #111726;
+      --surface-elevated: #182235;
+      --surface-hover: #1F2C45;
+      --border: #23314B;
+      --border-subtle: #192337;
+      --text: #F1F5F9;
+      --text-muted: #94A3B8;
+      --text-dim: #64748B;
+      --accent: #38BDF8;
+      --accent-glow: rgba(56, 189, 248, 0.15);
+      --success: #10B981;
+      --success-glow: rgba(16, 185, 129, 0.15);
+      --warning: #F59E0B;
+      --warning-glow: rgba(245, 158, 11, 0.15);
+      --danger: #EF4444;
+      --purple: #A855F7;
+      --purple-glow: rgba(168, 85, 247, 0.15);
+      --card-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+    }
+
+    @media (prefers-color-scheme: dark) {
+      body[data-theme="system"] {
+        --bg: #090D16;
+        --surface: #111726;
+        --surface-elevated: #182235;
+        --surface-hover: #1F2C45;
+        --border: #23314B;
+        --border-subtle: #192337;
+        --text: #F1F5F9;
+        --text-muted: #94A3B8;
+        --text-dim: #64748B;
+        --accent: #38BDF8;
+        --accent-glow: rgba(56, 189, 248, 0.15);
+        --success: #10B981;
+        --success-glow: rgba(16, 185, 129, 0.15);
+        --warning: #F59E0B;
+        --warning-glow: rgba(245, 158, 11, 0.15);
+        --danger: #EF4444;
+        --purple: #A855F7;
+        --purple-glow: rgba(168, 85, 247, 0.15);
+        --card-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+      }
     }
 
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -85,8 +109,11 @@ export function renderDashboardHtml(): string {
     }
     button:hover { background: var(--surface-hover); border-color: var(--accent); }
     button:disabled { opacity: 0.5; cursor: not-allowed; }
-    button.primary { background: var(--accent); color: #020617; border-color: var(--accent); font-weight: 600; }
-    body[data-theme="light"] button.primary { color: #FFFFFF; }
+    button.primary { background: var(--accent); color: #FFFFFF; border-color: var(--accent); font-weight: 600; }
+    body[data-theme="dark"] button.primary { color: #020617; }
+    @media (prefers-color-scheme: dark) {
+      body[data-theme="system"] button.primary { color: #020617; }
+    }
     button.primary:hover:not(:disabled) { opacity: 0.9; }
     button.warning { background: var(--warning); color: #020617; border-color: var(--warning); font-weight: 600; }
     button.sm { padding: 4px 8px; font-size: 11px; }
@@ -106,8 +133,11 @@ export function renderDashboardHtml(): string {
     }
     .header-left { display: flex; align-items: center; gap: 14px; }
     .logo { font-size: 15px; font-weight: 700; letter-spacing: -0.3px; display: flex; align-items: center; gap: 8px; }
-    .logo-badge { background: var(--accent); color: #020617; font-size: 10px; font-weight: 800; padding: 2px 6px; border-radius: 4px; text-transform: uppercase; }
-    body[data-theme="light"] .logo-badge { color: #FFFFFF; }
+    .logo-badge { background: var(--accent); color: #FFFFFF; font-size: 10px; font-weight: 800; padding: 2px 6px; border-radius: 4px; text-transform: uppercase; }
+    body[data-theme="dark"] .logo-badge { color: #020617; }
+    @media (prefers-color-scheme: dark) {
+      body[data-theme="system"] .logo-badge { color: #020617; }
+    }
     .pulse-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--success); box-shadow: 0 0 8px var(--success); flex-shrink: 0; }
     .status-text { color: var(--text-muted); font-size: 12px; font-family: var(--font-mono); }
 
@@ -228,8 +258,21 @@ export function renderDashboardHtml(): string {
 
     /* Badges */
     .badge { padding: 2px 7px; border-radius: 4px; font-size: 11px; font-weight: 600; font-family: var(--font-mono); }
-    .badge-claude { background: rgba(217, 119, 6, 0.15); color: #F59E0B; border: 1px solid rgba(217, 119, 6, 0.3); }
-    .badge-codex { background: rgba(16, 185, 129, 0.15); color: #10B981; border: 1px solid rgba(16, 185, 129, 0.3); }
+    .badge-orca { background: rgba(14, 165, 233, 0.15); color: #0284C7; border: 1px solid rgba(14, 165, 233, 0.4); }
+    body[data-theme="dark"] .badge-orca { color: #38BDF8; }
+    @media (prefers-color-scheme: dark) {
+      body[data-theme="system"] .badge-orca { color: #38BDF8; }
+    }
+    .badge-claude { background: rgba(217, 119, 6, 0.15); color: #B45309; border: 1px solid rgba(217, 119, 6, 0.3); }
+    body[data-theme="dark"] .badge-claude { color: #F59E0B; }
+    @media (prefers-color-scheme: dark) {
+      body[data-theme="system"] .badge-claude { color: #F59E0B; }
+    }
+    .badge-codex { background: rgba(16, 185, 129, 0.15); color: #059669; border: 1px solid rgba(16, 185, 129, 0.3); }
+    body[data-theme="dark"] .badge-codex { color: #10B981; }
+    @media (prefers-color-scheme: dark) {
+      body[data-theme="system"] .badge-codex { color: #10B981; }
+    }
     .badge-project {
       background: var(--surface-hover);
       color: var(--text-muted);
@@ -331,7 +374,7 @@ export function renderDashboardHtml(): string {
     .stat-val { font-size: 22px; font-weight: 800; font-family: var(--font-mono); color: var(--text); }
 
     /* Projects Strip */
-    .projects-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+    .projects-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
     .project-card {
       background: var(--surface);
       border: 1px solid var(--border);
@@ -341,8 +384,25 @@ export function renderDashboardHtml(): string {
       flex-direction: column;
       gap: 8px;
       box-shadow: var(--card-shadow);
+      box-sizing: border-box;
     }
     .project-card-title { font-weight: 700; font-size: 14px; display: flex; justify-content: space-between; align-items: center; }
+
+    /* Automations Strip */
+    .automations-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+    @media (max-width: 1024px) { .automations-grid { grid-template-columns: repeat(1, 1fr); } }
+    .automation-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      box-shadow: var(--card-shadow);
+      box-sizing: border-box;
+    }
+    .automation-card-title { font-weight: 700; font-size: 13px; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 
     /* Kanban Board View */
     .kanban-board {
@@ -594,12 +654,13 @@ export function renderDashboardHtml(): string {
     .empty-state { text-align: center; padding: 32px; color: var(--text-dim); font-size: 13px; }
   </style>
 </head>
-<body data-theme="dark">
+<body data-theme="light">
   <div class="header">
     <div class="header-left">
       <div class="logo">
         <span class="logo-badge">Wingmate</span>
         <span>Architect Console</span>
+        <span style="font-size: 11px; font-weight: normal; color: var(--text-dim); margin-left: 4px;">Universal Automation Plugin · Orca / Claude / Codex</span>
       </div>
       <div class="pulse-dot" id="pulseDot"></div>
       <div class="status-text" id="statusSummary">Connecting to local dispatcher...</div>
@@ -630,8 +691,8 @@ export function renderDashboardHtml(): string {
         <option value="all">All Time</option>
       </select>
 
-      <!-- Theme Switcher -->
-      <button id="themeToggleBtn" onclick="toggleTheme()" class="sm" title="Toggle Light/Dark Theme">
+      <!-- Theme Switcher (Light · Dark · System) -->
+      <button id="themeToggleBtn" onclick="cycleTheme()" class="sm" title="Switch Theme (Light · Dark · System)">
         <span id="themeIcon">☀️</span> <span id="themeText">Light</span>
       </button>
 
@@ -688,12 +749,23 @@ export function renderDashboardHtml(): string {
         </div>
       </div>
 
-      <!-- 5. Projects & Automations Cadence -->
+      <!-- 5. Active Pilot Projects & Worktree Allocation -->
       <div>
         <div class="section-title">
-          <span>Projects & Harness Automations</span>
+          <span>Active Pilot Projects & Worktree Allocation</span>
         </div>
         <div class="projects-grid" id="projectsGrid">
+          <!-- Injected via JS -->
+        </div>
+      </div>
+
+      <!-- 6. Native Agent Harness Automations & Routines -->
+      <div>
+        <div class="section-title">
+          <span>Native Coding Agent Automations & Routines</span>
+          <span style="font-size: 11px; font-weight: normal; color: var(--text-dim);">Orca ADE · Claude Code · OpenAI Codex</span>
+        </div>
+        <div class="automations-grid" id="automationsGrid">
           <!-- Injected via JS -->
         </div>
       </div>
@@ -742,26 +814,49 @@ export function renderDashboardHtml(): string {
   <script>
     let currentData = null;
     let activeModalTarget = null;
-    let currentTheme = localStorage.getItem("wingmate_theme") || "dark";
+    let currentTheme = localStorage.getItem("wingmate_theme") || "light";
     let currentView = localStorage.getItem("wingmate_view") || "pipeline";
     let pollTimer = null;
 
-    function applyTheme(theme) {
-      currentTheme = theme;
-      document.body.setAttribute("data-theme", theme);
-      localStorage.setItem("wingmate_theme", theme);
+    function updateThemeUI(theme) {
       const icon = document.getElementById("themeIcon");
       const text = document.getElementById("themeText");
-      if (theme === "light") {
+      if (!icon || !text) return;
+      if (theme === "dark") {
         icon.textContent = "🌙";
         text.textContent = "Dark";
+      } else if (theme === "system") {
+        icon.textContent = "💻";
+        text.textContent = "System";
       } else {
         icon.textContent = "☀️";
         text.textContent = "Light";
       }
     }
+
+    function applyTheme(theme) {
+      const valid = theme === "dark" || theme === "system" ? theme : "light";
+      currentTheme = valid;
+      document.body.setAttribute("data-theme", valid);
+      localStorage.setItem("wingmate_theme", valid);
+      updateThemeUI(valid);
+    }
+
+    function cycleTheme() {
+      const nextTheme = currentTheme === "light" ? "dark" : currentTheme === "dark" ? "system" : "light";
+      applyTheme(nextTheme);
+    }
+
     function toggleTheme() {
-      applyTheme(currentTheme === "dark" ? "light" : "dark");
+      cycleTheme();
+    }
+
+    if (window.matchMedia) {
+      window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+        if (currentTheme === "system") {
+          applyTheme("system");
+        }
+      });
     }
 
     function switchView(view) {
@@ -1084,31 +1179,66 @@ export function renderDashboardHtml(): string {
 
     function renderProjects(projects, automations) {
       const g = document.getElementById("projectsGrid");
-      if (!projects) return;
+      if (g && projects) {
+        g.innerHTML = projects.map(p => (
+          '<div class="project-card">' +
+            '<div class="project-card-title">' +
+              '<span>' + escapeHtml(p.name) + '</span>' +
+              '<span class="badge badge-project">' + escapeHtml(p.key) + '</span>' +
+            '</div>' +
+            '<div style="font-size: 12px; color: var(--text-muted); display: flex; justify-content: space-between;">' +
+              '<span>Active Worktrees:</span>' +
+              '<strong style="color: ' + (p.activeCount > 0 ? 'var(--accent)' : 'var(--text-dim)') + ';">' + p.activeCount + '</strong>' +
+            '</div>' +
+            '<div style="font-size: 12px; color: var(--text-muted); display: flex; justify-content: space-between;">' +
+              '<span>Queued / Ready:</span>' +
+              '<strong>' + p.queuedCount + '</strong>' +
+            '</div>' +
+            '<div style="font-size: 12px; color: var(--text-muted); display: flex; justify-content: space-between;">' +
+              '<span>Completed:</span>' +
+              '<strong style="color: var(--success);">' + p.completedCount + '</strong>' +
+            '</div>' +
+            '<div style="font-size: 11px; color: var(--text-dim); border-top: 1px solid var(--border-subtle); padding-top: 6px; margin-top: 4px;">' +
+              '<span>Slot: ' + (p.slotHeldBy ? '<span style="color: var(--warning);">Held by ' + escapeHtml(p.slotHeldBy) + '</span>' : '<span style="color: var(--success);">Available</span>') + '</span>' +
+            '</div>' +
+          '</div>'
+        )).join("");
+      }
 
-      g.innerHTML = projects.map(p => (
-        '<div class="project-card">' +
-          '<div class="project-card-title">' +
-            '<span>' + p.name + '</span>' +
-            '<span class="badge badge-project">' + p.key + '</span>' +
-          '</div>' +
-          '<div style="font-size: 12px; color: var(--text-muted); display: flex; justify-content: space-between;">' +
-            '<span>Active Worktrees:</span>' +
-            '<strong style="color: ' + (p.activeCount > 0 ? 'var(--accent)' : 'var(--text-dim)') + ';">' + p.activeCount + '</strong>' +
-          '</div>' +
-          '<div style="font-size: 12px; color: var(--text-muted); display: flex; justify-content: space-between;">' +
-            '<span>Queued / Ready:</span>' +
-            '<strong>' + p.queuedCount + '</strong>' +
-          '</div>' +
-          '<div style="font-size: 12px; color: var(--text-muted); display: flex; justify-content: space-between;">' +
-            '<span>Completed:</span>' +
-            '<strong style="color: var(--success);">' + p.completedCount + '</strong>' +
-          '</div>' +
-          '<div style="font-size: 11px; color: var(--text-dim); border-top: 1px solid var(--border-subtle); padding-top: 6px; margin-top: 4px;">' +
-            '<span>Slot: ' + (p.slotHeldBy ? '<span style="color: var(--warning);">Held by ' + p.slotHeldBy + '</span>' : '<span style="color: var(--success);">Available</span>') + '</span>' +
-          '</div>' +
-        '</div>'
-      )).join("");
+      const autoGrid = document.getElementById("automationsGrid");
+      if (autoGrid && automations) {
+        autoGrid.innerHTML = automations.map(a => {
+          const badgeClass = a.harness === "orca" ? "badge-orca" : a.harness === "claude-code" ? "badge-claude" : "badge-codex";
+          const harnessLabel = a.harness === "orca" ? "Orca Automation" : a.harness === "claude-code" ? "Claude Routine" : a.harness === "codex" ? "Codex Scheduled" : a.harness;
+          const statusLower = a.lastRunStatus.toLowerCase();
+          const isGreen = statusLower.includes("active") || statusLower.includes("ok") || statusLower.includes("ready");
+          const statusColor = isGreen ? "var(--success)" : "var(--text-muted)";
+          return (
+            '<div class="automation-card">' +
+              '<div class="automation-card-title">' +
+                '<span style="font-weight: 700; font-size: 13px;">' + escapeHtml(a.name) + '</span>' +
+                '<span class="badge ' + badgeClass + '">' + escapeHtml(harnessLabel) + '</span>' +
+              '</div>' +
+              '<div style="font-size: 12px; color: var(--text-muted); display: flex; justify-content: space-between;">' +
+                '<span>Target Scope:</span>' +
+                '<strong>' + escapeHtml(a.targetProject) + '</strong>' +
+              '</div>' +
+              '<div style="font-size: 12px; color: var(--text-muted); display: flex; justify-content: space-between;">' +
+                '<span>Schedule / Trigger:</span>' +
+                '<span style="font-family: var(--font-mono); font-size: 11px;">' + escapeHtml(a.schedule) + '</span>' +
+              '</div>' +
+              '<div style="font-size: 12px; color: var(--text-muted); display: flex; justify-content: space-between; align-items: center;">' +
+                '<span>Status:</span>' +
+                '<span style="font-weight: 600; color: ' + statusColor + ';">' + escapeHtml(a.lastRunStatus) + '</span>' +
+              '</div>' +
+              '<div style="font-size: 11px; color: var(--text-dim); border-top: 1px solid var(--border-subtle); padding-top: 6px; margin-top: 4px; display: flex; justify-content: space-between;">' +
+                '<span>Last Active:</span>' +
+                '<span>' + (a.lastRunAt ? formatRelativeTime(a.lastRunAt) : 'None') + '</span>' +
+              '</div>' +
+            '</div>'
+          );
+        }).join("");
+      }
     }
 
     function renderKanban(d) {
