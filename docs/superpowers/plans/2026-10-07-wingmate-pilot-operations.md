@@ -2,6 +2,196 @@
 
 ## Current state
 
+Checkpoint at `2026-10-09T03:26:46Z`. Slice 2 has owner acceptance; formal unassisted/native acceptance under spec §15.1 remains
+incomplete. The dispatcher is still the disabled PR #18 installation described below (958 tests passed, 0 failed); latest
+automation read-back remains `enabled=false`. Remote `main` separately advanced through PRs #20/#21 to
+`f3d136bec90f2686cf42c75512685f8608383c0c`; that source is distinct from the installed/tested PR #18 binary. No validation
+or installation of those UI changes is claimed here. This documentation checkpoint changes no runtime or owner configuration.
+
+JRF-404 has two local sibling commits awaiting integration: mobile `d1a742a663d14c083737b0cdc554998f0314c8fd` (tree
+`fc878f4b2ae38cf24e3a9c659c80abfc4521fb86`) and API-only `c2a9a0b6f774b51afe9ecd5e50a3f8c6195599dc` (tree
+`9855ce8cdb4a4758df1e297f0a734d0a6a39f561`, following retained parent `2c1d360`). Later operator checks exposed
+session-reset and timeout/restart recovery races;
+those failures remain retained. The mobile commit adds explicit profile fences on account entry/recovery and conditional
+rename/consent writes, with safe refusal on older servers and no automatic replay of consent. Its coordinator checks report
+46/46 timing regressions and offline iOS bundling. The API sibling passed 69/69 unit tests, typecheck and both fixture syntax
+checks under Node 24.21.0. It adds nine disposable PostgreSQL cases, which have **not run**. Independent review found and
+corrected a fixture-only timeout gap: a supplied abort signal no longer replaces the fixed ten-second deadline. Extracted
+request-helper checks passed for explicit abort and both deadline paths without sockets or DB execution. Exact-commit mobile
+static review found no concrete defect within its scope; API follow-up static review cleared the timeout correction and
+found no additional atomic-write, default-path or fixture blocker. These are separate static reviews, not an integrated
+result. No new production build, PostgreSQL/HTTP compatibility result or canonical PASS is claimed for the new siblings
+or their combination.
+
+The PATCH-only `profileWrite=cas-v1` contract is frozen at v2 SHA-256
+`ccadb41c03e986c64c41d12a205c7d966fc6bc5bc4232e547a97934eb9a86994`: account-bound full transaction revisions, atomic
+conditional writes and the strict transaction-distance bound `< 2^31` (the raw `xmin` modulus remains `2^32`). The earlier
+full-range predicate is withdrawn. PostgreSQL 17 source reasoning is design evidence only. Ordering guarantees cover
+participating conditional-write clients; unchanged legacy unconditional writers remain outside them. The existing owner design
+question `01M4F0KYCW7Y84RVBFWJ91QA4T` remains pending for this conditional-write addition and safe refusal on older servers.
+The revised question was published at `2026-10-09T03:22:59.900Z` after the normal gap-reconciliation tick; the coordinator is
+parked awaiting the owner. Operator guidance is not an owner answer. The retained `d0b6587` canonical code/validate FAILs
+and exact-source v5 PostgreSQL
+success below keep their original scope. New integrated checks, independent canonical review and trusted native evidence
+remain required before Bouncr publication; no app PR, merge, deployment or formal acceptance is claimed.
+
+Learning JRF-418 [PR #17](https://github.com/furoyce/jr-learning-plus/pull/17) and friend-code JRF-417
+[PR #3](https://github.com/furoyce/bouncr.lol/pull/3) remain open and unmerged at their recorded Review-Ready heads. Learning's
+full CI success and unexplained Vercel block remain qualified below. Travel JRF-419 still needs an isolated runner for its
+unchanged socket-using validation. Its record now shows working with `unverified_input` attention for an app-authored
+reply; no verified owner instruction, usable runner or resume delivery is established, and the full validate FAIL remains.
+Smart JRF-420 remains unclaimed with its socket/tsx/Git preflight blockers. Native host, artifact producer, execution
+adapter and app-bound foreground/PID/AX proof remain unavailable. Automation stays disabled.
+
+Current supplemental references (private, advisory evidence):
+
+- API static follow-up `/tmp/wingmate-JRF-404-profile-cas-c2a9a0b-static-review-20261008.json`: SHA-256
+  `c53ab76b9bce17ff2437afe0b6fb7f9f732e559b772546c9b2cfc17d2c7842a6`; no integrated or canonical acceptance.
+- API timeout correction `deadline-fix-validation.json`: SHA-256
+  `cfa34bee326a656c3482fec18787a5e08333b1bf5a3959ece19f266c043e622d`; `deadline-fix-commit.json`:
+  `4989e785e2e80526dde53fc567399555001b8759b261fb5c90d3b6d107954a2f`, in the API receipt directory below.
+- Mobile static review `/tmp/wingmate-JRF-404-mobile-cas-d1a742a-static-review-20261008.json`: SHA-256
+  `4d6e7aeda75808a32bd56ee4481a43343a1a0b275c7c9636a322156e67128e9d`; no runtime or canonical acceptance.
+- API sibling `validation-final.json`: SHA-256 `248c49ba2abea53d98411b5bbe89835409b8afd45118d3cf77b7d41da3787020`;
+  `commit-receipt.json`: `f52378a46be39d646388636d7373ae82334a8c8025f5602a494856baae0b9155`, under
+  `/private/tmp/wm404-profile-cas-api-4fe5__qc/`. Unit/typecheck/syntax checks only; initial failed focused run remains retained.
+- `~/.local/share/wingmate/evidence/JRF-404-profile-reset-da31f4a-20261008/`: retained operator RED and controls;
+  manifest SHA-256 `c73596b7f21490ac9c607758e8db93b47b63d65889e582aaca26e97132a9ba91`.
+
+### Earlier operational checkpoint: 2026-10-08T23:33:44Z
+
+**DRAFT snapshot at `2026-10-08T23:33:44Z`; final cutoff and formal pilot acceptance remain pending.** The dated checkpoint below is retained
+as history. Owner slice-2 acceptance and the assisted pilot continuations remain recorded; independent gates, repository
+pilots and formal unassisted/native acceptance under spec §15.1 remain required. Automation is **disabled**.
+
+[PR #14](https://github.com/furoyce/wingmate-agents/pull/14) added five resume-cap contract simulations; its full suite passed
+929/0. [PR #15](https://github.com/furoyce/wingmate-agents/pull/15) corrected the role runner's UTC completion timestamp
+format. Its generated-runner regression and full 929/0 suite passed; it was installed disabled before PR #16 replaced it.
+
+[PR #16](https://github.com/furoyce/wingmate-agents/pull/16), merged at `6be70d4765ec9d9b6c6bb3c633add4a018f5ef68`,
+passed 934/0; focused checks passed 49/49. It prevents a second terminal input after confirmed role-result resumption or
+accepted owner-note delivery; deferred notes retain their cursor and working child-Run mailbox notes enqueue without a turn.
+It was installed disabled at `2026-10-08T21:35:48.778Z`, binary
+SHA-256 `d254e17bd775ecc0f3daf9e0faf54c1da742de93f9d4d46f030269ceeba16a27`, before PR #17 replaced it.
+
+[PR #17](https://github.com/furoyce/wingmate-agents/pull/17), merged at `8771754b96b6af8fe772706c8596cbe9eff65811`
+at `2026-10-08T21:51:28Z`, passed 951/0 with 20,072 assertions across 78 files; affected checks passed 103/103.
+Gate commands stay pending until the dispatcher saves and acknowledges the canonical decision; coordinators must end
+their turn and hold HEAD and plan until acknowledgement. It was installed disabled at `2026-10-08T21:51:49.393Z`
+before PR #18 replaced it; earlier stale-gate and intermediate test failures remain qualified in its archive.
+
+The current dispatcher is [PR #18](https://github.com/furoyce/wingmate-agents/pull/18), merged at
+`fa4969296e7fe464421f343be9a16e4c074faceb` at `2026-10-08T22:02:27Z`. Its tree
+`248e3e05fba7693bff326a85157de31e5316c67b` matches tested head `1bbd3e3b08404d9967e4a7a9713a505825ab6801`.
+Final checks passed **958 tests, 0 failed**, with 20,744 assertions across 78 files in 118.52 seconds; focused checks passed
+61/61. TypeScript, Biome, build, binary config validation, diff and secret-pattern checks passed. Role/native result
+notifications now save either actual terminal-acceptance stage as notified and spend one resume; deferred or unsafe delivery stays pending.
+
+PR #18 was installed **disabled** at `2026-10-08T22:02:40.474Z`, binary SHA-256
+`7b4465e6dff920cd3a41b56ecb4130ed2b3cec71abae28da6f558258cdb9a038`. Quick doctor at
+`2026-10-08T22:03:01.922Z` returned `ok=true` with 15 checks; only workspace trust and the skipped sandbox probe remain
+nonblocking gaps. Actual automation read-back is `enabled=false`; the owner's config with five projects and six repositories,
+sealed kits and global runtime defaults remain preserved. The live `22:03:35Z` tick saved `notified=true` after
+`input_accepted` without the second-wait timeout; a started turn requires separate proof. This is not a new full sandbox-probe receipt.
+
+JRF-417 remains Review-Ready with [Bouncr PR #3](https://github.com/furoyce/bouncr.lol/pull/3) open and unmerged at
+`19c70fb7c0752a2e54f7322cf4a7db80432713c6`. Its assisted intake, review recovery and publication qualifications below remain.
+
+JRF-404's committed checkpoint is `d0b65877d644af60b2988f38abb62fac9082b3db`, tree
+`9660eff27eb87b9da510fcc7565f6cf76fac50cc`. At that checkpoint only disclosure/API-doc/test changes followed the assisted
+mobile checkpoint `c1cdfc5`; mobile source and plan `3294a40d` were unchanged. Two scoped independent operator audits had cleared
+all nine clauses, negative controls and bounds. Coordinator checks passed 64 API tests, typecheck, 35 mobile-verification
+checks and source build, all exit 0. The canonical implement PASS was accepted at `2026-10-08T23:12:44.385Z`.
+
+Independent code review `01M4EWTDWZBAV5TPJQK2YAB1NJ` returned **FAIL** at `2026-10-08T23:22:37Z` on `d0b6587`, identifying
+real implementation defects: the screen-mount profile mutation controller permits overlapping remounts; an old Game
+completion timeout survives unmount/new run; and the progress fixture's inner wait is unbounded. Report SHA-256
+`957aa7ee3416520dd3c8d86655007f036773d474260b0000d9cc4993741fca8d` is retained and was delivered by the following tick.
+The canonical validate FAIL was acknowledged at `2026-10-08T23:29:50.712Z`, failure count 1. The coordinator is correcting
+the three findings; no new committed candidate or validate PASS is claimed. PlanVerify's prior reports/refusals and failure
+count 2 remain retained. The code FAIL concerns implementation, not reviewer rerun restrictions.
+
+The earlier unchanged `c1cdfc5` dialog assertions passed 5/5 and production `sessionControl`/`tokenStore`/`sessionRestore`
+storage schedules passed 3/3 after timing, rename/consent, dialog-generation, restore and token-ordering corrections. These
+are operator-assisted pure regressions, with RED/GREEN evidence retained in the sealed supplemental mobile archive.
+
+PostgreSQL operator checkpoint v5 succeeded at exact `d0b6587`: actual outer and operator exits 0, checks and verification
+complete, cleanup verified. Base 49 and candidate 64 API tests, typecheck and builds passed; the progress fixture passed
+79/79, and compatibility passed 6/6 with 24 raw-response comparisons. Both negative guard controls refused as expected
+(exit 1) and preserved their sentinels. Cleanup reaped the PostgreSQL leader, verified all 44 captured process/group identities
+absent, confirmed no listeners, refused connections and successful reuse binds on all five ports, and removed the owned short socket. The borrowed
+dependencies and both private copies retained their verified digests. Independent checks matched all 120 raw-manifest payloads
+and 85 base / 92 candidate source-export files without environment files. Raw manifest SHA-256
+`de7a145b38ddb25d428b1d031279450c7e24fabc4c2089a98a8e89c4ed6aae16`; the sealed v4 failure and v5 success archives below retain both outcomes.
+
+Three final-candidate operator failures remain separate: the first stopped at the exact Homebrew-version-string preflight
+before source export or DB execution; v2's base build failed on Turbopack's external `node_modules` symlink restriction, with cleanup verified;
+v4 passed all functional checks but exited 1 on cleanup `EPERM`. A bounded reproduction observed `EPERM` before reaping an
+owned zombie leader and `ESRCH` after reaping; separate follow-up verified resource absence and removed its owned short socket.
+V5's only change is `p.poll()` before that probe, without error suppression. The earlier operator string/dependency-copy adjustments
+changed no app source, build config, locks, network or installation. V5 success covers the exact `d0b6587` API/fixture checkpoint
+only; it does not establish code, native or whole-candidate acceptance. Corrections and canonical validation remain pending,
+with no Bouncr publication or native acceptance claimed.
+
+At earlier source `f67f415583e9d27b325dd1d10621000aa9f12551`, the trusted operator ran a private PostgreSQL 17 fixture: exit
+0, **79 checks, 0 failures**, API **59 tests passed**, typecheck passed and the build rerun passed with an explicit synthetic
+loopback URL. The initial build without that URL failed and remains archived. The outer wrapper exited 1 after immediate
+plain-bind failures on ports 55413/55414. Independent follow-up found no owned PIDs or listeners, refused connections and
+successful `SO_REUSEADDR` binds on all three owned ports; the immediate bind failures' cause remains unproved. This is assisted fixture
+evidence at the archived source; it does not establish final validation of the complete `d0b6587` candidate.
+
+JR Learning Plus JRF-418 passed all computed gates and published [PR #17](https://github.com/furoyce/jr-learning-plus/pull/17)
+at `4f6b72ae337393d06f71f7a3058207077f5133d2`: open, non-draft and unmerged, with the protected record at review and Linear
+publication read-back verified. The first Turbo authentication/temp-path failures, quarantined stale gate and prerequisite
+implement refusal remain retained; environment guidance preserved the sandbox and no manual PASS or retry reset was used.
+The full [CI job](https://github.com/furoyce/jr-learning-plus/actions/runs/37851829969/job/113566344084) completed SUCCESS at
+`2026-10-08T22:18:02Z` for that exact PR head. All required steps passed, including workbench and course pages/access boundaries;
+the PR body was updated and its exact read-back verified. GitHub's merge-test tree matches the candidate tree (`23ec3dc`).
+The PR remains open and unmerged. Vercel reports “Deployment was blocked”; its cause is unverified.
+
+JR Travel Atlas JRF-419 remains genuinely parked after its computed validate FAIL; unchanged full validation still needs an
+appropriate isolated runner. Smart Dispatcher JRF-420 remains unqueued and unclaimed, with the same socket, tsx and Git/HOME
+compatibility blockers. Neither pilot has gained a gate waiver or publication claim.
+
+No production native execution adapter, immutable artifact producer, isolated native host or app-bound foreground/PID/AX
+proof is available. Native policy remains unconfigured and the default adapter refuses execution. Remaining repository
+pilots and formal acceptance are required before enabling automation; owner acceptance does not waive those requirements.
+
+New private evidence under `~/.local/share/wingmate/evidence/`:
+
+- `resume-cap-contract-20261008/`: PR #14 source checks; manifest SHA-256
+  `4918a67f8737d722742c3174f66c340046f78cff9d43d96c0b4a2f98880b8931`.
+- `role-completion-time-20261008/`: PR #15 checks and disabled installation; manifest SHA-256
+  `6836266fbd3e8bf398aba5f9dc406774b72b2247de82d9b5f9654a7076b4992d`.
+- `single-turn-delivery-20261008/`: PR #16 final 934/0 checks, merge/install/quick-doctor/disabled-automation receipts;
+  manifest SHA-256 `e95d7a16bdd3a548f7dd2edbaa37ebf0e7f5de9ff48048f7918291b4b41ab4f3`.
+  Earlier 929/1 full and intermediate failed focused runs remain qualified; final 934/0 and settled focused 49/0 are authoritative.
+- `gate-ack-20261008/`: PR #17 final 951/0 checks and disabled install/read-back receipts; manifest SHA-256
+  `59d653fc02da7859cb498fc1f6945fe5faaa55e2b4cd378f040cf0edb3cb842e`.
+- `notification-acceptance-20261008/`: PR #18 final 958/0 checks and disabled install/read-back receipts; manifest SHA-256
+  `6a9d650c983db20391c6c0058d2a4829bb4a474eeb9c9b7097837dc7f58cdd45`.
+- `JRF-404-postgres-f67f415-20261008/`: committed-source fixture, API/build and cleanup receipts, including the wrapper failure;
+  manifest SHA-256 `5b5e4a26099d4a9918b18b6ee0361dea8924cf2ab4e0ad07f1bf438b5931b62d`.
+- `JRF-418-reviewready-20261008/`: 93 verified payloads, sealed at `2026-10-08T22:24:38Z`; manifest SHA-256
+  `16476350608cc9b6c1e1e78f810a04c413729b17bf7402edc1df8c3aba7ac7c2`. Screening recorded zero credential findings; two public pnpm
+  cache-key heuristic matches were explicitly reviewed in the retained, unchanged full CI log.
+- `JRF-404-assisted-mobile-c1cdfc5-20261008/`: supplemental mobile evidence, 67 payloads / 179,947 bytes; manifest SHA-256
+  `f84e9fa3df8d9161178f7e1014ac3e333acf3d5740545c0f5d92e4855f6213ae`. Ten generated caches were omitted with verified hashes;
+  entropy screening recorded zero findings across 68 text files. This does not establish final API/disclosure/native/canonical
+  validation or unassisted acceptance.
+- `JRF-404-final-postgres-d0b65877d644-preflight-failed-20261008/`: failed preflight only, 24 payloads plus manifest, no source
+  export or DB run; manifest SHA-256 `84796dbfb3f47f053640dd5c7a981dff9c3ecaca041cb25aff458de23bb37b79`.
+- `JRF-404-final-postgres-d0b65877d644-build-failed-20261008/`: v2's failed base build, 58 payloads plus manifest; SHA-256
+  `3b1aa5f63297e4a7b92a6b8b12f29079292b26edb296eeae57ac207d6ee3907e`. Two Git-blob heuristic matches were reviewed;
+  credential-pattern matches were zero.
+- `JRF-404-final-postgres-d0b65877d644-cleanup-failed-20261008/`: v4's cleanup failure, 117 payloads plus manifest; SHA-256
+  `becd50181f1414f6026cdaa0843acb2051717330308cc6deb7832081f4d0d497`. Functional PASS and outer exit 1 remain separate.
+- `JRF-404-final-postgres-d0b65877d644-success-20261008/`: sealed v5 operator evidence, 131 payloads plus manifest; SHA-256
+  `20eeed053138c5f2bdd1b2bc25ffe6724ba9a933cbdcddbe68284b0aa65d960d`. This covers only the exact `d0b6587` API/fixture
+  checkpoint; the canonical code/validate FAILs and pending corrections remain authoritative.
+
+### Earlier operational checkpoint: 2026-10-08T20:50Z
+
 Pilot progress below is a checkpoint at `2026-10-08T20:50Z`; pending reviews may advance afterward.
 
 The owner said, **“I accept the slice 2, please continue.”** The trusted operator relayed that acceptance as assisted
