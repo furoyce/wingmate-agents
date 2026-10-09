@@ -2,6 +2,61 @@
 
 ## Current state
 
+Checkpoint at `2026-10-09T04:21:04Z`. JRF-404 is genuinely parked at `awaiting-human/validate`, with owner approval of
+the next correction **pending**. Slice 2's owner acceptance remains recorded; formal unassisted/native acceptance under
+spec §15.1 is incomplete. Automation remains **disabled**. The `04:05:49Z` snapshot below is retained unchanged.
+
+Fresh canonical code request `01M4FCME8HGQJP9D97TS7WHNFS` settled at `2026-10-09T04:08:23Z` with **FAIL** on
+`178b8434a83166149ce39752521424bba6f714a1`. Report SHA-256
+`18816aaa2101666f0b50018b01366128d7d72dea0658d7aecb3a0a484d770f8b` identifies one major completion boundary gap:
+a portal transition captures the completed run before its later `complete` event; pause followed by Main Menu in that
+gap can lose the run's timing, stars and unlock. The review supports the current profile CAS contract and confirms the
+first review's remount, registered completion-timeout and child-shutdown findings were corrected. It still concludes
+FAIL; the narrow `178b843` API/PG results below do not establish whole-candidate acceptance or a new validate PASS.
+
+The protected validate gate retains this second canonical **FAIL**, failure count **2** and the exact reviewed head/request.
+Its recorded gate timestamp is `2026-10-09T04:10:06.776Z`; it was accepted through the normal dispatcher tick beginning
+`2026-10-09T04:13:04.576Z`. Under spec §8.3, `ask-first` requires a normal owner question whenever a gate fails twice,
+before integrating the next correction or starting another canonical review. The manual tick beginning
+`2026-10-09T04:14:17.859Z` parked JRF-404 through the supported ask flow. Open question
+`01M4FDV91PZJ0YGB251SJM7403`, comment `e49e631a-f68a-419e-a09f-73f39efa85e1`, was asked at
+`2026-10-09T04:14:20.608Z`; it has no answer and zero resume attempts at this cutoff. Both canonical FAILs remain retained. The earlier CAS approval does not approve this additional correction, reset a counter or waive a gate.
+
+A concrete mobile-only scratch correction has now been independently reviewed and tested for owner review. Its three
+paths are `completionHandoff.ts`, `GameScreen.tsx` and `verify/timing.mjs`; it changes no session, API or schema source.
+Cleanup settles a valid captured completion once through the handoff without showing the overlay, while preserving the
+normal presentation sequence. A production GameScreen harness with mocked React/React Native/timers and real models
+reproduced the boundary: base **3 passed / 3 failed**, proposal **6 passed / 0 failed**; focused handoff checks passed **2/2**.
+The trusted operator independently reran those pure probes and checked patch application without integrating it. These
+are scratch results, not full pinned gates, a native run or a passed next canonical review. The active app checkout remains
+clean at `178b8434a83166149ce39752521424bba6f714a1`; owner approval is pending before integration or another canonical review.
+
+The bounded external-blockers audit at `2026-10-09T04:10:29Z` found zero configured native policies across six repositories,
+the default refusing native adapter, two registered but disconnected SSH targets, and zero paired environments. It made
+no connection, VM, device, socket, server or provisioning probe. The prior 20-device inventory remains historical and was
+not recounted; registered host metadata is not proof of a usable isolated runner. Trusted native evidence still needs
+an isolated host, immutable artifact producer, execution adapter and fresh app-bound foreground/PID/AX proof. Travel
+JRF-419 remains parked at validate FAIL count 2 with the older app-authored reply unverified; Smart JRF-420 has no local
+claim record. Their unchanged validation/runner blockers and the application no-merge/no-deploy boundary remain.
+
+Supplemental private references:
+
+- Canonical FAIL report: `.wingmate/evidence/role-01M4FCME8HGQJP9D97TS7WHNFS.md` in the JRF-404 worktree, SHA-256
+  `18816aaa2101666f0b50018b01366128d7d72dea0658d7aecb3a0a484d770f8b`.
+- Normal gate-acceptance tick: `/tmp/wingmate-manual-tick-20261009T0414-park.json`, SHA-256
+  `4324c30b3219e105278c72713610ff72d8a20f35c77d87d72f9d53da5859f0d1`.
+- Supported park tick: `/tmp/wingmate-manual-tick-20261009T0415-ask.json`, SHA-256
+  `31e482924d91923b345da528afefa261549f66f6ca4a5d95e8d4ade06b8fe3df`.
+- Read-only blockers audit: `/tmp/wingmate-final-external-blockers-audit-20261009.json`, SHA-256
+  `71cce1cfa9767587a3eb7215a79ff4e86c4f551c4e9b93f3512ac5c047bcc5c7`.
+- Scratch proposal archive: `~/.local/share/wingmate/evidence/JRF-404-completion-proposal-20261009/`, 68 payloads plus
+  manifest, full entropy/token screen clean; manifest SHA-256
+  `77c4703bae278ad698063a84694dafaf3bc0a0a3d380d7c15d60b40252dbfbaa`. Proposed patch SHA-256
+  `2bb5f42ab95b16efa75f496fe5ff3cb81685a9b8068659e8cd847d74ce051f4a`; `root-review.json` qualifies the pure harness and
+  unchanged active checkout. No integration, new app commit, PostgreSQL carry-forward, owner approval or gate PASS is claimed.
+
+### Earlier operational checkpoint: 2026-10-09T04:05:49Z
+
 Checkpoint at `2026-10-09T04:05:49Z`. Slice 2 has owner acceptance; formal unassisted/native acceptance under spec §15.1
 remains incomplete. Automation is **disabled**. This is an operational checkpoint, not application merge, deployment,
 production or native acceptance. The earlier dated checkpoints and their failures below remain historical evidence.
