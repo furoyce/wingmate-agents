@@ -141,16 +141,43 @@ export async function handleOpenTarget(
   }
 
   if (target === "orca") {
-    // Try orca tab create or fall back to open
-    const child = spawn("orca", ["tab", "create", "--url", urlOrPath], {
-      stdio: "ignore",
-      detached: true,
-    });
-    child.on("error", () => {
+    if (!urlOrPath) {
+      return { ok: false, message: "No worktree path provided" };
+    }
+
+    if (urlOrPath.startsWith("http://") || urlOrPath.startsWith("https://")) {
+      const child = spawn("orca", ["tab", "create", "--url", urlOrPath], {
+        stdio: "ignore",
+        detached: true,
+      });
+      child.on("error", () => {
+        spawn("open", [urlOrPath], { stdio: "ignore", detached: true }).unref();
+      });
+      child.unref();
+      return { ok: true, message: `Opened ${urlOrPath} in Orca browser tab` };
+    }
+
+    // Try orca worktree focus via file open
+    try {
+      const child = spawn(
+        "orca",
+        ["file", "open", "README.md", "--worktree", `path:${urlOrPath}`, "--focus"],
+        { stdio: "ignore", detached: true },
+      );
+      child.on("error", () => {});
+      child.unref();
+    } catch {
+      // non-fatal
+    }
+
+    // Fall back to system open to ensure folder / editor window is focused
+    try {
       spawn("open", [urlOrPath], { stdio: "ignore", detached: true }).unref();
-    });
-    child.unref();
-    return { ok: true, message: `Opened ${urlOrPath} in Orca` };
+    } catch {
+      // non-fatal
+    }
+
+    return { ok: true, message: `Opened worktree ${urlOrPath} in Orca` };
   }
 
   return { ok: false, message: `Unknown target ${target}` };

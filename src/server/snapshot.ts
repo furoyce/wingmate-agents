@@ -155,6 +155,8 @@ export async function buildSnapshot(
     const matchedLinear = linearById.get(r.linearId) ?? linearById.get(r.identifier);
     const cachedTitle = await tryReadWorktreeTitle(r.worktree?.path ?? null);
     const title = matchedLinear?.title ?? cachedTitle ?? r.identifier;
+    const teamSlug = cfg.workspace.team.toLowerCase();
+    const linearUrl = matchedLinear?.url || `https://linear.app/${teamSlug}/issue/${r.identifier}`;
 
     const openQ = r.questions.find((q) => q.status === "open");
     let questionPrompt: string | null = null;
@@ -185,6 +187,7 @@ export async function buildSnapshot(
       identifier: r.identifier,
       linearId: r.linearId,
       title,
+      linearUrl,
       project: r.project,
       repo: r.repo,
       stage: r.stage,
@@ -374,10 +377,12 @@ export async function buildSnapshot(
     // Slot is held if there is a working or claimed coordinator
     const holder = activeForProj.find((r) => r.stage === "working" || r.stage === "claimed");
 
+    const teamSlug = cfg.workspace.team.toLowerCase();
     projects.push({
       key,
       name: key.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
       linearProjectId: p.linearProject,
+      linearProjectUrl: `https://linear.app/${teamSlug}/project/${p.linearProject}`,
       activeCount,
       queuedCount,
       completedCount,
@@ -427,13 +432,19 @@ export async function buildSnapshot(
     triage,
     queue: (queueData?.items ?? [])
       .filter((i) => inScope(i.project))
-      .map((i) => ({
-        identifier: i.identifier,
-        project: i.project,
-        status: i.status,
-        reason: i.reason,
-        detail: i.detail,
-      })),
+      .map((i) => {
+        const li = linearById.get(i.identifier);
+        const teamSlug = cfg.workspace.team.toLowerCase();
+        return {
+          identifier: i.identifier,
+          project: i.project,
+          title: li?.title ?? null,
+          linearUrl: li?.url || `https://linear.app/${teamSlug}/issue/${i.identifier}`,
+          status: i.status,
+          reason: i.reason,
+          detail: i.detail,
+        };
+      }),
     activeWorktrees,
     projects,
     metrics,

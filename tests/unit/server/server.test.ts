@@ -37,7 +37,7 @@ describe("server endpoints", () => {
     expect(res.headers.get("content-type")).toContain("text/html");
     const html = await res.text();
     expect(html).toContain("Wingmate");
-    expect(html).toContain("Architect Console");
+    expect(html).toContain("Architect Command Center");
     expect(html).toContain("themeToggleBtn");
     expect(html).toContain("btnViewKanban");
     expect(html).toContain("kanbanBoard");
