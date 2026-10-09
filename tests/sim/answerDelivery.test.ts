@@ -119,3 +119,35 @@ test("an actually accepted answer relaunch is also confirmed without resend insi
   expect(w.orca.calls.filter((call) => call.verb === "terminalSend")).toHaveLength(count);
   expect((await readRecord(w.dirs, r.identifier))?.questions[0]?.resumeAttempts).toBe(1);
 });
+
+test("a coordinator found working after answer classification is adopted without treating activity as answer delivery", async () => {
+  const { w, r, wt } = await awaitingAnswer();
+  w.orca.killTerminal(wt.id, r.coordinator.terminalHandle ?? "");
+  const sends = w.orca.calls.filter((call) => call.verb === "terminalSend").length;
+  let lists = 0;
+  let replacement: string | null = null;
+  w.orca.onCall = async (verb, args) => {
+    if (verb !== "terminalList" || args !== wt.id || ++lists !== 2) return;
+    const term = await w.orca.terminalCreate(wt.id, `wingmate ${r.identifier}`, "claude");
+    replacement = term.handle;
+    w.orca.setAgentState(wt.id, `${term.tabId}:${term.leafId}`, "working", w.ctx.now());
+  };
+  w.clock.advance(5_000);
+  const result = await runTick(w);
+  expect(replacement).not.toBeNull();
+  expect(result.resumes).toEqual([]);
+  expect(result.blocked).toEqual([]);
+  expect(w.orca.calls.filter((call) => call.verb === "terminalSend")).toHaveLength(sends);
+  const current = await readRecord(w.dirs, r.identifier);
+  expect(current).toMatchObject({ stage: "awaiting-human", attention: ["resume_unconfirmed"] });
+  expect(current?.coordinator.terminalHandle).toBe(replacement);
+  expect(current?.questions[0]).toMatchObject({ status: "open", resumeAttempts: 1 });
+  expect(current?.questions[0]?.answerCommentId).not.toBeNull();
+  const events = await w.ctx.ledger.readIssue(r.identifier);
+  expect(events.some((event) => event.type === "answer_authenticated")).toBe(true);
+  expect(events.some((event) => event.type === "terminal_adopted" && event.data.reason === "answer")).toBe(
+    true,
+  );
+  expect(events.some((event) => event.type === "delivered" && event.data.kind === "answer")).toBe(false);
+  expect(events.some((event) => event.type === "relaunch" && event.data.reason === "answer")).toBe(false);
+});

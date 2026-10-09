@@ -408,6 +408,8 @@ async function adopt(
       return false;
     }
   }
+  // A newly supplied answer needs a send receipt. Adopting an agent already mid-turn proves only identity, not delivery.
+  if (deliveryKey) return false;
   if (r.stage === "claimed") await transition(ctx, r, "working", "turn_started", "pane_working");
   ensureAttempt(ctx, r);
   dropAttention(r, "launch_not_ready", "launch_unconfirmed", "relaunch_failed");
