@@ -273,6 +273,28 @@ export function renderDashboardHtml(): string {
     @media (prefers-color-scheme: dark) {
       body[data-theme="system"] .badge-codex { color: #10B981; }
     }
+    .badge-antigravity { background: rgba(124, 58, 237, 0.15); color: #7C3AED; border: 1px solid rgba(124, 58, 237, 0.3); }
+    body[data-theme="dark"] .badge-antigravity { color: #A855F7; }
+    @media (prefers-color-scheme: dark) {
+      body[data-theme="system"] .badge-antigravity { color: #A855F7; }
+    }
+    .badge-gemini { background: rgba(37, 99, 235, 0.15); color: #2563EB; border: 1px solid rgba(37, 99, 235, 0.3); }
+    body[data-theme="dark"] .badge-gemini { color: #60A5FA; }
+    @media (prefers-color-scheme: dark) {
+      body[data-theme="system"] .badge-gemini { color: #60A5FA; }
+    }
+    .badge-simulator { background: rgba(99, 102, 241, 0.15); color: #4F46E5; border: 1px solid rgba(99, 102, 241, 0.35); }
+    body[data-theme="dark"] .badge-simulator { color: #818CF8; }
+    @media (prefers-color-scheme: dark) {
+      body[data-theme="system"] .badge-simulator { color: #818CF8; }
+    }
+    .badge-status-running { background: rgba(2, 132, 199, 0.12); color: var(--accent); border: 1px solid var(--accent); }
+    .badge-status-assigned { background: var(--surface-hover); color: var(--text-muted); border: 1px solid var(--border); }
+    .badge-status-parked { background: rgba(217, 119, 6, 0.15); color: var(--warning); border: 1px solid var(--warning); }
+    .badge-status-completed { background: rgba(5, 150, 105, 0.15); color: var(--success); border: 1px solid var(--success); }
+    .badge-status-failed { background: rgba(220, 38, 38, 0.15); color: var(--danger); border: 1px solid var(--danger); }
+    .badge-status-unknown { background: var(--surface-hover); color: var(--text-dim); border: 1px solid var(--border); }
+
     .badge-project {
       background: var(--surface-hover);
       color: var(--text-muted);
@@ -290,6 +312,93 @@ export function renderDashboardHtml(): string {
     .badge-prio-4 { background: var(--surface-hover); color: var(--text-dim); border: 1px solid var(--border); }
     .badge-waiting { background: rgba(245, 158, 11, 0.2); color: var(--warning); border: 1px solid var(--warning); }
     .badge-pass { background: rgba(16, 185, 129, 0.2); color: var(--success); border: 1px solid var(--success); }
+
+    /* Agent Roster & Provenance */
+    .roster-container {
+      margin-top: 10px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      overflow: hidden;
+    }
+    .roster-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 7px 12px;
+      background: var(--surface-elevated);
+      border-bottom: 1px solid var(--border);
+      font-size: 11px;
+      font-weight: 600;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .roster-header-left {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .roster-header-right {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-family: var(--font-mono);
+      font-size: 10px;
+      color: var(--text-dim);
+    }
+    .roster-table-wrap {
+      overflow-x: auto;
+      width: 100%;
+      -webkit-overflow-scrolling: touch;
+    }
+    .roster-table {
+      width: 100%;
+      min-width: 720px;
+      border-collapse: collapse;
+      font-size: 11px;
+    }
+    .roster-table .badge {
+      display: inline-block;
+      max-width: 100%;
+      overflow-wrap: anywhere;
+    }
+    .roster-table th {
+      padding: 6px 10px;
+      text-align: left;
+      color: var(--text-dim);
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+    }
+    .roster-table td {
+      padding: 7px 10px;
+      border-bottom: 1px solid var(--border-subtle);
+      vertical-align: middle;
+    }
+    .roster-table tr:last-child td {
+      border-bottom: none;
+    }
+    .roster-provenance-tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 10px;
+      font-family: var(--font-mono);
+      color: var(--text-dim);
+      background: var(--surface);
+      padding: 2px 6px;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+    }
+    .unverified-liveness-note {
+      font-size: 10px;
+      color: var(--text-dim);
+      font-style: italic;
+      margin-top: 2px;
+    }
 
     /* 8 Gates Pipeline Dots */
     .pipeline-bar {
@@ -696,7 +805,7 @@ export function renderDashboardHtml(): string {
       <div class="logo">
         <span class="logo-badge">Wingmate</span>
         <span>Architect Command Center</span>
-        <span style="font-size: 11px; font-weight: normal; color: var(--text-dim); margin-left: 4px;">Universal Automation Plugin · Orca / Claude / Codex</span>
+        <span style="font-size: 11px; font-weight: normal; color: var(--text-dim); margin-left: 4px;">Project agents and routines · Powered by Orca</span>
       </div>
       <div class="pulse-dot" id="pulseDot"></div>
       <div class="status-text" id="statusSummary">Connecting to local dispatcher...</div>
@@ -714,11 +823,7 @@ export function renderDashboardHtml(): string {
 
       <!-- Scope & Time Filters -->
       <select id="projectSelect" class="project-selector" onchange="fetchData()">
-        <option value="">All Pilot Projects</option>
-        <option value="bouncr">Bouncr</option>
-        <option value="smart-dispatcher">Smart Dispatcher</option>
-        <option value="jr-learning-plus">JR Learning Plus</option>
-        <option value="jr-travel-atlas">JR Travel Atlas</option>
+        <option value="">All Projects</option>
       </select>
       <select id="timeframeSelect" class="time-selector" onchange="fetchData()">
         <option value="today">Today</option>
@@ -744,7 +849,7 @@ export function renderDashboardHtml(): string {
       <!-- 1. Pipeline Funnel Strip -->
       <div class="funnel-container">
         <div class="section-title">
-          <span>Lifecycle Pipeline Funnel (Linear ➔ Isolated Worktrees ➔ PR ➔ Done)</span>
+          <span>Lifecycle Pipeline Funnel (Linear ➔ Worktrees ➔ PR ➔ Done)</span>
           <span id="funnelMeta" style="font-size: 11px; font-weight: normal; color: var(--text-dim);">Live Sync</span>
         </div>
         <div class="funnel-grid" id="funnelGrid">
@@ -788,7 +893,7 @@ export function renderDashboardHtml(): string {
       <!-- 5. Active Pilot Projects & Worktree Allocation -->
       <div>
         <div class="section-title">
-          <span>Active Pilot Projects & Worktree Allocation</span>
+          <span>Projects & Worktree Allocation</span>
         </div>
         <div class="projects-grid" id="projectsGrid">
           <!-- Injected via JS -->
@@ -798,7 +903,7 @@ export function renderDashboardHtml(): string {
       <!-- 6. Native Agent Harness Automations & Routines -->
       <div>
         <div class="section-title">
-          <span>Native Coding Agent Automations & Routines</span>
+          <span>Automations & Routine Evidence</span>
           <span style="font-size: 11px; font-weight: normal; color: var(--text-dim);">Orca ADE · Claude Code · OpenAI Codex</span>
         </div>
         <div class="automations-grid" id="automationsGrid">
@@ -921,7 +1026,7 @@ export function renderDashboardHtml(): string {
       const tfSelect = document.getElementById("timeframeSelect");
       const proj = projSelect ? projSelect.value : "";
       const tf = tfSelect ? tfSelect.value : "7d";
-      const url = "/api/snapshot?timeframe=" + tf + (proj ? "&project=" + proj : "");
+      const url = "/api/snapshot?timeframe=" + tf + (proj ? "&project=" + encodeURIComponent(proj) : "");
 
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 6000);
@@ -1085,6 +1190,115 @@ export function renderDashboardHtml(): string {
           );
         }
 
+        const rosterEntries = w.roster || [];
+        const rosterCount = rosterEntries.length;
+        const summary = w.rosterSummary || { total: rosterCount, running: 0, assigned: 0, parked: 0, completed: 0, failed: 0, unknown: 0 };
+
+        const rosterRowsHtml = rosterEntries.map(a => {
+          const roleIcon = a.role === 'coordinator' ? '👑' : a.role.includes('review') ? '🔍' : a.role.includes('verifier') ? '🛡️' : a.role.includes('ui') ? '📱' : '⚙️';
+          const roleDisplay = a.role === 'coordinator' ? 'Coordinator' : a.role;
+          const statusBadge = '<span class="badge badge-status-' + escapeHtml(a.assignedStatus) + '" title="' + escapeHtml(a.provenanceDetail) + '">' + escapeHtml(a.statusDetail || a.assignedStatus) + '</span>';
+          const providerBadge = '<span class="badge badge-' + escapeHtml(a.provider) + '">' + escapeHtml(a.provider) + (a.model ? ' · ' + escapeHtml(a.model) : '') + '</span>';
+
+          return (
+            '<tr>' +
+              '<td>' +
+                '<strong>' + roleIcon + ' ' + escapeHtml(roleDisplay) + '</strong>' +
+                (a.terminalHandle ? '<div style="font-size:10px; color:var(--text-dim); font-family:var(--font-mono);">' + escapeHtml(a.terminalHandle.slice(0, 18)) + '</div>' : '') +
+              '</td>' +
+              '<td>' + providerBadge + '</td>' +
+              '<td>' + statusBadge + '</td>' +
+              '<td>' +
+                '<div style="font-weight: 500;">' + escapeHtml(a.currentAction) + '</div>' +
+                '<div class="unverified-liveness-note">Evidence: ' + escapeHtml(a.provenanceDetail) + '</div>' +
+              '</td>' +
+              '<td>' +
+                (a.branch ? '<div style="font-family: var(--font-mono); font-size: 10px; color: var(--text-dim);">🌿 ' + escapeHtml(a.branch) + '</div>' : '') +
+                (a.worktreePath ? '<button class="sm btn-open-orca" data-path="' + escapeHtml(a.worktreePath) + '" style="padding:2px 6px; font-size:10px; margin-top:2px;" title="Open ' + escapeHtml(a.worktreePath) + ' in Editor">Worktree ↗</button>' : '') +
+              '</td>' +
+            '</tr>'
+          );
+        }).join("");
+
+        const rosterHtml = (
+          '<div class="roster-container">' +
+            '<div class="roster-header">' +
+              '<div class="roster-header-left">' +
+                '<span>👥 Agent Roster: <strong>' + rosterCount + ' assigned</strong></span>' +
+                '<span class="badge" style="background:var(--surface-hover); color:var(--text-muted);">' +
+                  summary.running + ' working · ' + summary.assigned + ' queued · ' + summary.parked + ' parked' +
+                  (summary.completed > 0 ? ' · ' + summary.completed + ' done' : '') +
+                  (summary.failed > 0 ? ' · ' + summary.failed + ' failed' : '') +
+                  (summary.unknown > 0 ? ' · ' + summary.unknown + ' unknown' : '') +
+                '</span>' +
+              '</div>' +
+              '<div class="roster-header-right">' +
+                '<span class="roster-provenance-tag" title="Recorded assignments; live process status has not been checked.">' +
+                  '📋 Recorded assignments · live status unverified' +
+                '</span>' +
+              '</div>' +
+            '</div>' +
+            '<div class="roster-table-wrap">' +
+              '<table class="roster-table">' +
+                '<thead>' +
+                  '<tr>' +
+                    '<th style="width: 150px;">Agent Role</th>' +
+                    '<th style="width: 125px;">Provider</th>' +
+                    '<th style="width: 140px;">Status</th>' +
+                    '<th>Recorded Role / Stage</th>' +
+                    '<th style="width: 160px;">Worktree / Ref</th>' +
+                  '</tr>' +
+                '</thead>' +
+                '<tbody>' +
+                  (rosterRowsHtml || '<tr><td colspan="5" style="text-align:center; color:var(--text-dim);">No agent jobs recorded</td></tr>') +
+                '</tbody>' +
+              '</table>' +
+            '</div>' +
+          '</div>'
+        );
+
+        let executionTasksHtml = "";
+        const execTasks = w.executionTasks || [];
+        if (execTasks.length > 0) {
+          const taskRowsHtml = execTasks.map(t => {
+            const statusClass = t.status === "completed" ? "badge-status-completed" : t.status === "running" ? "badge-status-running" : t.status === "failed" ? "badge-status-failed" : "badge-status-unknown";
+            return (
+              '<tr>' +
+                '<td><strong>📱 ' + escapeHtml(t.device) + '</strong></td>' +
+                '<td><span class="badge badge-simulator">Simulator</span></td>' +
+                '<td><span class="badge ' + statusClass + '">' + escapeHtml(t.statusDetail) + '</span></td>' +
+                '<td>' + escapeHtml(t.recordedAction) + '</td>' +
+                '<td><span style="font-family:var(--font-mono); font-size:10px; color:var(--text-dim);">' + escapeHtml(t.id.slice(0, 16)) + '</span></td>' +
+              '</tr>'
+            );
+          }).join("");
+
+          executionTasksHtml = (
+            '<div class="execution-tasks-container" style="margin-top: 8px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; overflow: hidden;">' +
+              '<div class="execution-tasks-header" style="display: flex; justify-content: space-between; align-items: center; padding: 6px 12px; background: var(--surface-elevated); border-bottom: 1px solid var(--border); font-size: 11px; font-weight: 600;">' +
+                '<span>🧪 Native UI Test Tasks: <strong>' + execTasks.length + ' recorded</strong></span>' +
+                '<span class="roster-provenance-tag">Native Simulator</span>' +
+              '</div>' +
+              '<div class="roster-table-wrap">' +
+                '<table class="roster-table">' +
+                  '<thead>' +
+                    '<tr>' +
+                      '<th style="width: 150px;">Target</th>' +
+                      '<th style="width: 125px;">Type</th>' +
+                      '<th style="width: 140px;">Status</th>' +
+                      '<th>Recorded Task Status</th>' +
+                      '<th style="width: 160px;">Task ID</th>' +
+                    '</tr>' +
+                  '</thead>' +
+                  '<tbody>' +
+                    taskRowsHtml +
+                  '</tbody>' +
+                '</table>' +
+              '</div>' +
+            '</div>'
+          );
+        }
+
         return (
           '<div class="worktree-card ' + (isWaiting ? 'waiting' : '') + '" id="wt-' + w.identifier + '">' +
             '<div class="card-header">' +
@@ -1093,7 +1307,7 @@ export function renderDashboardHtml(): string {
                   '<span class="badge badge-project">' + escapeHtml(w.project) + '</span>' +
                   '<a href="' + escapeHtml(w.linearUrl || "https://linear.app") + '" target="_blank" rel="noopener noreferrer" class="issue-link" title="Open ' + escapeHtml(w.identifier) + ' in Linear"><strong>' + escapeHtml(w.identifier) + ' ↗</strong></a>' +
                   '<span class="badge badge-' + escapeHtml(w.provider) + '">' + escapeHtml(w.provider) + (w.model ? ' · ' + escapeHtml(w.model) : '') + '</span>' +
-                  '<span style="color: var(--text-dim);">Uptime: ' + w.ageMin + 'm</span>' +
+                  '<span style="color: var(--text-dim);">Claim age: ' + w.ageMin + 'm</span>' +
                   (w.worktreePath ? '<span style="color: var(--text-dim); font-family: var(--font-mono);">' + escapeHtml(w.worktreePath.split("/").slice(-2).join("/")) + '</span>' : '') +
                 '</div>' +
                 '<a href="' + escapeHtml(w.linearUrl || "https://linear.app") + '" target="_blank" rel="noopener noreferrer" style="color: var(--text); text-decoration: none;" class="hover-underline"><div class="card-title">' + escapeHtml(w.title) + '</div></a>' +
@@ -1105,7 +1319,8 @@ export function renderDashboardHtml(): string {
               '</div>' +
             '</div>' +
             '<div class="pipeline-bar">' + gateDots + '</div>' +
-            (rolesHtml ? '<div class="roles-strip"><span style="font-size: 11px; color: var(--text-dim);">Sub-agent Roles:</span>' + rolesHtml + '</div>' : '') +
+            rosterHtml +
+            executionTasksHtml +
             questionHtml +
           '</div>'
         );
@@ -1190,6 +1405,13 @@ export function renderDashboardHtml(): string {
     }
 
     function renderProjects(projects, automations) {
+      const projectSelect = document.getElementById("projectSelect");
+      // An unfiltered snapshot contains the current configured project inventory.
+      if (projectSelect && !projectSelect.value) {
+        projectSelect.innerHTML = '<option value="">All Projects</option>' + (projects || []).map(p =>
+          '<option value="' + escapeHtml(p.key) + '">' + escapeHtml(p.name) + '</option>'
+        ).join("");
+      }
       const g = document.getElementById("projectsGrid");
       if (g && projects) {
         g.innerHTML = projects.map(p => (
@@ -1212,8 +1434,9 @@ export function renderDashboardHtml(): string {
               '<span>Completed:</span>' +
               '<strong style="color: var(--success);">' + p.completedCount + '</strong>' +
             '</div>' +
-            '<div style="font-size: 11px; color: var(--text-dim); border-top: 1px solid var(--border-subtle); padding-top: 6px; margin-top: 4px;">' +
+            '<div style="font-size: 11px; color: var(--text-dim); border-top: 1px solid var(--border-subtle); padding-top: 6px; margin-top: 4px; display: flex; justify-content: space-between;">' +
               '<span>Slot: ' + (p.slotHeldBy ? '<span style="color: var(--warning);">Held by ' + escapeHtml(p.slotHeldBy) + '</span>' : '<span style="color: var(--success);">Available</span>') + '</span>' +
+              (p.automation ? '<span title="' + escapeHtml(p.automation.provenance || '') + '">Auto: <strong>' + escapeHtml(p.automation.cadence) + '</strong></span>' : '') +
             '</div>' +
           '</div>'
         )).join("");
@@ -1222,11 +1445,9 @@ export function renderDashboardHtml(): string {
       const autoGrid = document.getElementById("automationsGrid");
       if (autoGrid && automations) {
         autoGrid.innerHTML = automations.map(a => {
-          const badgeClass = a.harness === "orca" ? "badge-orca" : a.harness === "claude-code" ? "badge-claude" : "badge-codex";
+          const badgeClass = a.harness === "orca" ? "badge-orca" : a.harness === "claude-code" ? "badge-claude" : a.harness === "codex" ? "badge-codex" : "badge-project";
           const harnessLabel = a.harness === "orca" ? "Orca Automation" : a.harness === "claude-code" ? "Claude Routine" : a.harness === "codex" ? "Codex Scheduled" : a.harness;
-          const statusLower = a.lastRunStatus.toLowerCase();
-          const isGreen = statusLower.includes("active") || statusLower.includes("ok") || statusLower.includes("ready");
-          const statusColor = isGreen ? "var(--success)" : "var(--text-muted)";
+          const statusColor = "var(--text-muted)";
           return (
             '<div class="automation-card">' +
               '<div class="automation-card-title">' +
@@ -1246,9 +1467,10 @@ export function renderDashboardHtml(): string {
                 '<span style="font-weight: 600; color: ' + statusColor + ';">' + escapeHtml(a.lastRunStatus) + '</span>' +
               '</div>' +
               '<div style="font-size: 11px; color: var(--text-dim); border-top: 1px solid var(--border-subtle); padding-top: 6px; margin-top: 4px; display: flex; justify-content: space-between;">' +
-                '<span>Last Active:</span>' +
-                '<span>' + (a.lastRunAt ? formatRelativeTime(a.lastRunAt) : 'None') + '</span>' +
+                '<span>Last Recorded Tick:</span>' +
+                '<span>' + (a.lastRunAt ? escapeHtml(new Date(a.lastRunAt).toLocaleString()) : 'No run evidence') + '</span>' +
               '</div>' +
+              (a.provenance ? '<div style="font-size: 10px; color: var(--text-dim); font-family: var(--font-mono); margin-top: 4px;">Provenance: ' + escapeHtml(a.provenance) + '</div>' : '') +
             '</div>'
           );
         }).join("");
@@ -1341,6 +1563,13 @@ export function renderDashboardHtml(): string {
           '<div class="kanban-cards">' +
             (inAgent.length === 0 ? '<div class="empty-state" style="padding:16px;">No agents actively coding</div>' : inAgent.map(w => {
               const proj = w.project || "general";
+              const rosterSnippet = (w.roster && w.roster.length > 0) ? (
+                '<div style="font-size:10px; color:var(--text-muted); background:var(--surface); border:1px solid var(--border-subtle); border-radius:4px; padding:3px 6px; margin-top:4px;">' +
+                  '<span><strong>' + w.roster.length + ' Agent' + (w.roster.length > 1 ? 's' : '') + ':</strong> ' +
+                  w.roster.map(a => (a.role === 'coordinator' ? '👑 ' : '⚙️ ') + escapeHtml(a.provider) + ' (' + escapeHtml(a.role) + ': ' + escapeHtml(a.assignedStatus) + ')').join(', ') +
+                  '</span>' +
+                '</div>'
+              ) : '';
               return (
                 '<div class="kanban-card">' +
                   '<div class="kanban-card-meta">' +
@@ -1353,6 +1582,7 @@ export function renderDashboardHtml(): string {
                     '<span>Stage: <strong>' + escapeHtml(w.pipelineStage) + '</strong></span>' +
                     '<span>' + w.ageMin + 'm</span>' +
                   '</div>' +
+                  rosterSnippet +
                   '<div style="display:flex; justify-content:flex-end; gap:6px; margin-top:6px;">' +
                     '<a href="' + escapeHtml(w.linearUrl || "https://linear.app") + '" target="_blank" rel="noopener noreferrer"><button class="sm" title="Open in Linear">Linear ↗</button></a>' +
                     '<button class="sm btn-open-orca" data-path="' + escapeHtml(w.worktreePath || '') + '" title="Open Worktree in Orca / Editor">Worktree ↗</button>' +
@@ -1372,6 +1602,13 @@ export function renderDashboardHtml(): string {
           '<div class="kanban-cards">' +
             (waiting.length === 0 ? '<div class="empty-state" style="padding:16px;">No questions open</div>' : waiting.map(w => {
               const proj = w.project || "general";
+              const rosterSnippet = (w.roster && w.roster.length > 0) ? (
+                '<div style="font-size:10px; color:var(--text-muted); background:var(--surface); border:1px solid var(--border-subtle); border-radius:4px; padding:3px 6px; margin-top:4px;">' +
+                  '<span><strong>' + w.roster.length + ' Agent' + (w.roster.length > 1 ? 's' : '') + ':</strong> ' +
+                  w.roster.map(a => (a.role === 'coordinator' ? '👑 ' : '⚙️ ') + escapeHtml(a.provider) + ' (' + escapeHtml(a.role) + ': ' + escapeHtml(a.assignedStatus) + ')').join(', ') +
+                  '</span>' +
+                '</div>'
+              ) : '';
               return (
                 '<div class="kanban-card waiting">' +
                   '<div class="kanban-card-meta">' +
@@ -1383,6 +1620,7 @@ export function renderDashboardHtml(): string {
                   '<div style="font-size:11px; color:var(--text-muted); background:var(--surface); padding:6px 8px; border-radius:4px; border:1px solid var(--border-subtle); margin-top:4px;">' +
                     escapeHtml((w.openQuestion ? w.openQuestion.prompt || '' : '').slice(0, 140)) + '...' +
                   '</div>' +
+                  rosterSnippet +
                   '<div style="display:flex; gap:6px; justify-content:flex-end; margin-top:6px; flex-wrap:wrap;">' +
                     answerInLinearLink(w) +
                   '</div>' +
@@ -1401,6 +1639,13 @@ export function renderDashboardHtml(): string {
           '<div class="kanban-cards">' +
             (inReview.length === 0 ? '<div class="empty-state" style="padding:16px;">No open reviews</div>' : inReview.map(w => {
               const proj = w.project || "general";
+              const rosterSnippet = (w.roster && w.roster.length > 0) ? (
+                '<div style="font-size:10px; color:var(--text-muted); background:var(--surface); border:1px solid var(--border-subtle); border-radius:4px; padding:3px 6px; margin-top:4px;">' +
+                  '<span><strong>' + w.roster.length + ' Agent' + (w.roster.length > 1 ? 's' : '') + ':</strong> ' +
+                  w.roster.map(a => (a.role === 'coordinator' ? '👑 ' : '⚙️ ') + escapeHtml(a.provider) + ' (' + escapeHtml(a.role) + ': ' + escapeHtml(a.assignedStatus) + ')').join(', ') +
+                  '</span>' +
+                '</div>'
+              ) : '';
               return (
                 '<div class="kanban-card">' +
                   '<div class="kanban-card-meta">' +
@@ -1409,6 +1654,7 @@ export function renderDashboardHtml(): string {
                     '<span class="badge badge-pass">Gates Passed</span>' +
                   '</div>' +
                   '<a href="' + escapeHtml(w.linearUrl || "https://linear.app") + '" target="_blank" rel="noopener noreferrer" class="kanban-card-title-link" title="Open in Linear">' + escapeHtml(w.title) + '</a>' +
+                  rosterSnippet +
                   '<div style="display:flex; gap:6px; justify-content:flex-end; margin-top:6px; flex-wrap:wrap;">' +
                     (w.prUrl ? '<a href="' + escapeHtml(w.prUrl) + '" target="_blank" rel="noopener noreferrer"><button class="sm primary">View PR ↗</button></a>' : '') +
                     '<a href="' + escapeHtml(w.linearUrl || "https://linear.app") + '" target="_blank" rel="noopener noreferrer"><button class="sm" title="Open in Linear">Linear ↗</button></a>' +

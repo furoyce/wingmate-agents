@@ -101,6 +101,55 @@ describe("server endpoints", () => {
     expect(fallback).toContain('href="https://linear.app"');
     expect(fallback).toContain("Find JRF-890 in Linear");
     expect(html).toContain("toastContainer");
+    expect(html).toContain("roster-container");
+    expect(html).toContain("Agent Roster");
+    expect(html).toContain("Recorded assignments · live status unverified");
+    expect(html).toContain("badge-antigravity");
+  });
+
+  test("routine renderer accepts real tick timestamps and project filters use the configured inventory", async () => {
+    const html = await (await fetch(`${server.url}/`)).text();
+    const script = html.match(/<script>([\s\S]*?)<\/script>/)?.[1];
+    if (!script) throw new Error("dashboard script missing");
+    const helpers = ["escapeHtml", "renderProjects"].map((name) => {
+      const source = script.match(new RegExp(`function ${name}\\([^)]*\\) \\{[\\s\\S]*?\\n    \\}`))?.[0];
+      if (!source) throw new Error(`${name} missing`);
+      return source;
+    });
+    const elements = new Map<string, { innerHTML: string; value?: string }>([
+      ["projectSelect", { innerHTML: "", value: "" }],
+      ["automationsGrid", { innerHTML: "" }],
+    ]);
+    const render = runInNewContext(`${helpers.join("\n")}\nrenderProjects;`, {
+      document: { getElementById: (id: string) => elements.get(id) ?? null },
+    });
+    expect(() =>
+      render(
+        [{ key: 'new&"project', name: "Sample <Project>" }],
+        [
+          {
+            name: "Dispatcher",
+            harness: "orca",
+            targetProject: "All",
+            schedule: "Recorded disabled",
+            lastRunStatus: "Disabled",
+            lastRunAt: "2026-10-09T12:00:00Z",
+            configured: true,
+            provenance: "Recorded; live state unverified",
+          },
+        ],
+      ),
+    ).not.toThrow();
+    expect(elements.get("automationsGrid")?.innerHTML).toContain("Last Recorded Tick:");
+    expect(elements.get("automationsGrid")?.innerHTML).not.toContain("Invalid Date");
+    expect(elements.get("projectSelect")?.innerHTML).toContain('value="new&amp;&quot;project"');
+    expect(elements.get("projectSelect")?.innerHTML).toContain("Sample &lt;Project&gt;");
+    const select = elements.get("projectSelect");
+    if (!select) throw new Error("select missing");
+    const options = select.innerHTML;
+    select.value = "new-project";
+    render([], []);
+    expect(select.innerHTML).toBe(options);
   });
 
   test("GET /api/snapshot returns valid snapshot payload", async () => {
@@ -111,6 +160,16 @@ describe("server endpoints", () => {
     expect(data.activeWorktrees).toBeDefined();
     expect(data.projects).toBeDefined();
     expect(data.metrics).toBeDefined();
+    expect(data.automations).toBeDefined();
+    expect(Array.isArray(data.automations)).toBe(true);
+    const harnesses = data.automations.map((a: { harness: string }) => a.harness);
+    expect(harnesses).toContain("orca");
+    expect(harnesses).toContain("claude-code");
+    expect(harnesses).toContain("codex");
+    expect(harnesses).not.toContain("antigravity");
+    const claude = data.automations.find((a: { harness: string }) => a.harness === "claude-code");
+    expect(claude.configured).toBe(false);
+    expect(claude.lastRunAt).toBeNull();
   });
 
   test("POST /api/actions/pause toggles dispatcher pause state", async () => {

@@ -41,6 +41,50 @@ export interface RoleJobSummary {
   completedAt: string | null;
 }
 
+export type AgentAssignedStatus = "assigned" | "running" | "parked" | "completed" | "failed" | "unknown";
+export type AgentProvenance = "record" | "terminal-job" | "native-job" | "inferred" | "unknown";
+
+export interface AgentRosterEntry {
+  id: string;
+  role: string;
+  provider: string;
+  model: string | null;
+  assignedStatus: AgentAssignedStatus;
+  statusDetail: string;
+  provenance: AgentProvenance;
+  provenanceDetail: string;
+  livenessVerified: boolean;
+  recordedRoleStage: string;
+  currentAction: string;
+  worktreePath: string | null;
+  branch: string | null;
+  terminalHandle: string | null;
+  paneKey: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  verdict: string | null;
+}
+
+export interface AgentRosterSummary {
+  total: number;
+  running: number;
+  assigned: number;
+  parked: number;
+  completed: number;
+  failed: number;
+  unknown: number;
+}
+
+export interface ExecutionTaskSummary {
+  id: string;
+  kind: "native-ui-test";
+  status: "running" | "completed" | "failed" | "unknown";
+  statusDetail: string;
+  recordedAction: string;
+  requestedAt: string;
+  device: string;
+}
+
 export interface GateSummary {
   verdict: "PASS" | "FAIL" | "NA" | "STALE" | null;
   failCount: number;
@@ -72,6 +116,9 @@ export interface ActiveWorktreeItem {
     relaunches: number;
   };
   roleJobs: RoleJobSummary[];
+  roster: AgentRosterEntry[];
+  rosterSummary: AgentRosterSummary;
+  executionTasks?: ExecutionTaskSummary[];
   gates: Record<string, GateSummary>;
   openQuestion: {
     id: string;
@@ -97,6 +144,8 @@ export interface ProjectSummary {
     type: "orca" | "cron" | "manual";
     cadence: string;
     enabled: boolean;
+    status?: "active" | "disabled" | "not_installed" | "paused" | "stale" | "unknown";
+    provenance?: string;
   };
 }
 
@@ -120,6 +169,8 @@ export interface HarnessAutomation {
   schedule: string;
   lastRunStatus: string;
   lastRunAt: string | null;
+  configured?: boolean;
+  provenance?: string;
 }
 
 export type SnapshotQueueItem = QueueRow & { title?: string | null; linearUrl?: string };
