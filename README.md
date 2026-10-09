@@ -2,18 +2,21 @@
 
 # 🪽 Wingmate Agents
 
-### **Autonomous Architect Pipeline & Coding Agent Harness for Linear**
+### **Universal Coding Agent Automation & Safety Plugin**
+#### *Orchestrating Orca Automations · Claude Code Routines · OpenAI Codex Scheduled Tasks*
 
 [![Linear Verified](https://img.shields.io/badge/Linear-Verified_App-5E6AD2?style=for-the-badge&logo=linear&logoColor=white)](https://linear.app)
+[![Orca Plugin](https://img.shields.io/badge/Orca-ADE_Automation_Plugin-0284C7?style=for-the-badge)](#2-orca-ade-automation-plugin)
+[![Claude Code](https://img.shields.io/badge/Claude_Code-Routine_Relay-D97706?style=for-the-badge&logo=anthropic&logoColor=white)](#3-claude-code--codex-integration)
+[![Codex Ready](https://img.shields.io/badge/Codex-Scheduled_Review_Loop-10B981?style=for-the-badge&logo=openai&logoColor=white)](#3-claude-code--codex-integration)
 [![Bun Runtime](https://img.shields.io/badge/Runtime-Bun_v1.4+-FBF0DF?style=for-the-badge&logo=bun&logoColor=black)](https://bun.sh)
 [![TypeScript](https://img.shields.io/badge/Language-TypeScript_Strict-3178C6?style=for-the-badge&logo=typescript&logoColor=white)](https://www.typescriptlang.org)
 [![Deterministic Gates](https://img.shields.io/badge/Safety_Gates-8%2F8_Deterministic-10B981?style=for-the-badge)](#the-8-deterministic-safety-gates)
-[![Zero NPM Bloat](https://img.shields.io/badge/Dependencies-Zero_NPM_Bloat-059669?style=for-the-badge)](#shipping--distribution)
-[![Platforms](https://img.shields.io/badge/Platforms-macOS_%7C_Linux-7C3AED?style=for-the-badge&logo=apple&logoColor=white)](#shipping--distribution)
+[![Theme Support](https://img.shields.io/badge/Console_Theme-Light_(Orca)_%7C_Dark_%7C_System-64748B?style=for-the-badge)](#-architect-console-ui)
 
 <p align="center">
-  <b>Turn your Linear backlog into verified, production-ready pull requests while you sleep.</b><br>
-  Wingmate bridges issue trackers and coding agents running in isolated Git worktrees with deterministic safety gates and human-in-the-loop plan approvals.
+  <b>Supercharge your existing coding agents with autonomous Linear-to-GitHub orchestration.</b><br>
+  Wingmate operates as an orchestration and safety plugin that harnesses your native coding assistants (Orca, Claude Code, Codex) to interact with Linear issues, Git worktrees, and GitHub PRs—<b>without creating a redundant competing chatbot harness</b>.
 </p>
 
 ---
@@ -24,7 +27,7 @@
 | :--- | :--- | :--- |
 | **1. Todo** | ![Todo](https://img.shields.io/badge/Stage-Todo_%2F_Backlog-64748B?style=flat-square) | Unassigned candidate issues in Linear awaiting architect prioritization |
 | **2. Agent-Ready** | ![Agent-Ready](https://img.shields.io/badge/Stage-Agent--Ready-0284C7?style=flat-square) | Labeled and queued for autonomous pickup by the dispatcher |
-| **3. In Worktree** | ![In Worktree](https://img.shields.io/badge/Stage-In_Worktree-F59E0B?style=flat-square) | Agent actively implementing code in an isolated sandboxed Git worktree |
+| **3. In Worktree** | ![In Worktree](https://img.shields.io/badge/Stage-In_Worktree-F59E0B?style=flat-square) | Native agent actively implementing code in an isolated sandboxed Git worktree |
 | **4. Waiting on You** | ![Waiting on You](https://img.shields.io/badge/Stage-Waiting_on_You-EF4444?style=flat-square) | Paused for human plan review, clarification question, or architecture approval |
 | **5. In Review / PR** | ![In Review](https://img.shields.io/badge/Stage-In_Review_%2F_PR-A855F7?style=flat-square) | All 8 gates passed, verified pull request opened on GitHub |
 | **6. Done / Merged** | ![Done](https://img.shields.io/badge/Stage-Done_%2F_Merged-10B981?style=flat-square) | PR merged, Linear issue closed, worktree safely reclaimed |
@@ -33,13 +36,16 @@
 
 ---
 
-## ⚡ Highlights
+## ⚡ Why Wingmate as a Plugin?
 
+Coding agents like **Orca ADE**, **Claude Code**, and **OpenAI Codex** are already exceptional at conversational code reasoning, editing, and tool execution. Developers do not need another chat window.
+
+What developers and architects actually need is the **deterministic outer loop**:
+- **🔌 Native Harness Interoperability**: Wingmate uses your existing automations (`.orca/automations`, Claude Code tool routines, Codex scheduled tasks) to drive agents via the native chatbot harness rather than creating a new harness.
 - **🔒 Credential-Free Agent Sandboxes**: Agents never hold Git credentials, API keys, or direct push rights. All writes and comments occur via the official Wingmate Linear OAuth app.
 - **🛡️ 8 Deterministic Safety Gates**: No PR is ever opened without passing automated plan verification, unit tests, strict typechecking, linter checks, secret scanning, and dependency audits.
 - **🙋 Human-in-the-Loop Approval**: When agents formulate an implementation plan or hit ambiguous requirements, execution safely parks and notifies you with 1-click plan approval.
-- **🖥️ Architect Console UI**: Zero-dependency, lightweight web dashboard featuring both a 6-stage Kanban board and Funnel pipeline view, Dark & Light color themes, and in-app modal review dialogs.
-- **🔌 Multi-Harness Compatibility**: Works out of the box with **Orca ADE**, **Claude Code**, **OpenAI Codex**, or as a standalone CLI daemon for any Git repository.
+- **🖥️ Architect Console UI**: Zero-dependency, lightweight web dashboard featuring both a 6-stage Kanban board and Funnel pipeline view, **Light theme by default (matching Orca ADE)**, **Dark**, and **System** themes.
 
 ---
 
@@ -47,18 +53,25 @@
 
 ```mermaid
 flowchart TD
+    subgraph Schedulers["Native Agent Automations & Harnesses"]
+        Orca["Orca ADE (.orca/automations)"]
+        Claude["Claude Code (Tool Routine Relay)"]
+        Codex["Codex (Scheduled Review Loop)"]
+    end
+
     subgraph Linear["Linear Issue Tracker"]
         L1["Issue Created in Backlog"] -->|Triage & Priority| L2["Label: agent-ready"]
         L4["Human Answer / Plan Approval"] -->|Resume| W1
     end
 
-    subgraph Wingmate["Wingmate Dispatcher (No LLM in Dispatcher)"]
-        L2 -->|Tick every 5m| D1["Claim Issue & Verify Approver"]
+    subgraph Wingmate["Wingmate Plugin & Dispatcher (Zero LLM Outer Loop)"]
+        Schedulers -->|Trigger Cadence / On-Demand| D1["Claim Issue & Verify Approver"]
+        L2 --> D1
         D1 --> D2["Provision Isolated Worktree wm-issue"]
     end
 
     subgraph Worktree["Sandboxed Agent Worktree"]
-        D2 --> W1["Coding Agent (Claude / Codex)"]
+        D2 --> W1["Native Coding Agent (Orca / Claude / Codex)"]
         W1 -->|Asks Question / Submits Plan| Q1{"Waiting on Human?"}
         Q1 -- Yes --> L4
         Q1 -- No --> G1["Run 8 Deterministic Gates"]
@@ -105,16 +118,18 @@ bun run build
   brew install furoyce/tap/wingmate
   ```
 
-### 2. Orca ADE Plugin & Automation
-Wingmate integrates natively into Orca ADE:
-- Configures automated scheduled runs via `.orca/automations` running `wingmate tick --precheck` every 5 minutes.
-- Integrated Webview tab renders the Wingmate Architect Console (`http://127.0.0.1:4848`).
-- One-click worktree opening: clicking **"Open in Orca ↗"** in the dashboard jumps straight into the agent's active session.
+### 2. Orca ADE Automation Plugin
+Wingmate integrates natively into Orca ADE as a first-class automation plugin:
+- **Native Automation Cadence**: Configures scheduled runs via `.orca/automations` executing `wingmate tick --precheck` every 5 minutes.
+- **Orca Light Theme Match**: The Architect Console defaults to a clean, crisp light theme designed to seamlessly match Orca ADE's default UI aesthetic.
+- **Integrated Webview**: Run as an embedded Webview tab (`http://127.0.0.1:4848`) alongside active chat sessions.
+- **One-Click Worktree Jump**: Clicking **"Open in Orca ↗"** directly opens the agent's active worktree session in your editor.
 
-### 3. Claude Code & Codex Harness
-Run Wingmate alongside agent CLI tools:
-- **Claude Code**: Provide `wingmate status` and `wingmate scan` as tools or slash commands within your Claude Code environment.
-- **Codex**: Integrate with scheduled cron jobs and continuous PR review loops.
+### 3. Claude Code & Codex Integration
+Use Wingmate to orchestrate Claude Code and OpenAI Codex without wrapping them in an unnecessary chatbot layer:
+- **Claude Code**: Relay continuous tool routines directly inside isolated Git worktrees (`wm-<issue>`). The native agent handles code reasoning while Wingmate validates gates and surfaces plan approvals.
+- **OpenAI Codex**: Trigger scheduled tasks and non-blocking PR review loops.
+- **Native Tooling**: Provide `wingmate status --json` and `wingmate scan` directly to your agent's terminal tools.
 
 ### 4. Background System Daemon
 Run the dispatcher and UI server as a background service:
@@ -180,13 +195,15 @@ Open **[http://127.0.0.1:4848](http://127.0.0.1:4848)** to monitor active worktr
 
 The built-in Web Console gives engineering architects complete visibility into the autonomous agent fleet:
 
-![UI Modes](https://img.shields.io/badge/Theme-Dark_%26_Light_Modes-38BDF8?style=flat-square)
+![Theme Modes](https://img.shields.io/badge/Theme-Light_(Default)_%7C_Dark_%7C_System-38BDF8?style=flat-square)
 ![Views](https://img.shields.io/badge/Views-Pipeline_Funnel_%26_Kanban_Board-A855F7?style=flat-square)
-![Network](https://img.shields.io/badge/Network-Adaptive_Polling_(Zero_Socket_Hung)-10B981?style=flat-square)
+![Automations](https://img.shields.io/badge/Automations-Orca_%7C_Claude_%7C_Codex-10B981?style=flat-square)
 
-- **☀️ / 🌙 Dark & Light Themes**: Obsidian slate dark theme and high-contrast light theme with instant switching and `localStorage` persistence.
-- **☷ 6-Column Kanban Board**: Fluid, full-width responsive layout automatically adapting to any screen size (ultra-wide monitors, laptops, and split panes) with **zero horizontal sliders**.
-- **⚡ 1-Click Plan Approval**: Immediate in-app approvals and custom review modals that resume blocked agent worktrees without leaving the dashboard.
+- **☀️ Light Theme by Default (Orca-Matched)**: Crisp, high-contrast light theme calibrated to match Orca's default interface color palette.
+- **🌙 Dark & 💻 System Modes**: Obsidian slate dark theme and dynamic system theme mode that automatically respects your OS appearance preference.
+- **☷ 6-Column Responsive Kanban Board**: Fluid, full-width responsive layout adapting dynamically to any screen width (ultra-wide monitors, laptops, and split panes) with **zero horizontal sliders**.
+- **⚡ 1-Click Plan Approval & Question Modals**: Immediate in-app approvals and custom review dialogs that resume blocked agent worktrees without leaving the dashboard.
+- **📊 Native Automations & Routines Panel**: Live tracking of Orca Dispatcher Automation, Claude Code Routine Relay, and Codex Scheduled Review loops.
 - **🔄 Smart Adaptive Polling**: 3s active tab polling, 10s background polling, and action-driven instant updates. Completely avoids Chromium's 6-socket per-origin bottleneck.
 
 ---

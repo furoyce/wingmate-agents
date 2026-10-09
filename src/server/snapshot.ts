@@ -390,29 +390,29 @@ export async function buildSnapshot(
     });
   }
 
-  // 9. Harness Automations
+  // 9. Native Harness Automations & Routines
   const automations: HarnessAutomation[] = [
     {
-      name: "Wingmate Dispatcher Precheck",
+      name: "Orca Dispatcher Automation",
       harness: "orca",
       targetProject: "All Projects (JRF)",
-      schedule: "Every 5 min",
+      schedule: "Every 5 min (.orca/automations)",
       lastRunStatus: heartbeat ? `${heartbeat.outcome} (${heartbeat.durationMs}ms)` : "idle",
       lastRunAt: heartbeat?.at ?? null,
     },
     {
-      name: "Linear Sync & Queue Reconcile",
-      harness: "orca",
-      targetProject: "All Projects",
-      schedule: "Continuous / Event-driven",
+      name: "Claude Code Routine Relay",
+      harness: "claude-code",
+      targetProject: "Active Worktrees",
+      schedule: "Continuous Tool Routine",
       lastRunStatus: "Active",
       lastRunAt: now,
     },
     {
-      name: "Sub-Agent Review Relay",
-      harness: "system",
+      name: "Codex Scheduled Review Loop",
+      harness: "codex",
       targetProject: "Pilot Worktrees",
-      schedule: "On Gate Request",
+      schedule: "On Gate Request / Scheduled",
       lastRunStatus: "Ready",
       lastRunAt: now,
     },
