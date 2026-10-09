@@ -52,6 +52,7 @@ export interface ActiveWorktreeItem {
   identifier: string;
   linearId: string;
   title: string;
+  linearUrl: string;
   project: string;
   repo: string;
   stage: string;
@@ -87,6 +88,7 @@ export interface ProjectSummary {
   key: string;
   name: string;
   linearProjectId: string;
+  linearProjectUrl?: string;
   activeCount: number;
   queuedCount: number;
   completedCount: number;
@@ -120,6 +122,8 @@ export interface HarnessAutomation {
   lastRunAt: string | null;
 }
 
+export type SnapshotQueueItem = QueueRow & { title?: string | null; linearUrl?: string };
+
 export interface SnapshotResponse {
   at: string;
   dispatcher: Heartbeat | null;
@@ -127,7 +131,7 @@ export interface SnapshotResponse {
   pausedScopes: string[];
   funnel: FunnelStats;
   triage: TriageItem[];
-  queue: QueueRow[];
+  queue: SnapshotQueueItem[];
   activeWorktrees: ActiveWorktreeItem[];
   projects: ProjectSummary[];
   metrics: ThroughputMetrics;

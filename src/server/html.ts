@@ -1,11 +1,11 @@
-// src/server/html.ts — Self-contained, high-performance HTML/CSS/JS dashboard for the Wingmate Console.
+// src/server/html.ts — Self-contained, high-performance HTML/CSS/JS dashboard for the Wingmate Architect Command Center.
 export function renderDashboardHtml(): string {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Wingmate Console · Architect Pipeline</title>
+  <title>Wingmate · Architect Command Center</title>
   <style>
     :root, body[data-theme="light"] {
       --bg: #F8FAFC;
@@ -649,7 +649,43 @@ export function renderDashboardHtml(): string {
     .toast.error { border-color: var(--danger); }
     .toast.error .toast-icon { color: var(--danger); font-weight: 800; }
     .toast.info { border-color: var(--accent); }
-    .toast.info .toast-icon { color: var(--accent); font-weight: 800; }
+    .issue-link {
+      color: var(--accent);
+      text-decoration: none;
+      font-family: var(--font-mono);
+      font-weight: 700;
+      transition: color 0.15s ease, filter 0.15s ease;
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+    }
+    .issue-link:hover {
+      text-decoration: underline;
+      filter: brightness(1.2);
+    }
+    .kanban-card-title-link {
+      color: var(--text);
+      text-decoration: none;
+      font-size: 13px;
+      font-weight: 600;
+      line-height: 1.35;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+      transition: color 0.15s ease;
+    }
+    .kanban-card-title-link:hover {
+      color: var(--accent);
+      text-decoration: underline;
+    }
+    .hover-underline {
+      transition: color 0.15s ease, text-decoration 0.15s ease;
+    }
+    .hover-underline:hover {
+      text-decoration: underline !important;
+      color: var(--accent) !important;
+    }
 
     .empty-state { text-align: center; padding: 32px; color: var(--text-dim); font-size: 13px; }
   </style>
@@ -659,7 +695,7 @@ export function renderDashboardHtml(): string {
     <div class="header-left">
       <div class="logo">
         <span class="logo-badge">Wingmate</span>
-        <span>Architect Console</span>
+        <span>Architect Command Center</span>
         <span style="font-size: 11px; font-weight: normal; color: var(--text-dim); margin-left: 4px;">Universal Automation Plugin · Orca / Claude / Codex</span>
       </div>
       <div class="pulse-dot" id="pulseDot"></div>
@@ -1071,7 +1107,7 @@ export function renderDashboardHtml(): string {
               '<div class="alert-actions">' +
                 '<button class="primary sm btn-approve" data-id="' + w.identifier + '" data-qid="' + w.openQuestion.id + '">✓ Approve Plan</button>' +
                 '<button class="sm btn-answer-modal" data-id="' + w.identifier + '" data-qid="' + w.openQuestion.id + '">Review / Custom Answer...</button>' +
-                '<a href="https://linear.app" target="_blank" style="font-size: 11px; margin-left: 8px;">View in Linear ↗</a>' +
+                '<a href="' + escapeHtml(w.linearUrl) + '" target="_blank" rel="noopener noreferrer" style="font-size: 12px; font-weight: 600; color: var(--accent); margin-left: 8px; text-decoration: none;" class="hover-underline">View in Linear ↗</a>' +
               '</div>' +
             '</div>'
           );
@@ -1082,17 +1118,18 @@ export function renderDashboardHtml(): string {
             '<div class="card-header">' +
               '<div>' +
                 '<div class="card-meta">' +
-                  '<span class="badge badge-project">' + w.project + '</span>' +
-                  '<span style="font-weight: 700; color: var(--text);">' + w.identifier + '</span>' +
-                  '<span class="badge badge-' + w.provider + '">' + w.provider + (w.model ? ' · ' + w.model : '') + '</span>' +
+                  '<span class="badge badge-project">' + escapeHtml(w.project) + '</span>' +
+                  '<a href="' + escapeHtml(w.linearUrl) + '" target="_blank" rel="noopener noreferrer" class="issue-link" title="Open ' + escapeHtml(w.identifier) + ' in Linear"><strong>' + escapeHtml(w.identifier) + ' ↗</strong></a>' +
+                  '<span class="badge badge-' + escapeHtml(w.provider) + '">' + escapeHtml(w.provider) + (w.model ? ' · ' + escapeHtml(w.model) : '') + '</span>' +
                   '<span style="color: var(--text-dim);">Uptime: ' + w.ageMin + 'm</span>' +
-                  (w.worktreePath ? '<span style="color: var(--text-dim);">' + w.worktreePath.split('/').slice(-2).join('/') + '</span>' : '') +
+                  (w.worktreePath ? '<span style="color: var(--text-dim); font-family: var(--font-mono);">' + escapeHtml(w.worktreePath.split("/").slice(-2).join("/")) + '</span>' : '') +
                 '</div>' +
-                '<div class="card-title">' + escapeHtml(w.title) + '</div>' +
+                '<a href="' + escapeHtml(w.linearUrl) + '" target="_blank" rel="noopener noreferrer" style="color: var(--text); text-decoration: none;" class="hover-underline"><div class="card-title">' + escapeHtml(w.title) + '</div></a>' +
               '</div>' +
-              '<div style="display: flex; gap: 8px;">' +
-                (w.prUrl ? '<a href="' + w.prUrl + '" target="_blank"><button class="sm">View PR ↗</button></a>' : '') +
-                '<button class="sm btn-open-orca" data-path="' + (w.worktreePath || '') + '">Open in Orca ↗</button>' +
+              '<div style="display: flex; gap: 8px; align-items: center;">' +
+                '<a href="' + escapeHtml(w.linearUrl) + '" target="_blank" rel="noopener noreferrer"><button class="sm" title="Open in Linear">Linear ↗</button></a>' +
+                (w.prUrl ? '<a href="' + escapeHtml(w.prUrl) + '" target="_blank" rel="noopener noreferrer"><button class="sm primary">View PR ↗</button></a>' : '') +
+                '<button class="sm btn-open-orca" data-path="' + escapeHtml(w.worktreePath || '') + '" title="Open Worktree in Orca / Editor">Worktree ↗</button>' +
               '</div>' +
             '</div>' +
             '<div class="pipeline-bar">' + gateDots + '</div>' +
@@ -1132,13 +1169,16 @@ export function renderDashboardHtml(): string {
               const prioClass = t.priority && t.priority > 0 ? ("badge-prio-" + t.priority) : "";
               return (
                 "<tr>" +
-                  "<td><strong>" + t.identifier + "</strong></td>" +
+                  '<td><a href="' + escapeHtml(t.url) + '" target="_blank" rel="noopener noreferrer" class="issue-link" title="Open ' + escapeHtml(t.identifier) + ' in Linear"><strong>' + escapeHtml(t.identifier) + ' ↗</strong></a></td>' +
                   '<td><span class="badge badge-project" title="' + escapeHtml(proj) + '">' + escapeHtml(proj) + "</span></td>" +
-                  "<td>" + escapeHtml(t.title) + "</td>" +
-                  '<td><span class="badge badge-' + t.recommendedProvider + '">' + t.recommendedProvider + "</span></td>" +
+                  '<td><a href="' + escapeHtml(t.url) + '" target="_blank" rel="noopener noreferrer" style="color:var(--text); text-decoration:none;" class="hover-underline">' + escapeHtml(t.title) + "</a></td>" +
+                  '<td><span class="badge badge-' + escapeHtml(t.recommendedProvider) + '">' + escapeHtml(t.recommendedProvider) + "</span></td>" +
                   "<td>" + (prioClass ? '<span class="badge ' + prioClass + '">' + prioText + "</span>" : '<span style="color: var(--text-dim);">' + prioText + "</span>") + "</td>" +
                   '<td style="text-align: right;">' +
-                    '<button class="primary sm btn-promote" data-linear-id="' + t.linearId + '" data-id="' + t.identifier + '" data-provider="' + t.recommendedProvider + '">+ Make Agent-Ready</button>' +
+                    '<div style="display:inline-flex; gap:6px; align-items:center;">' +
+                      '<a href="' + escapeHtml(t.url) + '" target="_blank" rel="noopener noreferrer"><button class="sm" title="Open in Linear">Linear ↗</button></a>' +
+                      '<button class="primary sm btn-promote" data-linear-id="' + t.linearId + '" data-id="' + t.identifier + '" data-provider="' + t.recommendedProvider + '">+ Make Agent-Ready</button>' +
+                    '</div>' +
                   "</td>" +
                 "</tr>"
               );
@@ -1183,8 +1223,10 @@ export function renderDashboardHtml(): string {
         g.innerHTML = projects.map(p => (
           '<div class="project-card">' +
             '<div class="project-card-title">' +
-              '<span>' + escapeHtml(p.name) + '</span>' +
-              '<span class="badge badge-project">' + escapeHtml(p.key) + '</span>' +
+              '<a href="' + escapeHtml(p.linearProjectUrl || 'https://linear.app') + '" target="_blank" rel="noopener noreferrer" style="color:var(--text); text-decoration:none; display:flex; justify-content:space-between; align-items:center; width:100%;" class="hover-underline" title="Open Linear Project">' +
+                '<span>' + escapeHtml(p.name) + '</span>' +
+                '<span class="badge badge-project">' + escapeHtml(p.key) + ' ↗</span>' +
+              '</a>' +
             '</div>' +
             '<div style="font-size: 12px; color: var(--text-muted); display: flex; justify-content: space-between;">' +
               '<span>Active Worktrees:</span>' +
@@ -1267,13 +1309,16 @@ export function renderDashboardHtml(): string {
                 '<div class="kanban-card">' +
                   '<div class="kanban-card-meta">' +
                     '<span class="badge badge-project" title="' + escapeHtml(proj) + '">' + escapeHtml(proj) + '</span>' +
-                    '<span style="font-weight:700;">' + t.identifier + '</span>' +
+                    '<a href="' + escapeHtml(t.url) + '" target="_blank" rel="noopener noreferrer" class="issue-link" title="Open ' + escapeHtml(t.identifier) + ' in Linear"><strong>' + escapeHtml(t.identifier) + ' ↗</strong></a>' +
                     prioHtml +
                   '</div>' +
-                  '<div class="kanban-card-title">' + escapeHtml(t.title) + '</div>' +
-                  '<div style="display:flex; justify-content:space-between; align-items:center; margin-top:4px;">' +
-                    '<span class="badge badge-' + t.recommendedProvider + '">' + t.recommendedProvider + '</span>' +
-                    '<button class="primary sm btn-promote" data-linear-id="' + t.linearId + '" data-id="' + t.identifier + '" data-provider="' + t.recommendedProvider + '">+ Ready</button>' +
+                  '<a href="' + escapeHtml(t.url) + '" target="_blank" rel="noopener noreferrer" class="kanban-card-title-link" title="Open in Linear">' + escapeHtml(t.title) + '</a>' +
+                  '<div style="display:flex; justify-content:space-between; align-items:center; margin-top:6px;">' +
+                    '<span class="badge badge-' + escapeHtml(t.recommendedProvider) + '">' + escapeHtml(t.recommendedProvider) + '</span>' +
+                    '<div style="display:flex; gap:4px; align-items:center;">' +
+                      '<a href="' + escapeHtml(t.url) + '" target="_blank" rel="noopener noreferrer"><button class="sm" title="Open in Linear">Linear ↗</button></a>' +
+                      '<button class="primary sm btn-promote" data-linear-id="' + t.linearId + '" data-id="' + t.identifier + '" data-provider="' + t.recommendedProvider + '">+ Ready</button>' +
+                    '</div>' +
                   '</div>' +
                 '</div>'
               );
@@ -1290,24 +1335,26 @@ export function renderDashboardHtml(): string {
           '<div class="kanban-cards">' +
             ((d.queue && d.queue.length > 0) ? d.queue.map(q => {
               const proj = q.project || "general";
+              const qUrl = q.linearUrl || ("https://linear.app/issue/" + q.identifier);
               return (
                 '<div class="kanban-card">' +
                   '<div class="kanban-card-meta">' +
                     '<span class="badge badge-project" title="' + escapeHtml(proj) + '">' + escapeHtml(proj) + '</span>' +
-                    '<span style="font-weight:700;">' + q.identifier + '</span>' +
-                    '<span class="badge badge-' + q.provider + '">' + q.provider + '</span>' +
+                    '<a href="' + escapeHtml(qUrl) + '" target="_blank" rel="noopener noreferrer" class="issue-link" title="Open ' + escapeHtml(q.identifier) + ' in Linear"><strong>' + escapeHtml(q.identifier) + ' ↗</strong></a>' +
+                    '<span class="badge badge-' + escapeHtml(q.provider || 'agent') + '">' + escapeHtml(q.provider || 'ready') + '</span>' +
                   '</div>' +
-                  '<div class="kanban-card-title">' + escapeHtml(q.title || "Queued Linear Issue") + '</div>' +
-                  '<div style="font-size:11px; color:var(--text-dim); display:flex; justify-content:space-between; align-items:center; margin-top:2px;">' +
+                  '<a href="' + escapeHtml(qUrl) + '" target="_blank" rel="noopener noreferrer" class="kanban-card-title-link" title="Open in Linear">' + escapeHtml(q.title || "Queued Linear Issue") + '</a>' +
+                  '<div style="font-size:11px; color:var(--text-dim); display:flex; justify-content:space-between; align-items:center; margin-top:6px;">' +
                     '<span>Status: <strong style="color:var(--accent);">Queued</strong></span>' +
-                    (q.priority ? '<span style="color:var(--text-dim); font-weight:600;">P' + q.priority + '</span>' : '') +
+                    '<a href="' + escapeHtml(qUrl) + '" target="_blank" rel="noopener noreferrer"><button class="sm" title="Open in Linear">Linear ↗</button></a>' +
                   '</div>' +
                 '</div>'
               );
             }).join("") : (d.funnel.agentReady > 0 ? (
               '<div class="kanban-card" style="background:rgba(56, 189, 248, 0.05); border-color:var(--accent); text-align:center; padding:14px;">' +
                 '<div style="font-weight:700; color:var(--accent); margin-bottom:4px;">' + d.funnel.agentReady + ' issue' + (d.funnel.agentReady > 1 ? 's' : '') + ' ready</div>' +
-                '<div style="font-size:11px; color:var(--text-muted);">Marked agent-ready in Linear.<br>Awaiting dispatcher claim.</div>' +
+                '<div style="font-size:11px; color:var(--text-muted); margin-bottom:8px;">Marked agent-ready in Linear.<br>Awaiting dispatcher claim.</div>' +
+                '<a href="https://linear.app" target="_blank" rel="noopener noreferrer"><button class="sm" style="width:100%;">View Queue in Linear ↗</button></a>' +
               '</div>'
             ) : '<div class="empty-state" style="padding:16px;">Queue is empty. Promote an issue from Todo to queue.</div>')) +
           '</div>' +
@@ -1326,16 +1373,17 @@ export function renderDashboardHtml(): string {
                 '<div class="kanban-card">' +
                   '<div class="kanban-card-meta">' +
                     '<span class="badge badge-project" title="' + escapeHtml(proj) + '">' + escapeHtml(proj) + '</span>' +
-                    '<span style="font-weight:700;">' + w.identifier + '</span>' +
-                    '<span class="badge badge-' + w.provider + '">' + w.provider + '</span>' +
+                    '<a href="' + escapeHtml(w.linearUrl) + '" target="_blank" rel="noopener noreferrer" class="issue-link" title="Open ' + escapeHtml(w.identifier) + ' in Linear"><strong>' + escapeHtml(w.identifier) + ' ↗</strong></a>' +
+                    '<span class="badge badge-' + escapeHtml(w.provider) + '">' + escapeHtml(w.provider) + '</span>' +
                   '</div>' +
-                  '<div class="kanban-card-title">' + escapeHtml(w.title) + '</div>' +
-                  '<div style="font-size:11px; color:var(--text-dim); display:flex; justify-content:space-between; align-items:center;">' +
-                    '<span>Stage: <strong>' + w.pipelineStage + '</strong></span>' +
+                  '<a href="' + escapeHtml(w.linearUrl) + '" target="_blank" rel="noopener noreferrer" class="kanban-card-title-link" title="Open in Linear">' + escapeHtml(w.title) + '</a>' +
+                  '<div style="font-size:11px; color:var(--text-dim); display:flex; justify-content:space-between; align-items:center; margin-top:4px;">' +
+                    '<span>Stage: <strong>' + escapeHtml(w.pipelineStage) + '</strong></span>' +
                     '<span>' + w.ageMin + 'm</span>' +
                   '</div>' +
-                  '<div style="display:flex; justify-content:flex-end; margin-top:4px;">' +
-                    '<button class="sm btn-open-orca" data-path="' + (w.worktreePath || '') + '">Open in Orca ↗</button>' +
+                  '<div style="display:flex; justify-content:flex-end; gap:6px; margin-top:6px;">' +
+                    '<a href="' + escapeHtml(w.linearUrl) + '" target="_blank" rel="noopener noreferrer"><button class="sm" title="Open in Linear">Linear ↗</button></a>' +
+                    '<button class="sm btn-open-orca" data-path="' + escapeHtml(w.worktreePath || '') + '" title="Open Worktree in Orca / Editor">Worktree ↗</button>' +
                   '</div>' +
                 '</div>'
               );
@@ -1356,14 +1404,15 @@ export function renderDashboardHtml(): string {
                 '<div class="kanban-card waiting">' +
                   '<div class="kanban-card-meta">' +
                     '<span class="badge badge-project" title="' + escapeHtml(proj) + '">' + escapeHtml(proj) + '</span>' +
-                    '<span style="font-weight:700;">' + w.identifier + '</span>' +
+                    '<a href="' + escapeHtml(w.linearUrl) + '" target="_blank" rel="noopener noreferrer" class="issue-link" title="Open ' + escapeHtml(w.identifier) + ' in Linear"><strong>' + escapeHtml(w.identifier) + ' ↗</strong></a>' +
                     '<span class="badge badge-waiting">Action Needed</span>' +
                   '</div>' +
-                  '<div class="kanban-card-title">' + escapeHtml(w.title) + '</div>' +
-                  '<div style="font-size:11px; color:var(--text-muted); background:var(--surface); padding:6px 8px; border-radius:4px; border:1px solid var(--border-subtle);">' +
+                  '<a href="' + escapeHtml(w.linearUrl) + '" target="_blank" rel="noopener noreferrer" class="kanban-card-title-link" title="Open in Linear">' + escapeHtml(w.title) + '</a>' +
+                  '<div style="font-size:11px; color:var(--text-muted); background:var(--surface); padding:6px 8px; border-radius:4px; border:1px solid var(--border-subtle); margin-top:4px;">' +
                     escapeHtml((w.openQuestion ? w.openQuestion.prompt || '' : '').slice(0, 140)) + '...' +
                   '</div>' +
-                  '<div style="display:flex; gap:6px; margin-top:4px; flex-wrap:wrap;">' +
+                  '<div style="display:flex; gap:6px; justify-content:flex-end; margin-top:6px; flex-wrap:wrap;">' +
+                    '<a href="' + escapeHtml(w.linearUrl) + '" target="_blank" rel="noopener noreferrer"><button class="sm" title="Open in Linear">Linear ↗</button></a>' +
                     '<button class="primary sm btn-approve" data-id="' + w.identifier + '" data-qid="' + (w.openQuestion ? w.openQuestion.id : '') + '">✓ Approve</button>' +
                     '<button class="sm btn-answer-modal" data-id="' + w.identifier + '" data-qid="' + (w.openQuestion ? w.openQuestion.id : '') + '">Answer...</button>' +
                   '</div>' +
@@ -1386,13 +1435,14 @@ export function renderDashboardHtml(): string {
                 '<div class="kanban-card">' +
                   '<div class="kanban-card-meta">' +
                     '<span class="badge badge-project" title="' + escapeHtml(proj) + '">' + escapeHtml(proj) + '</span>' +
-                    '<span style="font-weight:700;">' + w.identifier + '</span>' +
+                    '<a href="' + escapeHtml(w.linearUrl) + '" target="_blank" rel="noopener noreferrer" class="issue-link" title="Open ' + escapeHtml(w.identifier) + ' in Linear"><strong>' + escapeHtml(w.identifier) + ' ↗</strong></a>' +
                     '<span class="badge badge-pass">Gates Passed</span>' +
                   '</div>' +
-                  '<div class="kanban-card-title">' + escapeHtml(w.title) + '</div>' +
-                  '<div style="display:flex; gap:6px; justify-content:flex-end; margin-top:4px; flex-wrap:wrap;">' +
-                    (w.prUrl ? '<a href="' + w.prUrl + '" target="_blank"><button class="sm primary">View PR ↗</button></a>' : '') +
-                    '<button class="sm btn-open-orca" data-path="' + (w.worktreePath || '') + '">Orca ↗</button>' +
+                  '<a href="' + escapeHtml(w.linearUrl) + '" target="_blank" rel="noopener noreferrer" class="kanban-card-title-link" title="Open in Linear">' + escapeHtml(w.title) + '</a>' +
+                  '<div style="display:flex; gap:6px; justify-content:flex-end; margin-top:6px; flex-wrap:wrap;">' +
+                    (w.prUrl ? '<a href="' + escapeHtml(w.prUrl) + '" target="_blank" rel="noopener noreferrer"><button class="sm primary">View PR ↗</button></a>' : '') +
+                    '<a href="' + escapeHtml(w.linearUrl) + '" target="_blank" rel="noopener noreferrer"><button class="sm" title="Open in Linear">Linear ↗</button></a>' +
+                    '<button class="sm btn-open-orca" data-path="' + escapeHtml(w.worktreePath || '') + '" title="Open Worktree in Orca / Editor">Worktree ↗</button>' +
                   '</div>' +
                 '</div>'
               );
@@ -1421,6 +1471,9 @@ export function renderDashboardHtml(): string {
               '<div style="margin-top:8px; padding-top:8px; border-top:1px solid var(--border-subtle); font-size:11px; color:var(--text-dim); display:flex; justify-content:space-between;">' +
                 '<span>Pass Rate: <strong style="color:var(--text);">' + d.metrics.gatePassRate + '%</strong></span>' +
                 '<span>Avg: <strong style="color:var(--text);">' + d.metrics.avgCycleMinutes + 'm</strong></span>' +
+              '</div>' +
+              '<div style="margin-top:10px;">' +
+                '<a href="https://linear.app" target="_blank" rel="noopener noreferrer"><button class="sm" style="width:100%;">Open Linear Workspace ↗</button></a>' +
               '</div>' +
             '</div>' +
           '</div>' +
@@ -1492,8 +1545,9 @@ export function renderDashboardHtml(): string {
     function openAnswerModal(identifier, questionId) {
       activeModalTarget = { identifier, questionId };
       const item = currentData && currentData.activeWorktrees ? currentData.activeWorktrees.find(w => w.identifier === identifier) : null;
+      const linearUrl = item && item.linearUrl ? item.linearUrl : ("https://linear.app/issue/" + identifier);
       const promptSnippet = item && item.openQuestion ? item.openQuestion.prompt : "";
-      document.getElementById("modalTitle").textContent = "Answer Question · " + identifier;
+      document.getElementById("modalTitle").innerHTML = 'Answer Question · <a href="' + escapeHtml(linearUrl) + '" target="_blank" rel="noopener noreferrer" class="issue-link" title="Open in Linear">' + escapeHtml(identifier) + ' ↗</a>';
       document.getElementById("modalPrompt").textContent = promptSnippet || "No prompt details provided.";
       document.getElementById("modalAnswerInput").value = "";
       document.getElementById("answerModal").style.display = "flex";
@@ -1567,14 +1621,28 @@ export function renderDashboardHtml(): string {
       }
     }
 
-    function openWorktree(path) {
-      if (!path) return;
-      showToast("Opening worktree in Orca...", "info");
-      fetch("/api/actions/open", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ target: "orca", path })
-      });
+    async function openWorktree(path) {
+      if (!path) {
+        showToast("No worktree directory provisioned for this issue yet", "info");
+        return;
+      }
+      const dirName = path.split("/").slice(-1)[0] || path;
+      showToast("Opening worktree in Orca / Workspace (" + dirName + ")...", "info");
+      try {
+        const res = await fetch("/api/actions/open", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ target: "orca", path })
+        });
+        const d = await res.json();
+        if (d.ok) {
+          showToast("✓ Worktree opened in Orca / Workspace!", "success");
+        } else {
+          showToast(d.message || "Failed to open worktree", "error");
+        }
+      } catch (err) {
+        showToast("Open error: " + err.message, "error");
+      }
     }
 
     function scheduleNextPoll() {
