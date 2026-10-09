@@ -354,8 +354,14 @@ export function renderDashboardHtml(): string {
     }
     .roster-table {
       width: 100%;
+      min-width: 720px;
       border-collapse: collapse;
       font-size: 11px;
+    }
+    .roster-table .badge {
+      display: inline-block;
+      max-width: 100%;
+      overflow-wrap: anywhere;
     }
     .roster-table th {
       padding: 6px 10px;
@@ -799,7 +805,7 @@ export function renderDashboardHtml(): string {
       <div class="logo">
         <span class="logo-badge">Wingmate</span>
         <span>Architect Command Center</span>
-        <span style="font-size: 11px; font-weight: normal; color: var(--text-dim); margin-left: 4px;">Universal Automation Plugin · Orca / Claude / Codex</span>
+        <span style="font-size: 11px; font-weight: normal; color: var(--text-dim); margin-left: 4px;">Project agents and routines · Powered by Orca</span>
       </div>
       <div class="pulse-dot" id="pulseDot"></div>
       <div class="status-text" id="statusSummary">Connecting to local dispatcher...</div>
@@ -817,11 +823,7 @@ export function renderDashboardHtml(): string {
 
       <!-- Scope & Time Filters -->
       <select id="projectSelect" class="project-selector" onchange="fetchData()">
-        <option value="">All Pilot Projects</option>
-        <option value="bouncr">Bouncr</option>
-        <option value="smart-dispatcher">Smart Dispatcher</option>
-        <option value="jr-learning-plus">JR Learning Plus</option>
-        <option value="jr-travel-atlas">JR Travel Atlas</option>
+        <option value="">All Projects</option>
       </select>
       <select id="timeframeSelect" class="time-selector" onchange="fetchData()">
         <option value="today">Today</option>
@@ -847,7 +849,7 @@ export function renderDashboardHtml(): string {
       <!-- 1. Pipeline Funnel Strip -->
       <div class="funnel-container">
         <div class="section-title">
-          <span>Lifecycle Pipeline Funnel (Linear ➔ Isolated Worktrees ➔ PR ➔ Done)</span>
+          <span>Lifecycle Pipeline Funnel (Linear ➔ Worktrees ➔ PR ➔ Done)</span>
           <span id="funnelMeta" style="font-size: 11px; font-weight: normal; color: var(--text-dim);">Live Sync</span>
         </div>
         <div class="funnel-grid" id="funnelGrid">
@@ -891,7 +893,7 @@ export function renderDashboardHtml(): string {
       <!-- 5. Active Pilot Projects & Worktree Allocation -->
       <div>
         <div class="section-title">
-          <span>Active Pilot Projects & Worktree Allocation</span>
+          <span>Projects & Worktree Allocation</span>
         </div>
         <div class="projects-grid" id="projectsGrid">
           <!-- Injected via JS -->
@@ -901,7 +903,7 @@ export function renderDashboardHtml(): string {
       <!-- 6. Native Agent Harness Automations & Routines -->
       <div>
         <div class="section-title">
-          <span>Native Coding Agent Automations & Routines</span>
+          <span>Automations & Routine Evidence</span>
           <span style="font-size: 11px; font-weight: normal; color: var(--text-dim);">Orca ADE · Claude Code · OpenAI Codex</span>
         </div>
         <div class="automations-grid" id="automationsGrid">
@@ -1024,7 +1026,7 @@ export function renderDashboardHtml(): string {
       const tfSelect = document.getElementById("timeframeSelect");
       const proj = projSelect ? projSelect.value : "";
       const tf = tfSelect ? tfSelect.value : "7d";
-      const url = "/api/snapshot?timeframe=" + tf + (proj ? "&project=" + proj : "");
+      const url = "/api/snapshot?timeframe=" + tf + (proj ? "&project=" + encodeURIComponent(proj) : "");
 
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 6000);
@@ -1226,11 +1228,13 @@ export function renderDashboardHtml(): string {
                 '<span class="badge" style="background:var(--surface-hover); color:var(--text-muted);">' +
                   summary.running + ' working · ' + summary.assigned + ' queued · ' + summary.parked + ' parked' +
                   (summary.completed > 0 ? ' · ' + summary.completed + ' done' : '') +
+                  (summary.failed > 0 ? ' · ' + summary.failed + ' failed' : '') +
+                  (summary.unknown > 0 ? ' · ' + summary.unknown + ' unknown' : '') +
                 '</span>' +
               '</div>' +
               '<div class="roster-header-right">' +
-                '<span class="roster-provenance-tag" title="Recorded state from WRecord/RoleJob schema. No live OS process probe performed.">' +
-                  '📋 Record Evidence (Process Liveness Unverified)' +
+                '<span class="roster-provenance-tag" title="Recorded assignments; live process status has not been checked.">' +
+                  '📋 Recorded assignments · live status unverified' +
                 '</span>' +
               '</div>' +
             '</div>' +
@@ -1241,7 +1245,7 @@ export function renderDashboardHtml(): string {
                     '<th style="width: 150px;">Agent Role</th>' +
                     '<th style="width: 125px;">Provider</th>' +
                     '<th style="width: 140px;">Status</th>' +
-                    '<th>What This Agent Is Doing</th>' +
+                    '<th>Recorded Role / Stage</th>' +
                     '<th style="width: 160px;">Worktree / Ref</th>' +
                   '</tr>' +
                 '</thead>' +
@@ -1303,7 +1307,7 @@ export function renderDashboardHtml(): string {
                   '<span class="badge badge-project">' + escapeHtml(w.project) + '</span>' +
                   '<a href="' + escapeHtml(w.linearUrl || "https://linear.app") + '" target="_blank" rel="noopener noreferrer" class="issue-link" title="Open ' + escapeHtml(w.identifier) + ' in Linear"><strong>' + escapeHtml(w.identifier) + ' ↗</strong></a>' +
                   '<span class="badge badge-' + escapeHtml(w.provider) + '">' + escapeHtml(w.provider) + (w.model ? ' · ' + escapeHtml(w.model) : '') + '</span>' +
-                  '<span style="color: var(--text-dim);">Uptime: ' + w.ageMin + 'm</span>' +
+                  '<span style="color: var(--text-dim);">Claim age: ' + w.ageMin + 'm</span>' +
                   (w.worktreePath ? '<span style="color: var(--text-dim); font-family: var(--font-mono);">' + escapeHtml(w.worktreePath.split("/").slice(-2).join("/")) + '</span>' : '') +
                 '</div>' +
                 '<a href="' + escapeHtml(w.linearUrl || "https://linear.app") + '" target="_blank" rel="noopener noreferrer" style="color: var(--text); text-decoration: none;" class="hover-underline"><div class="card-title">' + escapeHtml(w.title) + '</div></a>' +
@@ -1401,6 +1405,13 @@ export function renderDashboardHtml(): string {
     }
 
     function renderProjects(projects, automations) {
+      const projectSelect = document.getElementById("projectSelect");
+      // An unfiltered snapshot contains the current configured project inventory.
+      if (projectSelect && !projectSelect.value) {
+        projectSelect.innerHTML = '<option value="">All Projects</option>' + (projects || []).map(p =>
+          '<option value="' + escapeHtml(p.key) + '">' + escapeHtml(p.name) + '</option>'
+        ).join("");
+      }
       const g = document.getElementById("projectsGrid");
       if (g && projects) {
         g.innerHTML = projects.map(p => (
@@ -1436,10 +1447,7 @@ export function renderDashboardHtml(): string {
         autoGrid.innerHTML = automations.map(a => {
           const badgeClass = a.harness === "orca" ? "badge-orca" : a.harness === "claude-code" ? "badge-claude" : a.harness === "codex" ? "badge-codex" : "badge-project";
           const harnessLabel = a.harness === "orca" ? "Orca Automation" : a.harness === "claude-code" ? "Claude Routine" : a.harness === "codex" ? "Codex Scheduled" : a.harness;
-          const statusLower = a.lastRunStatus.toLowerCase();
-          const isGreen = statusLower.includes("active") || statusLower.includes("ok") || statusLower.includes("ready");
-          const isWarn = statusLower.includes("not configured") || statusLower.includes("idle");
-          const statusColor = isGreen ? "var(--success)" : isWarn ? "var(--warning)" : "var(--text-muted)";
+          const statusColor = "var(--text-muted)";
           return (
             '<div class="automation-card">' +
               '<div class="automation-card-title">' +
@@ -1459,8 +1467,8 @@ export function renderDashboardHtml(): string {
                 '<span style="font-weight: 600; color: ' + statusColor + ';">' + escapeHtml(a.lastRunStatus) + '</span>' +
               '</div>' +
               '<div style="font-size: 11px; color: var(--text-dim); border-top: 1px solid var(--border-subtle); padding-top: 6px; margin-top: 4px; display: flex; justify-content: space-between;">' +
-                '<span>Last Active:</span>' +
-                '<span>' + (a.lastRunAt ? formatRelativeTime(a.lastRunAt) : a.configured ? 'None (awaiting first heartbeat)' : 'None (unconfigured)') + '</span>' +
+                '<span>Last Recorded Tick:</span>' +
+                '<span>' + (a.lastRunAt ? escapeHtml(new Date(a.lastRunAt).toLocaleString()) : 'No run evidence') + '</span>' +
               '</div>' +
               (a.provenance ? '<div style="font-size: 10px; color: var(--text-dim); font-family: var(--font-mono); margin-top: 4px;">Provenance: ' + escapeHtml(a.provenance) + '</div>' : '') +
             '</div>'

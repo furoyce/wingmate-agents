@@ -9,7 +9,7 @@ import type { LinearIssue, LinearPort } from "../ports";
 import type { Dirs } from "../shared/paths";
 import type { Clock } from "../shared/time";
 import { readText } from "../state/fs";
-import { readHeartbeat, stopRequested } from "../state/heartbeat";
+import { readLastTick, stopRequested } from "../state/heartbeat";
 import { readQueue } from "../state/queue";
 import { RecordSchema, type WRecord } from "../state/records";
 import type {
@@ -77,9 +77,9 @@ function coordinatorRoleStageDescription(r: WRecord): string {
 }
 
 function coordinatorAssignedStatus(r: WRecord): AgentAssignedStatus {
+  if (r.paused) return "parked";
   if (r.stage === "claimed") return "assigned";
-  if (r.stage === "awaiting-human" || r.stage === "review" || r.stage === "blocked" || r.paused)
-    return "parked";
+  if (r.stage === "awaiting-human" || r.stage === "review" || r.stage === "blocked") return "parked";
   if (r.stage === "done" || r.stage === "released") return "completed";
   if (r.stage === "cancelled") return "failed";
   if (r.stage === "working") {
@@ -189,7 +189,21 @@ export async function buildSnapshot(
 
   // 2. Read queue, heartbeat, and install state
   const queueData = await readQueue(dirs).catch(() => null);
-  const heartbeat = await readHeartbeat(dirs).catch(() => null);
+  let invalidTickEvidence = false;
+  let heartbeat = await readLastTick(dirs).catch(() => {
+    invalidTickEvidence = true;
+    return null;
+  });
+  if (
+    heartbeat &&
+    (heartbeat.kind !== "tick" ||
+      !Number.isFinite(Date.parse(heartbeat.at)) ||
+      Date.parse(heartbeat.at) > Date.parse(now))
+  ) {
+    invalidTickEvidence = true;
+    heartbeat = null;
+  }
+  if (invalidTickEvidence) problems.push("last_tick_invalid");
   const isStopRequested = await stopRequested(dirs).catch(() => false);
   const pausedScopes: string[] = await readPause(dirs).catch(() => [] as string[]);
 
@@ -203,7 +217,7 @@ export async function buildSnapshot(
   }
 
   // 3. Evaluate scheduler installation & heartbeat provenance
-  let schedulerStatus: "active" | "disabled" | "not_installed" | "stale" | "unknown" = "not_installed";
+  let schedulerStatus: "active" | "disabled" | "stale" | "unknown" = "unknown";
   let schedulerConfigured = false;
   let schedulerEnabled = false;
   let schedulerSchedule = "Not installed";
@@ -218,7 +232,7 @@ export async function buildSnapshot(
     schedulerLastRunStatus = "State unknown (malformed install.json)";
     schedulerProvenance = "Malformed local install state (install.json unparseable)";
   } else if (!installState) {
-    schedulerStatus = "not_installed";
+    schedulerStatus = "unknown";
     schedulerConfigured = false;
     schedulerEnabled = false;
     schedulerSchedule = "Unknown (no local installation record)";
@@ -232,7 +246,7 @@ export async function buildSnapshot(
     }
   } else if (!installState.automationId) {
     // Missing automationId cannot support active; record is incomplete
-    schedulerStatus = "disabled";
+    schedulerStatus = "unknown";
     schedulerConfigured = false;
     schedulerEnabled = false;
     schedulerSchedule = "Missing automationId in install.json";
@@ -253,20 +267,23 @@ export async function buildSnapshot(
   } else {
     // Valid install record with automationId and recorded enabled: true
     schedulerConfigured = true;
-    schedulerSchedule = "Every 5 min (.orca/automations)";
-    if (!heartbeat) {
-      schedulerStatus = "active";
-      schedulerEnabled = true;
+    schedulerEnabled = true;
+    schedulerSchedule = "Every 5 min (installer cadence; live schedule unverified)";
+    if (invalidTickEvidence) {
+      schedulerStatus = "unknown";
+      schedulerLastRunStatus = "Invalid tick evidence (timestamp or record); health unknown";
+      schedulerProvenance = "Recorded enabled in install.json; live state unverified, tick evidence invalid";
+    } else if (!heartbeat) {
+      schedulerStatus = "unknown";
       schedulerLastRunStatus = "Installed (awaiting first heartbeat)";
       schedulerProvenance =
         "Recorded enabled in install.json (live state unverified; awaiting first heartbeat)";
     } else {
-      const heartbeatAgeMin = Math.max(0, Math.round((Date.parse(now) - Date.parse(heartbeat.at)) / 60_000));
+      const heartbeatAgeMin = (Date.parse(now) - Date.parse(heartbeat.at)) / 60_000;
       if (heartbeatAgeMin > 15) {
         schedulerStatus = "stale";
-        schedulerEnabled = false; // Heartbeat health is stale, but schedulerConfigured remains true
-        schedulerLastRunStatus = `Stale (${heartbeatAgeMin}m ago; last: ${heartbeat.outcome})`;
-        schedulerProvenance = `Recorded enabled in install.json (live state unverified; heartbeat stale ${heartbeatAgeMin}m ago)`;
+        schedulerLastRunStatus = `Stale (${Math.floor(heartbeatAgeMin)}m ago; last: ${heartbeat.outcome})`;
+        schedulerProvenance = `Recorded enabled in install.json (live state unverified; tick stale ${Math.floor(heartbeatAgeMin)}m ago)`;
       } else {
         schedulerStatus = "active";
         schedulerEnabled = true;
@@ -656,26 +673,27 @@ export async function buildSnapshot(
     if (installMalformed) {
       projAutomationStatus = "unknown";
     } else if (!installState) {
-      projAutomationStatus = "not_installed";
+      projAutomationStatus = "unknown";
     } else if (isPaused) {
       projAutomationStatus = "paused";
-    } else if (!installState.enabled || !installState.automationId) {
+    } else if (!installState.automationId) {
+      projAutomationStatus = "unknown";
+    } else if (!installState.enabled) {
       projAutomationStatus = "disabled";
-    } else if (schedulerStatus === "stale") {
-      projAutomationStatus = "stale";
     } else {
-      projAutomationStatus = "active";
+      projAutomationStatus = schedulerStatus;
     }
 
-    const cadenceText = installMalformed
-      ? "Unknown"
-      : !installState
-        ? "Not installed"
-        : !installState.enabled || !installState.automationId
-          ? "Disabled"
+    const cadenceText =
+      installMalformed || !installState || !installState.automationId
+        ? "Unknown"
+        : !installState.enabled
+          ? "Recorded disabled"
           : isPaused
             ? "Paused"
-            : "Every 5 min";
+            : schedulerStatus === "stale"
+              ? "Recorded */5; heartbeat stale"
+              : "Recorded every 5 min";
 
     projects.push({
       key,
@@ -712,7 +730,7 @@ export async function buildSnapshot(
       name: "Claude Code Routine Relay",
       harness: "claude-code",
       targetProject: "Active Worktrees",
-      schedule: "Unobserved (host routine absent or unconfigured)",
+      schedule: "Unobserved (adapter not implemented)",
       lastRunStatus: "Adapter not implemented / unobserved",
       lastRunAt: null,
       configured: false,
@@ -722,7 +740,7 @@ export async function buildSnapshot(
       name: "Codex Scheduled Review Loop",
       harness: "codex",
       targetProject: "Pilot Worktrees",
-      schedule: "Unobserved (host routine absent or unconfigured)",
+      schedule: "Unobserved (adapter not implemented)",
       lastRunStatus: "Adapter not implemented / unobserved",
       lastRunAt: null,
       configured: false,

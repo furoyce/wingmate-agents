@@ -145,10 +145,10 @@ describe("server snapshot", () => {
   test("evaluates scheduler installation and heartbeat states correctly", async () => {
     const w = await world();
 
-    // 1. No install.json, heartbeat present (manual tick)
+    // 1. No install.json; a heartbeat alone does not reveal its trigger origin.
     await writeHeartbeat(w.dirs, {
       kind: "tick",
-      at: "2026-10-09T08:00:00.000Z",
+      at: w.ctx.now(),
       exitCode: 1,
       outcome: "idle",
       reason: null,
@@ -166,8 +166,8 @@ describe("server snapshot", () => {
     expect(orcaAuto?.schedule).toBe("Unknown (no local installation record)");
     expect(orcaAuto?.provenance).toContain("No local installation record; scheduler state unknown");
     expect(snap.projects[0]?.automation.enabled).toBe(false);
-    expect(snap.projects[0]?.automation.status).toBe("not_installed");
-    expect(snap.projects[0]?.automation.cadence).toBe("Not installed");
+    expect(snap.projects[0]?.automation.status).toBe("unknown");
+    expect(snap.projects[0]?.automation.cadence).toBe("Unknown");
 
     // 2. install.json with enabled: false
     const disabledInstall = {
@@ -189,7 +189,7 @@ describe("server snapshot", () => {
     expect(orcaAuto?.provenance).toContain("Recorded disabled in install.json (live state unverified)");
     expect(snap.projects[0]?.automation.enabled).toBe(false);
     expect(snap.projects[0]?.automation.status).toBe("disabled");
-    expect(snap.projects[0]?.automation.cadence).toBe("Disabled");
+    expect(snap.projects[0]?.automation.cadence).toBe("Recorded disabled");
 
     // 2b. install.json with automationId: null
     const missingAutoIdInstall = {
@@ -203,8 +203,8 @@ describe("server snapshot", () => {
     orcaAuto = snap.automations.find((a) => a.harness === "orca");
     expect(orcaAuto?.configured).toBe(false);
     expect(orcaAuto?.lastRunStatus).toContain("Unconfigured (missing automationId in install.json)");
-    expect(snap.projects[0]?.automation.status).toBe("disabled");
-    expect(snap.projects[0]?.automation.cadence).toBe("Disabled");
+    expect(snap.projects[0]?.automation.status).toBe("unknown");
+    expect(snap.projects[0]?.automation.cadence).toBe("Unknown");
 
     // 3. install.json malformed
     await writeAtomic(join(w.dirs.state, "install.json"), "{ invalid json");
@@ -242,7 +242,9 @@ describe("server snapshot", () => {
     expect(orcaAuto?.configured).toBe(true);
     expect(orcaAuto?.lastRunStatus).toContain("Stale");
     expect(snap.projects[0]?.automation.status).toBe("stale");
-    expect(snap.projects[0]?.automation.enabled).toBe(false);
+    expect(snap.projects[0]?.automation.enabled).toBe(true);
+
+    expect(snap.projects[0]?.automation.cadence).toBe("Recorded */5; heartbeat stale");
 
     // 5. install.json enabled: true, awaiting first heartbeat
     const wFresh = await world();
@@ -252,6 +254,65 @@ describe("server snapshot", () => {
     expect(orcaAutoFresh?.configured).toBe(true);
     expect(orcaAutoFresh?.lastRunAt).toBeNull();
     expect(orcaAutoFresh?.lastRunStatus).toContain("Installed (awaiting first heartbeat)");
+  });
+
+  test("scans cannot refresh tick evidence and invalid tick times remain unknown", async () => {
+    const w = await world();
+    await writeAtomic(
+      join(w.dirs.state, "install.json"),
+      JSON.stringify({
+        version: "0.1.0",
+        automationId: "auto-1",
+        worktreeId: "wt-1",
+        binPath: "/bin/wingmate",
+        sha256: "0".repeat(64),
+        viewUrls: [],
+        installedAt: w.ctx.now(),
+        enabled: true,
+      }),
+    );
+    const oldTick = new Date(w.clock.now().getTime() - 30 * 60_000).toISOString();
+    const tick = {
+      kind: "tick" as const,
+      at: oldTick,
+      exitCode: 1,
+      outcome: "idle" as const,
+      reason: null,
+      durationMs: 10,
+      pausedScopes: [],
+      linearAuth: { ok: true, expiresAt: null },
+      orcaReachable: true,
+      counts: {},
+    };
+    await writeHeartbeat(w.dirs, tick);
+    await writeHeartbeat(w.dirs, { ...tick, kind: "scan", at: w.ctx.now() });
+    let snap = await buildSnapshot(w.dirs, w.cfg, w.clock, null);
+    expect(snap.automations[0]?.lastRunAt).toBe(oldTick);
+    expect(snap.projects[0]?.automation.status).toBe("stale");
+    expect(snap.dispatcher?.kind).toBe("tick");
+    for (const at of ["not-a-date", new Date(w.clock.now().getTime() + 60_000).toISOString()]) {
+      await writeHeartbeat(w.dirs, { ...tick, at });
+      snap = await buildSnapshot(w.dirs, w.cfg, w.clock, null);
+      expect(snap.projects[0]?.automation.status).toBe("unknown");
+      expect(snap.automations[0]?.lastRunAt).toBeNull();
+      expect(snap.automations[0]?.lastRunStatus).toContain("Invalid tick evidence");
+      expect(snap.dispatcher).toBeNull();
+    }
+  });
+
+  test("paused claimed coordinators are counted parked", async () => {
+    const w = await world();
+    labeledByOwner(w, todo("paused-claim", "JRF-805"));
+    await runTick(w);
+    const record = await readRecord(w.dirs, "JRF-805");
+    if (!record) throw new Error("record missing");
+    record.stage = "claimed";
+    record.paused = true;
+    await writeRecord(w.dirs, record);
+    const snap = await buildSnapshot(w.dirs, w.cfg, w.clock, null);
+    expect(snap.activeWorktrees[0]?.roster[0]?.assignedStatus).toBe("parked");
+    expect(snap.activeWorktrees[0]?.rosterSummary.parked).toBe(1);
+    expect(snap.activeWorktrees[0]?.rosterSummary.assigned).toBe(0);
   });
 
   test("scopes roleJobs strictly to current cycle and attempt, separating nativeUiJobs into executionTasks", async () => {

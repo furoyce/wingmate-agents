@@ -49,6 +49,8 @@ const registry: Record<string, () => Promise<Handler>> = {
   resume: async () => (await import("./commands/pause")).pauseCommand,
   status: async () => (await import("./commands/status")).statusCommand,
   ui: async () => (await import("./commands/ui")).uiCommand,
+  package: async () => (await import("./commands/package")).packageCommand,
+  onboard: async () => (await import("./commands/onboard")).onboardCommand,
 };
 export interface MainDeps {
   handlers?: Record<string, () => Promise<Handler>>;
@@ -56,7 +58,7 @@ export interface MainDeps {
   err?: (text: string) => void;
 }
 const USAGE = `usage: wingmate <${Object.keys(registry).join("|")}> …\n`;
-const HELP = `${USAGE}\nwingmate tick [--precheck] [--dry-run] [--json]\nwingmate scan [--dry-run] [--json]\nwingmate issue <identifier> <verb> …\n`;
+const HELP = `${USAGE}\nwingmate tick [--precheck] [--dry-run] [--json]\nwingmate scan [--dry-run] [--json]\nwingmate issue <identifier> <verb> …\nwingmate package info [--json]\nwingmate package export --out <new-directory> [--json]\nwingmate onboard [--project <key>] [--json]\n`;
 
 /** Every error a command lets escape: `code: message` on stderr (never a stack trace, never stdout), exit 2. */
 export function reportError(
