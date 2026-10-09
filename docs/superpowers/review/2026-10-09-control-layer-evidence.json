@@ -1,0 +1,181 @@
+{
+  "baseline": "df9a0d9983dde71128ff89228c794eaba8cab730",
+  "scope": "Independent source review and isolated fake probes. No live service, credential, provider, cleanup or application changes. These observations identify unfixed defects, not passing safety tests.",
+  "cleanupPrototype": {
+    "base": "25c4a8529c56694befd37b3622ddb221290a8fd3",
+    "receiptSha256": "b44564f6036ff145cc8d1778f37c0e8c722b34b8aa67392eeb124a9cdf6153ef",
+    "resultSha256": "3ca5196fa1cf4cfcf9a74dc131a3ff75fd63018ee52266c960148312b95cccef",
+    "runtime": "Bun 1.4.2",
+    "sourceHashes": {
+      "src/ops/cleanup.ts": "84f4137768b0c7202051c19cd6b729da8c84d26c04e4ba88e1f0ae88082e30bc",
+      "src/cli/commands/cleanup.ts": "374a48e23497014b35ede26de6ad6340e3da419b4d64e480940f48e77181809c",
+      "src/machine/cleanup.ts": "ce71b3108a0e91b47fe2c7c5174b6b4a314545ab43fc74444a6f1d088a5632ca",
+      "src/config/schema.ts": "45823389324658f9163f2af419f45789351db2112923b24777b0937d96d5f7a4",
+      "src/cli/index.ts": "b69c512656d9c9cb4a1d30085d548da502b62a8c4cb543ec9ddebd3af42dd0f2",
+      "tests/unit/cli/cleanup.test.ts": "1bcd7e2b969ac14cc536b7cdd90e29e55510a9cc42134a584412f8efe429c2f6",
+      "tests/unit/config/load.test.ts": "69f9446716ff5ee7d7ecec9ce1e0fba74b5590d61de8dc564767c83a3259684b",
+      "src/cli/wire.ts": "d6109993bfca6b24ea2c671cbf6dc6d61a06982598ad7c4a818e846c5585294a",
+      "src/machine/guard.ts": "af12cfd70e04afc2835917e90d0ea90e0d721a220e476228902358096a825301",
+      "src/orca/client.ts": "5e9f5bbd88dab0d0000d1369c20917e550baffd1fbbaf21895b84edebc7e3a18",
+      "src/state/records.ts": "27c4408b6b1b29d2357d3c4554c2a04e708e08b85a7be399c73d33b15ab89bfc"
+    },
+    "observations": [
+      {
+        "case": "failed_fleet_clears_tracked_record",
+        "code": 0,
+        "recordWorktreeCleared": true,
+        "fakeFleetStillContainsOwned": true,
+        "removeCalls": 0,
+        "reportedSummary": {
+          "totalChecked": 1,
+          "removed": 1,
+          "deferred": 0,
+          "skipped": 0,
+          "orphanedRemoved": 0
+        }
+      },
+      {
+        "case": "force_removes_active_open_pr",
+        "code": 0,
+        "recordStageAfter": "working",
+        "recordPrAfter": "OPEN",
+        "recordWorktreeCleared": true,
+        "removed": true,
+        "terminalCloseCalls": 0,
+        "processSweepCalls": 0,
+        "reportedSummary": {
+          "totalChecked": 1,
+          "removed": 1,
+          "deferred": 0,
+          "skipped": 0,
+          "orphanedRemoved": 0
+        }
+      },
+      {
+        "case": "no_force_skips_grace",
+        "code": 0,
+        "graceHours": 24,
+        "ageMinutes": 0,
+        "removed": true,
+        "reportedSummary": {
+          "totalChecked": 1,
+          "removed": 1,
+          "deferred": 0,
+          "skipped": 0,
+          "orphanedRemoved": 0
+        }
+      },
+      {
+        "case": "project_orphaned_sweeps_foreign_repo",
+        "code": 0,
+        "removedForeign": true,
+        "terminalCloseCalls": 1,
+        "processSweepCalls": 1,
+        "reportedSummary": {
+          "totalChecked": 0,
+          "removed": 0,
+          "deferred": 0,
+          "skipped": 0,
+          "orphanedRemoved": 1
+        }
+      }
+    ]
+  },
+  "console": {
+    "receiptSha256": "848113a7c048b57f619565f6f648169760ae7a4f86fba26b9c88c9414b0ab30d",
+    "sourceHashes": {
+      "src/server/index.ts": "4ac6669f8ce472db9a9d9a4c2fe2049fdff857e16ce41710b2bab043c6756491",
+      "src/server/actions.ts": "73a5aa5b9d50cce225deb281e59eacc0c1bfed876f814d527a1ae22c10091b2b",
+      "src/server/html.ts": "07c7271d8bf277cf17d1d6014c79b9edb9283f293e11379a7132507ceee83f48",
+      "src/server/snapshot.ts": "6b3d43b28561b9385069cc71a0213434929fbfd2579d3c4b7c7b74b817f3ab21",
+      "src/ops/pause.ts": "614127940d41763e48a2cfed5c4623bdbe9b934f27921a1fd01d899fabed572a",
+      "src/plugin/worker.mjs": "fc79a1fa1944b33ddcfd7d27f58d129ffafbad31a0e4adc99ff07c1fcf245f24",
+      "src/plugin/settings.ts": "ec58deb84887a724a7952627edca2a1c780ead013b05ad7039113bf58de143da",
+      "src/package/bundle.ts": "48583b23859c904d2109676be541a9f9dcef66ac3248335237144d996860b782"
+    },
+    "observations": {
+      "foreignSnapshotStatus": 200,
+      "cors": "*",
+      "foreignTextPlainPauseStatus": 200,
+      "pausedScopes": [
+        "global"
+      ],
+      "projectAutomation": {
+        "type": "orca",
+        "cadence": "Recorded every 5 min",
+        "enabled": true,
+        "status": "active",
+        "provenance": "Recorded enabled in install.json (live state unverified; fresh heartbeat 1ms)"
+      },
+      "installConfigDifferentFromLoaded": true
+    },
+    "qualification": "Captured Bun.serve fetch handler only, no TCP listener/browser/provider/network/Orca/Linear/git process; only newly owned synthetic /tmp state mutated. Root worktree remains untouched. HTTP response/protected-route handling proof does not assert browser PNA behavior."
+  },
+  "integrationAuthorization": {
+    "receiptSha256": "f624e9d433701cb75d70f83a229755bd802459c9b70e0526477d0a817f60a1d6",
+    "resultSha256": "3ec627377917160d8ad01f0ce10750a43e79746e4b47464169b5879cd33acee7",
+    "sourceHashes": {
+      "src/machine/advance.ts": "dfddc2b7fa18279c9431579c5e31eeed36436fbd1b62a6b7add082193a053070",
+      "src/machine/reconcile.ts": "07c9ed00c4571b2efc09d33235c38eda2ad49ae1b97b0d641c7a1572ea03453a",
+      "src/machine/release.ts": "6ce6b77516080046225f3c3f6fe20e8fee33c9e6a80212d571e2c37c4f9705b8",
+      "src/machine/cleanup.ts": "dea45f17b128eb1bc3d7ed686e06275236dc9f52d626f228a1cb2e150ca95063",
+      "src/ports.ts": "557c9daeb905093f01efcaebb563c067fb30d50fc6d5bd498042b2b2908cbb7e"
+    },
+    "observations": {
+      "runtime": "1.4.2",
+      "scope": "temporary fake records and in-memory ports; no real provider, network, cleanup, worktrees or source edits",
+      "results": [
+        {
+          "case": "integration",
+          "expectedAuthorized": false,
+          "actualAuthorized": true,
+          "stageAfter": "done",
+          "doneSummary": [
+            "JRF-995"
+          ],
+          "attention": [],
+          "actualProviderCalls": 0,
+          "networkCalls": 0,
+          "realWorktreesCreated": 0
+        },
+        {
+          "case": "application",
+          "expectedAuthorized": false,
+          "actualAuthorized": false,
+          "stageAfter": "awaiting-human",
+          "doneSummary": [],
+          "attention": [
+            "possible_self_close"
+          ],
+          "actualProviderCalls": 0,
+          "networkCalls": 0,
+          "realWorktreesCreated": 0
+        },
+        {
+          "case": "human_non_approver",
+          "expectedAuthorized": false,
+          "actualAuthorized": false,
+          "stageAfter": "awaiting-human",
+          "doneSummary": [],
+          "attention": [
+            "possible_self_close"
+          ],
+          "actualProviderCalls": 0,
+          "networkCalls": 0,
+          "realWorktreesCreated": 0
+        },
+        {
+          "case": "unrelated_integration_review_to_progress",
+          "expectedAuthorized": false,
+          "actualAuthorized": true,
+          "stateName": "In Progress",
+          "qualification": "classification only; no resume execution",
+          "actualProviderCalls": 0,
+          "networkCalls": 0,
+          "realWorktreesCreated": 0
+        }
+      ]
+    },
+    "qualification": "Only the four-case fake probe was executed during this review. Existing unit/sim tests inspected as reusable coverage, not rerun. Source-level cleanup findings not newly reproduced."
+  }
+}
