@@ -1,16 +1,11 @@
 // src/server/actions.ts — Action handlers for the Wingmate Console API.
 import { spawn } from "node:child_process";
-import { mkdir, writeFile } from "node:fs/promises";
-import { join } from "node:path";
 import type { Config } from "../config/schema";
 import { setPause } from "../ops/pause";
 import type { LinearPort } from "../ports";
 import { WingmateError } from "../shared/errors";
-import { newUuid } from "../shared/ids";
 import type { Dirs } from "../shared/paths";
 import type { Clock } from "../shared/time";
-import { readText, writeAtomic } from "../state/fs";
-import { RecordSchema } from "../state/records";
 
 export interface ActionResponse {
   ok: boolean;
@@ -58,66 +53,19 @@ export async function handlePromoteIssue(
   };
 }
 
-/** Delivers an owner answer to an open question in an active worktree. */
+/** Fail closed until Console can use the verified owner-identity dispatcher resume flow. */
 export async function handleAnswerQuestion(
-  dirs: Dirs,
-  identifier: string,
-  questionId: string,
-  answerText: string,
-  linearClient?: LinearPort | null,
-  clock?: Clock,
+  _dirs: Dirs,
+  _identifier: string,
+  _questionId: string,
+  _answerText: string,
+  _linearClient?: LinearPort | null,
+  _clock?: Clock,
 ): Promise<ActionResponse> {
-  const recordFile = join(dirs.records, `${identifier}.json`);
-  const content = await readText(recordFile);
-  if (!content) {
-    throw new WingmateError("record_not_found", `No active record found for ${identifier}`);
-  }
-
-  const record = RecordSchema.parse(JSON.parse(content));
-  const worktreePath = record.worktree?.path;
-  if (!worktreePath) {
-    throw new WingmateError("worktree_missing", `Record ${identifier} has no worktree attached`);
-  }
-
-  // 1. Deliver answer file to worktree inbox
-  const inboxDir = join(worktreePath, ".wingmate", "inbox");
-  await mkdir(inboxDir, { recursive: true });
-
-  const answerFile = join(inboxDir, `answer-${questionId}.md`);
-  const answerMarkdown = `# Answer for ${questionId}\n\n${answerText.trim()}\n`;
-  await writeFile(answerFile, answerMarkdown, "utf8");
-
-  // 2. Post comment to Linear if linearClient is available
-  let commentId: string | null = null;
-  const q = record.questions.find((x) => x.id === questionId);
-  if (linearClient && record.linearId) {
-    try {
-      const res = await linearClient.createComment(record.linearId, answerText.trim(), {
-        id: newUuid(),
-        ...(q?.commentId ? { parentId: q.commentId } : {}),
-      });
-      commentId = res.id;
-    } catch {
-      // Non-fatal if worktree inbox file is already recorded
-    }
-  }
-
-  // 3. Update record state to resume agent immediately
-  if (q) {
-    q.status = "answered";
-    q.answeredAt = (clock?.now() ?? new Date()).toISOString();
-    if (commentId) q.answerCommentId = commentId;
-  }
-  if (record.stage === "awaiting-human") {
-    record.stage = "working";
-  }
-  await writeAtomic(recordFile, JSON.stringify(record, null, 2));
-
-  return {
-    ok: true,
-    message: `Answer recorded for question ${questionId}. Agent resumed in worktree.`,
-    data: { identifier, questionId, file: answerFile, commentId },
-  };
+  throw new WingmateError(
+    "console_answer_unavailable",
+    "Console answers are unavailable. Open the issue in Linear and reply to Wingmate's existing question as your signed-in owner account. The dispatcher checks and delivers eligible replies on its next tick. Submitting here posts nothing and does not resume an agent.",
+  );
 }
 
 /** Toggles pause state for global or project scope. */

@@ -67,7 +67,7 @@ export function renderQuestion(q: QuestionInput): string {
   const opts = q.options
     .map((o, i) => `${i + 1}. ${o}${q.recommend === i + 1 ? " (recommended)" : ""}`)
     .join("\n");
-  return `${MARK.question(q.questionId)}\n${q.mention} **Wingmate needs your decision** on ${q.identifier} (stage ${q.stage}).\n\n${q.context}\n\nOptions:\n${opts}\n\nReply with a number or free text in this thread, or answer in the Console. The agent is parked and costs nothing until you answer; Linear replies are picked up within 5 minutes, Console replies immediately. To stop instead, add the label \`human\`.`;
+  return `${MARK.question(q.questionId)}\n${q.mention} **Wingmate needs your decision** on ${q.identifier} (stage ${q.stage}).\n\n${q.context}\n\nOptions:\n${opts}\n\nReply with a number or free text in this thread as your signed-in owner account. The Console's Answer in Linear link opens the issue; Console answer submission is unavailable. The agent is parked until an eligible reply is delivered on the next dispatcher tick. To stop instead, add the label \`human\`.`;
 }
 
 export const renderBlocked = (b: {

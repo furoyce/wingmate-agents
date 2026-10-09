@@ -54,10 +54,31 @@ describe("server snapshot", () => {
     expect(snap.activeWorktrees).toHaveLength(1);
     const item = snap.activeWorktrees[0];
     expect(item?.identifier).toBe("JRF-801");
+    expect(item?.linearUrl).toBe("https://linear.app/jrf/issue/JRF-801");
     expect(item?.provider).toBe("claude");
     expect(item?.roleJobs).toHaveLength(1);
     expect(item?.roleJobs[0]?.role).toBe("plan-verifier");
     expect(item?.gates.plan?.verdict).toBe("PASS");
+  });
+
+  test("answer links use the existing Linear issue URL or fall back without an unsafe invented target", async () => {
+    const w = await world();
+    const issue = todo("link-1", "JRF-803");
+    labeledByOwner(w, issue);
+    await runTick(w);
+    expect((await buildSnapshot(w.dirs, w.cfg, w.clock, null)).activeWorktrees[0]?.linearUrl).toBeNull();
+    for (const url of [
+      "javascript:alert(1)",
+      "https://linear.app.evil.test/issue/JRF-803",
+      "https://user@linear.app/issue/JRF-803",
+    ]) {
+      const stored = w.linear.issues.get(issue.id);
+      if (!stored) throw new Error("issue missing");
+      stored.url = url;
+      expect(
+        (await buildSnapshot(w.dirs, w.cfg, w.clock, w.linear)).activeWorktrees[0]?.linearUrl,
+      ).toBeNull();
+    }
   });
 
   test("populates triage items from Linear unassigned Todo issues", async () => {

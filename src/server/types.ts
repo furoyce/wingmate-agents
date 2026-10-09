@@ -51,6 +51,7 @@ export interface GateSummary {
 export interface ActiveWorktreeItem {
   identifier: string;
   linearId: string;
+  linearUrl: string | null;
   title: string;
   project: string;
   repo: string;

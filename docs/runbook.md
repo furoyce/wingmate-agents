@@ -118,6 +118,7 @@ and it costs nothing.
 
 To answer:
 
+- In the Console, choose **Answer in Linear** to open the issue. Reply to Wingmate's existing question as your signed-in owner account. Console answer submission is unavailable until its verified owner-identity dispatcher delivery flow exists; it posts nothing, changes no question state, and does not resume an agent.
 - Reply on the issue as yourself, with a number or free text, either in the question's thread or as a new comment.
 - The next tick, within 5 minutes, picks the reply up. It writes the reply into the worktree's `.wingmate/inbox/`,
   points the coordinator at it, and swaps `Needs-Human` for `In-Agent`.
@@ -141,7 +142,7 @@ Delivery limits:
   then comment `continue`.
 
 If the coordinator decides your reply does not answer the question, it asks again: it edits the question comment and
-mentions you once more. Slice 1 sends no reminders and has no Console. To stop the issue instead of answering, add the
+mentions you once more. Automatic question reminders are not enabled. To stop the issue instead of answering, add the
 `human` label (section 5).
 
 ## 4. Requesting changes after review
@@ -700,7 +701,7 @@ These are the D14 residuals: places where the agent trust boundary is weaker tha
 
 The rest are slice-1 gaps:
 
-- **No Console.** Blocked comments that suggest confirming in the Console mean: comment `continue`.
+- **Console answers and confirmation are unavailable.** Use **Answer in Linear** for replies. Blocked comments that suggest confirming in the Console mean: comment `continue` as the owner.
 - **No 24-hour reminder for an unanswered question.**
 - **Usage and cost are not measured** (section 14).
 - **Mention markup is unverified.** The @mention markup in questions has not been checked live; your subscription to the

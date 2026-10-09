@@ -202,7 +202,7 @@ The built-in Web Console gives engineering architects complete visibility into t
 - **☀️ Light Theme by Default (Orca-Matched)**: Crisp, high-contrast light theme calibrated to match Orca's default interface color palette.
 - **🌙 Dark & 💻 System Modes**: Obsidian slate dark theme and dynamic system theme mode that automatically respects your OS appearance preference.
 - **☷ 6-Column Responsive Kanban Board**: Fluid, full-width responsive layout adapting dynamically to any screen width (ultra-wide monitors, laptops, and split panes) with **zero horizontal sliders**.
-- **⚡ 1-Click Plan Approval & Question Modals**: Immediate in-app approvals and custom review dialogs that resume blocked agent worktrees without leaving the dashboard.
+- **↗ Answer in Linear**: Open the issue and reply to Wingmate's existing question as your signed-in owner account. Console answer submission is unavailable; the dispatcher verifies and delivers eligible replies on its next tick.
 - **📊 Native Automations & Routines Panel**: Live tracking of Orca Dispatcher Automation, Claude Code Routine Relay, and Codex Scheduled Review loops.
 - **🔄 Smart Adaptive Polling**: 3s active tab polling, 10s background polling, and action-driven instant updates. Completely avoids Chromium's 6-socket per-origin bottleneck.
 
