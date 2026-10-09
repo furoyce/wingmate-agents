@@ -3,6 +3,7 @@
 import { resetMirrorGates } from "../kit/local";
 import type { LinearIssue } from "../ports";
 import type { WRecord } from "../state/records";
+import { acceptedAnswerKeys, answerDeliveryKey } from "./answerDelivery";
 import type { Ctx } from "./context";
 import { LinearWrites } from "./linearWrites";
 import type { Event } from "./reconcile";
@@ -41,12 +42,33 @@ async function answer(a: Advance, e: AnswerEvent): Promise<Seen> {
   if (!q) return "done";
   if (a.ro || a.budget.resumes <= 0) return "defer";
   // an earlier delivery whose turn was unconfirmed is judged from the pane before anything is sent again
-  if (r.attention.includes("resume_unconfirmed") && a.live === "working") return resumed(a, q, e.commentId);
+  const deliveryKey = answerDeliveryKey(r, q, e);
+  if (
+    a.live === "working" &&
+    q.answerCommentId === e.commentId &&
+    (await acceptedAnswerKeys(ctx, r)).has(deliveryKey)
+  )
+    return resumed(a, q, e.commentId);
   a.budget.resumes -= 1;
   q.answerCommentId = e.commentId;
   q.resumeAttempts += 1;
-  let d = await deliver(ctx, r, "answer", e.body, a.live ?? "exited", r.pipelineStage);
-  if (d === "exited") d = (await relaunch(ctx, r, "answer")) ? "turn_started" : "input_accepted";
+  await ctx.ledger.append({
+    at: ctx.now(),
+    issue: r.identifier,
+    type: "answer_authenticated",
+    data: {
+      kind: "answer",
+      cycle: r.cycle,
+      attempt: r.coordinator.attempt,
+      questionId: q.id,
+      askedAt: q.askedAt,
+      commentId: e.commentId,
+      deliveryKey,
+    },
+  });
+  let d = await deliver(ctx, r, "answer", e.body, a.live ?? "exited", r.pipelineStage, deliveryKey);
+  if (d === "exited")
+    d = (await relaunch(ctx, r, "answer", { deliveryKey })) ? "turn_started" : "input_accepted";
   a.launched = true;
   if (d === "turn_started") return resumed(a, q, e.commentId);
   if (q.resumeAttempts >= 2) {

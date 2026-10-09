@@ -14,6 +14,7 @@ import type {
 } from "../ports";
 import { readText } from "../state/fs";
 import { type WRecord, listRecords } from "../state/records";
+import { acceptedAnswerKeys, answerDeliveryKey } from "./answerDelivery";
 import { type CommentClass, classifyComment } from "./classify";
 import type { Ctx } from "./context";
 import { type Liveness, agentActiveAt, coordinatorLiveness, coordinatorRow, roleHandles } from "./liveness";
@@ -36,7 +37,15 @@ export type Event =
       at: string;
     }
   | { type: "comment"; identifier: string; commentId: string; cls: CommentClass; body: string; at: string }
-  | { type: "answer"; identifier: string; commentId: string; questionId: string; body: string; at: string }
+  | {
+      type: "answer";
+      identifier: string;
+      commentId: string;
+      questionId: string;
+      userId: string;
+      body: string;
+      at: string;
+    }
   | { type: "liveness"; identifier: string; liveness: Liveness }
   | { type: "attachment"; identifier: string; url: string };
 
@@ -268,16 +277,27 @@ export async function reconcile(ctx: Ctx): Promise<Reconciled> {
           x.issueId === r.linearId && x.createdAt > seenFrom(r) && !ownComments.get(r.identifier)?.has(x.id),
       )
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    const openQuestion = r.questions.find((x) => x.status === "open");
+    const accepted = await acceptedAnswerKeys(ctx, r);
     for (const c of fresh) {
-      const cls = classifyComment(c, r, approvers, activeAt);
+      const pendingKey =
+        openQuestion && c.userId && openQuestion.answerCommentId === c.id
+          ? answerDeliveryKey(r, openQuestion, {
+              commentId: c.id,
+              userId: c.userId,
+              body: c.body,
+              at: c.createdAt,
+            })
+          : null;
+      const cls = classifyComment(c, r, approvers, activeAt, pendingKey !== null && accepted.has(pendingKey));
       if (cls === "ignore") continue;
-      const openQuestion = r.questions.find((x) => x.status === "open");
-      if (cls === "answer" && openQuestion) {
+      if (cls === "answer" && openQuestion && c.userId) {
         events.push({
           type: "answer",
           identifier: r.identifier,
           commentId: c.id,
           questionId: openQuestion.id,
+          userId: c.userId,
           body: c.body,
           at: c.createdAt,
         });
