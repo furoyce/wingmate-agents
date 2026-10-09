@@ -33,6 +33,10 @@ receipts and `sweep.killed` are insufficient termination evidence. A failed,
 truncated, timed-out, malformed, or permission-limited process inventory is
 unknown. Process paths can veto removal but never authorize signalling.
 Older Orca adapters lacking explicit complete inventory metadata also defer.
+Terminal evidence requires a successful worktree-scoped response with
+`truncated: false`, matching `totalCount`, and host scope exactly `local` with
+no omitted hosts. Missing, malformed, partial or foreign-host metadata defers;
+the compatibility `terminalList` array alone never authorizes deletion.
 The observed **Orca 1.4.222** `worker-list --include-remote` response reports
 `scope: {run, source: "flag"}` and pagination, but no all-host coverage evidence.
 Consequently, records with `coordinator.childRunId` are currently deferred with

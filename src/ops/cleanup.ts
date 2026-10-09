@@ -273,8 +273,11 @@ async function planOne(ctx: Ctx, inv: Inventory, r: WRecord, opts: CleanupOption
   );
   if (latestRows.length !== 1 || JSON.stringify(latestRows[0]) !== JSON.stringify(row))
     return keep("resource_changed");
-  const terminals = await ctx.orca.terminalList(wt.id);
-  if (terminals.length || row.liveTerminalCount || row.agents.length) return keep("active_terminals");
+  if (!ctx.orca.cleanupTerminals) return keep("terminal_inventory_unverified");
+  const terminalObservation = await ctx.orca.cleanupTerminals(wt.id);
+  if (!terminalObservation.complete) return keep("terminal_inventory_incomplete");
+  if (terminalObservation.terminals.length || row.liveTerminalCount || row.agents.length)
+    return keep("active_terminals");
   if (!ctx.inspectCleanupProcesses) return keep("process_inventory_unverified");
   const processes = await ctx.inspectCleanupProcesses(wt.path);
   if (!processes.complete) return keep("process_inventory_incomplete");

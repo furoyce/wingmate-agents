@@ -101,6 +101,33 @@ export function parseTerminals(envelope: unknown): TerminalRow[] {
   }));
 }
 
+/** Cleanup cannot infer a complete empty inventory from terminalList's compatibility DTO. */
+export function parseCleanupTerminals(
+  envelope: unknown,
+  worktreeId: string,
+): { complete: boolean; terminals: TerminalRow[] } {
+  const env = Env.parse(envelope);
+  const terminals = parseTerminals(envelope);
+  const proof = z
+    .object({
+      truncated: z.literal(false),
+      totalCount: z.number().int().nonnegative(),
+      hostScope: z.object({
+        hostIds: z.tuple([z.literal("local")]),
+        omittedHostIds: z.array(z.string()).length(0),
+      }),
+    })
+    .safeParse(env.result);
+  return {
+    complete:
+      env.ok &&
+      proof.success &&
+      proof.data.totalCount === terminals.length &&
+      terminals.every((t) => t.worktreeId === worktreeId),
+    terminals,
+  };
+}
+
 export const joinPane = (row: TerminalRow): string => `${row.tabId}:${row.leafId}`;
 
 const WindowZ = z.object({

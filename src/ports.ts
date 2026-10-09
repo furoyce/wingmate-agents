@@ -165,6 +165,8 @@ export interface AutomationRow {
   workspaceMode?: string | null;
 }
 export interface OrcaPort {
+  /** Complete local terminal observation for a pinned worktree; an empty compatibility list is insufficient. */
+  cleanupTerminals?(worktreeId: string): Promise<{ complete: boolean; terminals: TerminalRow[] }>;
   /** Cleanup requires an explicitly complete, all-host worker inventory; old adapters cannot authorize removal. */
   cleanupWorkers?(runId: string): Promise<{ complete: boolean; workers: WorkerRow[] }>;
   worktreePs(): Promise<FleetSnapshot>;

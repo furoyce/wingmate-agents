@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { GhCli } from "../../../src/gh/cli";
 import { OrcaClient } from "../../../src/orca/client";
-import { parseFleet } from "../../../src/orca/fleet";
+import { parseCleanupTerminals, parseFleet } from "../../../src/orca/fleet";
 import { fakeExec } from "../../fakes/fakeExec";
 
 test("fleet compatibility defaults do not become cleanup completeness evidence", () => {
@@ -95,4 +95,44 @@ test("fresh open PR query requires successful complete JSON and never invokes cr
     ]);
     expect(exec.calls[0]?.opts.cwd).toBe("/");
   }
+});
+
+test("cleanup terminal observation preserves completeness and pins local worktree scope", () => {
+  // Exact result keys/metadata from the coordinator's read-only Orca 1.4.222 capture.
+  const terminal = {
+    handle: "term-owned",
+    tabId: "tab",
+    leafId: "leaf",
+    worktreeId: "wt",
+    title: "",
+    lastOutputAt: null,
+  };
+  const result = {
+    terminals: [terminal],
+    hostScope: { hostIds: ["local"], omittedHostIds: [] },
+    topologyRevisions: { wt: 1 },
+    totalCount: 1,
+    truncated: false,
+  };
+  expect(parseCleanupTerminals({ ok: true, result }, "wt")).toMatchObject({
+    complete: true,
+    terminals: [terminal],
+  });
+  const empty = { ...result, terminals: [], totalCount: 0 };
+  expect(parseCleanupTerminals({ ok: true, result: empty }, "wt")).toEqual({ complete: true, terminals: [] });
+  for (const incomplete of [
+    { terminals: [] },
+    { ...empty, truncated: true },
+    { ...empty, truncated: "false" },
+    { ...empty, hostScope: undefined },
+    { ...empty, hostScope: { hostIds: ["local"] } },
+    { ...empty, hostScope: { hostIds: ["remote"], omittedHostIds: [] } },
+    { ...empty, hostScope: { hostIds: ["local"], omittedHostIds: ["unreachable"] } },
+    { ...empty, totalCount: 1 },
+    { ...empty, totalCount: "0" },
+    { ...result, terminals: [{ ...terminal, worktreeId: "foreign" }] },
+  ])
+    expect(parseCleanupTerminals({ ok: true, result: incomplete }, "wt").complete).toBe(false);
+  expect(parseCleanupTerminals({ ok: false, result: empty }, "wt").complete).toBe(false);
+  expect(() => parseCleanupTerminals({ ok: true, result: { ...empty, terminals: [{}] } }, "wt")).toThrow();
 });

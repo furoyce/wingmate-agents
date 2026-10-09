@@ -22,6 +22,7 @@ const LINEAR: Record<keyof LinearPort, Kind> = {
   subscribe: "write",
 };
 const ORCA: Record<keyof OrcaPort, Kind> = {
+  cleanupTerminals: "read",
   cleanupWorkers: "read",
   worktreePs: "read",
   worktreeCurrent: "read",

@@ -6,6 +6,7 @@ import type { Reconciled } from "../../../src/machine/reconcile";
 import { type TickSummary, tick } from "../../../src/machine/tick";
 import { NativeJobSchema } from "../../../src/native/protocol";
 import { type CleanupOptions, cleanupOps } from "../../../src/ops/cleanup";
+import { parseCleanupTerminals } from "../../../src/orca/fleet";
 import { requestStop } from "../../../src/state/heartbeat";
 import { TickLock } from "../../../src/state/lock";
 import { readRecord, recordText, writeRecord } from "../../../src/state/records";
@@ -481,5 +482,33 @@ describe("safe shared cleanup", () => {
     };
     expect((await cleanupOps(ctx, { ...options, dryRun: true })).cleaned).toEqual([]);
     expect(await snapshot(w.root)).toEqual(before);
+  });
+  test("partial terminal inventory is retained even when its compatibility array is empty", async () => {
+    const w = await world();
+    w.orca.cleanupTerminals = async () =>
+      parseCleanupTerminals(
+        {
+          ok: true,
+          result: {
+            terminals: [],
+            truncated: true,
+            totalCount: 0,
+            hostScope: { hostIds: ["local"], omittedHostIds: ["remote"] },
+          },
+        },
+        w.wt.id,
+      );
+    await retained(w, "terminal_inventory_incomplete");
+  });
+  test("terminal inspection failure and absent completeness never authorize removal", async () => {
+    const w = await world();
+    w.orca.cleanupTerminals = async () =>
+      parseCleanupTerminals({ ok: true, result: { terminals: [] } }, w.wt.id);
+    await retained(w, "terminal_inventory_incomplete");
+    const other = await world();
+    other.orca.cleanupTerminals = async () => {
+      throw new Error("terminal list unavailable");
+    };
+    await retained(other, "unverified:internal_error");
   });
 });

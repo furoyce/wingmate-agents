@@ -185,6 +185,9 @@ export class FakeOrca implements OrcaPort {
     await this.rec("terminalList", wt);
     return structuredClone(this.terminals.get(wt) ?? []);
   }
+  async cleanupTerminals(wt: string) {
+    return { complete: true, terminals: await this.terminalList(wt) };
+  }
   async accountList() {
     await this.rec("accountList", null);
     return structuredClone(this.rateLimits);

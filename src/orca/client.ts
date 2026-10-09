@@ -11,7 +11,7 @@ import type {
   WorkerRow,
 } from "../ports";
 import { OrcaError, type OrcaOptions, orca } from "./cli";
-import { parseFleet, parseRateLimits, parseTerminals } from "./fleet";
+import { parseCleanupTerminals, parseFleet, parseRateLimits, parseTerminals } from "./fleet";
 
 type R = Record<string, unknown>;
 const rec = (v: unknown): R | undefined =>
@@ -254,6 +254,15 @@ export class OrcaClient implements OrcaPort {
       ok: true,
       result: await this.call(["terminal", "list", "--worktree", `id:${wt}`], 15_000),
     });
+  }
+  async cleanupTerminals(wt: string): Promise<{ complete: boolean; terminals: TerminalRow[] }> {
+    return parseCleanupTerminals(
+      {
+        ok: true,
+        result: await this.call(["terminal", "list", "--worktree", `id:${wt}`], 15_000),
+      },
+      wt,
+    );
   }
   async accountList(): Promise<RateLimits> {
     return parseRateLimits({ ok: true, result: await this.call(["account", "list"], 15_000) });
