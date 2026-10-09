@@ -231,18 +231,19 @@ export async function startServer(options: ServerOptions = {}): Promise<Wingmate
         const sessionId = gate.session(req)?.id ?? "";
         let timer: ReturnType<typeof setInterval> | null = null;
         let clientSend: ((msg: string) => void) | null = null;
-        let close: (() => void) | null = null;
+        let dispose = () => {};
+        let disposed = false;
 
         const body = new ReadableStream({
           start(controller) {
-            const cleanup = () => {
+            dispose = () => {
+              if (disposed) return;
+              disposed = true;
               if (timer) clearInterval(timer);
               timer = null;
               if (clientSend) sseClients.delete(clientSend);
-              if (close) sseClosers.delete(close);
-            };
-            close = () => {
-              cleanup();
+              sseClosers.delete(dispose);
+              req.signal.removeEventListener("abort", dispose);
               try {
                 controller.close();
               } catch {
@@ -250,26 +251,31 @@ export async function startServer(options: ServerOptions = {}): Promise<Wingmate
               }
             };
             clientSend = (data: string) => {
+              // Every delivery checks the session without extending its lifetime, including broadcasts between heartbeats.
+              if (disposed) return;
+              if (!gate.live(sessionId)) return dispose();
               try {
                 controller.enqueue(new TextEncoder().encode(`data: ${data}\n\n`));
               } catch {
-                cleanup();
+                dispose();
               }
             };
             sseClients.add(clientSend);
-            sseClosers.add(close);
+            sseClosers.add(dispose);
+            req.signal.addEventListener("abort", dispose, { once: true });
+            if (req.signal.aborted) return dispose();
 
             // Initial connected message
             clientSend(JSON.stringify({ type: "connected", at: clock.now() }));
+            if (disposed) return;
 
             // Keep-alive below the server's idle timeout; an expired or revoked session ends the stream (no late events).
             timer = setInterval(() => {
-              if (!gate.live(sessionId)) return close?.();
               clientSend?.(JSON.stringify({ type: "heartbeat", at: clock.now() }));
             }, sseIntervalMs);
           },
           cancel() {
-            close?.();
+            dispose();
           },
         });
 

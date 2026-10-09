@@ -54,10 +54,11 @@ export function dispatcherHealth(
   if (invalid)
     return { state: "unknown", outcome: null, ageMin: null, detail: "Last tick evidence is invalid" };
   if (!heartbeat) return { state: "unknown", outcome: null, ageMin: null, detail: "No tick observed" };
-  const ageMin = Math.max(0, Math.floor((Date.parse(nowIso) - Date.parse(heartbeat.at)) / 60_000));
+  const ageMs = Math.max(0, Date.parse(nowIso) - Date.parse(heartbeat.at));
+  const ageMin = Math.floor(ageMs / 60_000);
   const base = { outcome: heartbeat.outcome, ageMin };
   const reason = heartbeat.reason ? `: ${heartbeat.reason}` : "";
-  if (ageMin > HEARTBEAT_STALE_MIN)
+  if (ageMs > HEARTBEAT_STALE_MIN * 60_000)
     return { ...base, state: "stale", detail: `Last tick ${ageMin}m ago (${heartbeat.outcome})` };
   if (heartbeat.outcome === "paused")
     return { ...base, state: "paused", detail: `Last tick ${ageMin}m ago: paused` };
@@ -102,7 +103,8 @@ function coordinatorRoleStageDescription(r: WRecord): string {
   }
   if (r.stage === "review") return "Recorded stage: review (PR open, parked for review)";
   if (r.stage === "blocked") return "Recorded stage: blocked (safety gate / limit)";
-  if (r.stage === "done" || r.stage === "released") return `Recorded stage: ${r.stage} (completed)`;
+  if (r.stage === "done") return "Recorded stage: done (completed)";
+  if (r.stage === "released") return "Recorded stage: ownership released";
   if (r.stage === "cancelled") return "Recorded stage: cancelled";
   if (r.stage === "working") {
     return `Recorded pipeline stage: ${r.pipelineStage}`;
@@ -114,7 +116,7 @@ function coordinatorAssignedStatus(r: WRecord): AgentAssignedStatus {
   if (r.paused) return "parked";
   if (r.stage === "claimed") return "assigned";
   if (r.stage === "awaiting-human" || r.stage === "review" || r.stage === "blocked") return "parked";
-  if (r.stage === "done" || r.stage === "released") return "completed";
+  if (r.stage === "done") return "completed";
   if (r.stage === "cancelled") return "failed";
   if (r.stage === "working") {
     return r.coordinator.startedAt ? "running" : "assigned";
@@ -321,8 +323,8 @@ export async function buildSnapshot(
       schedulerProvenance =
         "Recorded enabled in install.json (live state unverified; awaiting first heartbeat)";
     } else {
-      const heartbeatAgeMin = (Date.parse(now) - Date.parse(heartbeat.at)) / 60_000;
-      if (heartbeatAgeMin > HEARTBEAT_STALE_MIN) {
+      const heartbeatAgeMin = health.ageMin ?? 0;
+      if (health.state === "stale") {
         schedulerStatus = "stale";
         schedulerLastRunStatus = `Stale (${Math.floor(heartbeatAgeMin)}m ago; last: ${heartbeat.outcome})`;
         schedulerProvenance = `Recorded enabled in install.json (live state unverified; tick stale ${Math.floor(heartbeatAgeMin)}m ago)`;
@@ -413,7 +415,7 @@ export async function buildSnapshot(
       terminalHandle: r.coordinator.terminalHandle,
       paneKey: r.coordinator.paneKey,
       startedAt: r.coordinator.startedAt,
-      completedAt: r.stage === "done" || r.stage === "released" ? r.updatedAt : null,
+      completedAt: r.stage === "done" ? r.updatedAt : null,
       verdict: null,
     });
 
@@ -618,15 +620,15 @@ export async function buildSnapshot(
   ).length;
   const reviewReadyCount = activeRecords.filter((r) => r.stage === "review").length;
 
-  // Records carry no merge receipt, so nothing here is merge-verified: recorded done, released and Linear-completed are reported
-  // separately and the total is "recorded completions", never "merged" or "shipped".
-  const recordedDone = recentArchived.filter((r) => r.stage === "done").length;
-  const released = recentArchived.filter((r) => r.stage === "released").length;
-  const completedFromArchive = recordedDone + released;
-  const completedFromLinear = linearIssues.filter(
-    (li) => li.state.type === "completed" && li.updatedAt >= sinceIso,
-  ).length;
-  const doneCount = Math.max(completedFromArchive, completedFromLinear);
+  // Release relinquishes ownership; only recorded done or Linear-completed issues are completion evidence.
+  // Count unique immutable issue IDs across both observed sources and repeated archive cycles; sources may overlap.
+  // Neither source carries a merge receipt, and unavailable sources cannot establish a complete inventory.
+  const recordedDoneIds = new Set(recentArchived.filter((r) => r.stage === "done").map((r) => r.linearId));
+  const releasedIds = new Set(recentArchived.filter((r) => r.stage === "released").map((r) => r.linearId));
+  const sourceCompletedIds = new Set(
+    linearIssues.filter((li) => li.state.type === "completed" && li.updatedAt >= sinceIso).map((li) => li.id),
+  );
+  const doneCount = new Set([...recordedDoneIds, ...sourceCompletedIds]).size;
 
   const funnel: FunnelStats = {
     todo: todoCount,
@@ -636,7 +638,12 @@ export async function buildSnapshot(
     reviewReady: reviewReadyCount,
     done: doneCount,
     agentReadyBasis: queueData ? "queue-eligible" : "linear-labels",
-    completion: { recordedDone, released, sourceCompleted: completedFromLinear, mergeVerified: null },
+    completion: {
+      recordedDone: recordedDoneIds.size,
+      released: releasedIds.size,
+      sourceCompleted: sourceCompletedIds.size,
+      mergeVerified: null,
+    },
   };
 
   // 7. Throughput Metrics
@@ -683,7 +690,7 @@ export async function buildSnapshot(
 
   const avgCycleMinutes =
     allRecordsInScope.length > 0 ? Math.round(totalMinutes / Math.max(1, allRecordsInScope.length)) : 0;
-  const gatePassRate = totalGates > 0 ? Math.round((passedGates / totalGates) * 1000) / 10 : 100;
+  const gatePassRate = totalGates > 0 ? Math.round((passedGates / totalGates) * 1000) / 10 : null;
 
   const metrics: ThroughputMetrics = {
     timeframe,
@@ -692,6 +699,8 @@ export async function buildSnapshot(
     inProgressCount: inAgentCount + waitingHumanCount + reviewReadyCount,
     avgCycleMinutes,
     gatePassRate,
+    gatesPassed: passedGates,
+    gatesObserved: totalGates,
     tokens: totalTokens,
     costUsd: Math.round(totalCost * 100) / 100,
     byProvider,
@@ -708,9 +717,12 @@ export async function buildSnapshot(
       queueData?.items.filter((i) => i.project === key && i.status === "eligible").length ?? 0;
     const skippedCount =
       queueData?.items.filter((i) => i.project === key && i.status !== "eligible").length ?? 0;
-    const completedCount = recentArchived.filter(
-      (r) => r.project === key && (r.stage === "done" || r.stage === "released"),
-    ).length;
+    const completedCount = new Set(
+      recentArchived.filter((r) => r.project === key && r.stage === "done").map((r) => r.linearId),
+    ).size;
+    const releasedCount = new Set(
+      recentArchived.filter((r) => r.project === key && r.stage === "released").map((r) => r.linearId),
+    ).size;
 
     // Slot is held if there is a working or claimed coordinator
     const holder = activeForProj.find((r) => r.stage === "working" || r.stage === "claimed");
@@ -723,7 +735,7 @@ export async function buildSnapshot(
         ? "global"
         : null;
     const isPaused = pausedBy !== null;
-    const projAutomationEnabled = schedulerEnabled && !isPaused;
+    const projAutomationEnabled = pauseStateKnown && schedulerEnabled && !isPaused;
     let projAutomationStatus: ProjectSummary["automation"]["status"] = "not_installed";
     if (installMalformed || !pauseStateKnown) {
       projAutomationStatus = "unknown";
@@ -761,6 +773,7 @@ export async function buildSnapshot(
       queuedCount,
       skippedCount,
       completedCount,
+      releasedCount,
       paused: pausedBy,
       slotHeldBy: holder ? holder.identifier : null,
       automation: {

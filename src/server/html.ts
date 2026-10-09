@@ -1125,8 +1125,8 @@ export function renderDashboardHtml(csrfToken = ""): string {
 
     // Released and source-completed work is not delivery: merges are only claimed with a merge receipt.
     function completionText(c) {
-      if (!c) return "Recorded completions · merge unverified";
-      return "Done " + c.recordedDone + " · released " + c.released + " · Linear completed " + c.sourceCompleted +
+      if (!c) return "Unique observed completions · merge unverified";
+      return "Done " + c.recordedDone + " · ownership released " + c.released + " · Linear completed " + c.sourceCompleted +
         (c.mergeVerified === null || c.mergeVerified === undefined ? " · merge unverified" : " · merge-verified " + c.mergeVerified);
     }
 
@@ -1161,7 +1161,7 @@ export function renderDashboardHtml(csrfToken = ""): string {
           '<div class="step-subtext">Implementation done</div>',
         '</div>',
         '<div class="funnel-step">',
-          '<div class="step-label">6. Completed</div>',
+          '<div class="step-label">6. Observed Completions</div>',
           '<div class="step-count" style="color: var(--success);">' + f.done + '</div>',
           '<div class="step-subtext">' + completionText(f.completion) + '</div>',
         '</div>'
@@ -1404,6 +1404,14 @@ export function renderDashboardHtml(csrfToken = ""): string {
       );
     }
 
+    function gateRateText(m) {
+      return m.gatePassRate == null ? "No observed gates" : m.gatePassRate + "%";
+    }
+
+    function gateEvidenceText(m) {
+      return (m.gatesPassed || 0) + " / " + (m.gatesObserved || 0) + " observed PASS/FAIL verdicts passed";
+    }
+
     function renderMetrics(m) {
       const g = document.getElementById("statsGrid");
       if (!m) return;
@@ -1411,7 +1419,7 @@ export function renderDashboardHtml(csrfToken = ""): string {
 
       g.innerHTML = [
         '<div class="stat-card">',
-          '<div class="stat-label">Issues Completed</div>',
+          '<div class="stat-label">Unique Observed Completions</div>',
           '<div class="stat-val" style="color: var(--success);">' + m.completedCount + '</div>',
           '<div class="step-subtext">' + m.inProgressCount + ' currently in-agent</div>',
         '</div>',
@@ -1422,8 +1430,8 @@ export function renderDashboardHtml(csrfToken = ""): string {
         '</div>',
         '<div class="stat-card">',
           '<div class="stat-label">Gate Pass Rate</div>',
-          '<div class="stat-val" style="color: var(--accent);">' + m.gatePassRate + '%</div>',
-          '<div class="step-subtext">8-Gate compliance</div>',
+          '<div class="stat-val" style="color: var(--accent);">' + gateRateText(m) + '</div>',
+          '<div class="step-subtext">' + gateEvidenceText(m) + '</div>',
         '</div>',
         '<div class="stat-card">',
           '<div class="stat-label">Token Consumption</div>',
@@ -1460,8 +1468,11 @@ export function renderDashboardHtml(csrfToken = ""): string {
               '<strong>' + p.queuedCount + ' / ' + (p.skippedCount || 0) + '</strong>' +
             '</div>' +
             '<div style="font-size: 12px; color: var(--text-muted); display: flex; justify-content: space-between;">' +
-              '<span>Completed:</span>' +
+              '<span>Unique recorded done:</span>' +
               '<strong style="color: var(--success);">' + p.completedCount + '</strong>' +
+            '</div>' +
+            '<div style="font-size: 12px; color: var(--text-muted); display: flex; justify-content: space-between;">' +
+              '<span>Ownership released:</span><strong>' + (p.releasedCount || 0) + '</strong>' +
             '</div>' +
             '<div style="font-size: 11px; color: var(--text-dim); border-top: 1px solid var(--border-subtle); padding-top: 6px; margin-top: 4px; display: flex; justify-content: space-between;">' +
               '<span>Slot: ' + (p.slotHeldBy ? '<span style="color: var(--warning);">Held by ' + escapeHtml(p.slotHeldBy) + '</span>' : '<span style="color: var(--success);">Available</span>') + '</span>' +
@@ -1680,7 +1691,7 @@ export function renderDashboardHtml(csrfToken = ""): string {
                   '<div class="kanban-card-meta">' +
                     '<span class="badge badge-project" title="' + escapeHtml(proj) + '">' + escapeHtml(proj) + '</span>' +
                     '<a href="' + escapeHtml(w.linearUrl || "https://linear.app") + '" target="_blank" rel="noopener noreferrer" class="issue-link" title="Open ' + escapeHtml(w.identifier) + ' in Linear"><strong>' + escapeHtml(w.identifier) + ' ↗</strong></a>' +
-                    '<span class="badge badge-pass">Gates Passed</span>' +
+                    '<span class="badge">In review</span>' +
                   '</div>' +
                   '<a href="' + escapeHtml(w.linearUrl || "https://linear.app") + '" target="_blank" rel="noopener noreferrer" class="kanban-card-title-link" title="Open in Linear">' + escapeHtml(w.title) + '</a>' +
                   rosterSnippet +
@@ -1704,7 +1715,7 @@ export function renderDashboardHtml(csrfToken = ""): string {
           '<div class="kanban-cards">' +
             '<div class="kanban-card" style="background:rgba(16, 185, 129, 0.05); border-color:rgba(16, 185, 129, 0.2);">' +
               '<div style="display:flex; align-items:center; justify-content:space-between;">' +
-                '<span style="font-size:11px; color:var(--text-dim); text-transform:uppercase; font-weight:700;">Recorded</span>' +
+                '<span style="font-size:11px; color:var(--text-dim); text-transform:uppercase; font-weight:700;">Unique observed completions</span>' +
                 '<span class="badge">Merge unverified</span>' +
               '</div>' +
               '<div style="font-size:24px; font-weight:800; font-family:var(--font-mono); color:var(--success); margin:4px 0;">' +
@@ -1714,7 +1725,7 @@ export function renderDashboardHtml(csrfToken = ""): string {
                 escapeHtml(completionText(d.funnel.completion)) + ' in <strong>' + escapeHtml(d.metrics.timeframe) + '</strong> window.' +
               '</div>' +
               '<div style="margin-top:8px; padding-top:8px; border-top:1px solid var(--border-subtle); font-size:11px; color:var(--text-dim); display:flex; justify-content:space-between;">' +
-                '<span>Pass Rate: <strong style="color:var(--text);">' + d.metrics.gatePassRate + '%</strong></span>' +
+                '<span title="' + gateEvidenceText(d.metrics) + '">Pass Rate: <strong style="color:var(--text);">' + gateRateText(d.metrics) + '</strong></span>' +
                 '<span>Avg: <strong style="color:var(--text);">' + d.metrics.avgCycleMinutes + 'm</strong></span>' +
               '</div>' +
               '<div style="margin-top:10px;">' +

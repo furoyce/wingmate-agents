@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { runInNewContext } from "node:vm";
 import { renderDashboardHtml } from "../../../src/server/html";
 import { HEARTBEAT_STALE_MIN, buildSnapshot, dispatcherHealth } from "../../../src/server/snapshot";
+import type { SnapshotResponse } from "../../../src/server/types";
 import { writeAtomic } from "../../../src/state/fs";
 import { type Heartbeat, HeartbeatSchema } from "../../../src/state/heartbeat";
 import { writeQueue } from "../../../src/state/queue";
@@ -10,6 +11,16 @@ import { archiveRecord, readRecord, writeRecord } from "../../../src/state/recor
 import { labeledByOwner, runTick, todo, world } from "../../sim/harness";
 
 const NOW = "2026-10-06T10:00:00.000Z";
+const enabledInstall = {
+  version: "0.1.0",
+  automationId: "auto_1",
+  worktreeId: "wt_1",
+  binPath: "/fake/wingmate",
+  sha256: "0".repeat(64),
+  viewUrls: [],
+  installedAt: NOW,
+  enabled: true,
+};
 const tick = (over: Partial<Heartbeat> = {}): Heartbeat =>
   HeartbeatSchema.parse({
     kind: "tick",
@@ -85,6 +96,21 @@ describe("dispatcher health is observed, not inferred from any heartbeat", () =>
     expect(snap.projects.every((p) => p.automation.status === "degraded")).toBe(true);
     expect(snap.automations[0]?.lastRunStatus).toContain("error");
   });
+
+  test("dispatcher and scheduler agree at exactly 15 minutes and at 15m01s", async () => {
+    const w = await world();
+    await writeAtomic(join(w.dirs.state, "install.json"), JSON.stringify(enabledInstall));
+    await writeAtomic(join(w.dirs.state, "last-tick.json"), JSON.stringify(tick()));
+    w.clock.advance(15 * 60_000);
+    let snap = await buildSnapshot(w.dirs, w.cfg, w.clock, null);
+    expect(snap.dispatcherHealth.state).toBe("healthy");
+    expect(snap.projects.every((p) => p.automation.status === "active")).toBe(true);
+    w.clock.advance(1000);
+    snap = await buildSnapshot(w.dirs, w.cfg, w.clock, null);
+    expect(snap.dispatcherHealth.state).toBe("stale");
+    expect(snap.dispatcherHealth.ageMin).toBe(15);
+    expect(snap.projects.every((p) => p.automation.status === "stale")).toBe(true);
+  });
 });
 
 describe("pause scope semantics match the core", () => {
@@ -111,11 +137,14 @@ describe("pause scope semantics match the core", () => {
 
   test("unreadable pause state is unknown, never 'not paused'", async () => {
     const w = await world();
+    await writeAtomic(join(w.dirs.state, "install.json"), JSON.stringify(enabledInstall));
+    await writeAtomic(join(w.dirs.state, "last-tick.json"), JSON.stringify(tick()));
     await writeAtomic(join(w.dirs.state, "pause.json"), "{not json");
     const snap = await buildSnapshot(w.dirs, w.cfg, w.clock, null);
     expect(snap.pauseStateKnown).toBe(false);
     expect(snap.problems).toContain("pause_invalid");
     expect(snap.projects.every((p) => p.automation.status === "unknown")).toBe(true);
+    expect(snap.projects.every((p) => p.automation.enabled === false)).toBe(true);
   });
 });
 
@@ -191,7 +220,7 @@ describe("queue eligibility and completion evidence are reported truthfully", ()
     expect(snap.funnel.agentReady).toBe(1);
   });
 
-  test("released records are completions, never merge-verified", async () => {
+  test("ownership releases are separate from completion totals in the funnel, history and projects", async () => {
     const w = await world();
     labeledByOwner(w, todo("i_rel", "JRF-880"));
     await runTick(w);
@@ -206,7 +235,103 @@ describe("queue eligibility and completion evidence are reported truthfully", ()
       sourceCompleted: 0,
       mergeVerified: null,
     });
+    expect(snap.funnel.done).toBe(0);
+    expect(snap.metrics.completedCount).toBe(0);
+    expect(snap.projects.find((p) => p.key === "bouncr")).toMatchObject({
+      completedCount: 0,
+      releasedCount: 1,
+    });
+
+    // A separate recorded done issue still counts; releasing ownership of the first issue does not.
+    await writeRecord(w.dirs, {
+      ...rec,
+      linearId: "i_done",
+      identifier: "JRF-881",
+      stage: "done",
+      updatedAt: w.ctx.now(),
+    });
+    await archiveRecord(w.dirs, "JRF-881");
+    const withDone = await buildSnapshot(w.dirs, w.cfg, w.clock, null);
+    expect(withDone.funnel.done).toBe(1);
+    expect(withDone.metrics.completedCount).toBe(1);
+    expect(withDone.projects.find((p) => p.key === "bouncr")).toMatchObject({
+      completedCount: 1,
+      releasedCount: 1,
+    });
+  });
+
+  test("observed completions union disjoint sources and deduplicate overlapping IDs and archive cycles", async () => {
+    const w = await world();
+    labeledByOwner(w, todo("i_a", "JRF-883"));
+    await runTick(w);
+    const rec = await readRecord(w.dirs, "JRF-883");
+    if (!rec) throw new Error("record missing");
+    await writeRecord(w.dirs, { ...rec, stage: "done", updatedAt: NOW });
+    await archiveRecord(w.dirs, rec.identifier);
+    const completed = { state: { id: "st-done", name: "Done", type: "completed" }, updatedAt: NOW };
+    w.linear.add(todo("i_b", "JRF-884", completed));
+    let snap = await buildSnapshot(w.dirs, w.cfg, w.clock, w.linear);
+    expect(snap.funnel.done).toBe(2);
+    expect(snap.metrics.completedCount).toBe(2);
+    expect(snap.funnel.completion).toMatchObject({ recordedDone: 1, sourceCompleted: 1 });
+
+    w.linear.issues.delete("i_b");
+    const source = todo("i_a", "JRF-883", completed);
+    w.linear.add(source);
+    snap = await buildSnapshot(w.dirs, w.cfg, w.clock, w.linear);
     expect(snap.funnel.done).toBe(1);
+    expect(snap.metrics.completedCount).toBe(1);
+    expect(snap.funnel.completion).toMatchObject({ recordedDone: 1, sourceCompleted: 1 });
+
+    await writeRecord(w.dirs, { ...rec, cycle: rec.cycle + 1, stage: "done", updatedAt: NOW });
+    await archiveRecord(w.dirs, rec.identifier);
+    // Repeated release cycles also remain one separately reported ownership release.
+    for (const cycle of [rec.cycle + 2, rec.cycle + 3]) {
+      await writeRecord(w.dirs, { ...rec, cycle, stage: "released", updatedAt: NOW });
+      await archiveRecord(w.dirs, rec.identifier);
+    }
+    w.linear.listUpdatedSince = async () => [source, source];
+    snap = await buildSnapshot(w.dirs, w.cfg, w.clock, w.linear);
+    expect(snap.funnel.done).toBe(1);
+    expect(snap.metrics.completedCount).toBe(1);
+    expect(snap.funnel.completion).toMatchObject({ recordedDone: 1, sourceCompleted: 1, released: 1 });
+    expect(snap.projects.find((p) => p.key === "bouncr")).toMatchObject({
+      completedCount: 1,
+      releasedCount: 1,
+    });
+  });
+});
+
+describe("gate metrics use observed verdicts", () => {
+  test("no observations are unknown; PASS/FAIL alone form the denominator", async () => {
+    const w = await world();
+    let snap = await buildSnapshot(w.dirs, w.cfg, w.clock, null);
+    expect(snap.metrics).toMatchObject({ gatePassRate: null, gatesPassed: 0, gatesObserved: 0 });
+    labeledByOwner(w, todo("i_gates", "JRF-882"));
+    await runTick(w);
+    const rec = await readRecord(w.dirs, "JRF-882");
+    if (!rec) throw new Error("record missing");
+    for (const gate of Object.values(rec.gates)) gate.verdict = null;
+    await writeRecord(w.dirs, rec);
+    snap = await buildSnapshot(w.dirs, w.cfg, w.clock, null);
+    expect(snap.metrics.gatePassRate).toBeNull();
+    const verdict = (value: "PASS" | "FAIL" | "NA" | "STALE") => ({
+      ...rec.gates.plan,
+      verdict: value,
+      at: NOW,
+    });
+    await writeRecord(w.dirs, {
+      ...rec,
+      gates: {
+        ...rec.gates,
+        plan: verdict("PASS"),
+        validate: verdict("FAIL"),
+        ui: verdict("NA"),
+        pr: verdict("STALE"),
+      },
+    });
+    snap = await buildSnapshot(w.dirs, w.cfg, w.clock, null);
+    expect(snap.metrics).toMatchObject({ gatePassRate: 50, gatesPassed: 1, gatesObserved: 2 });
   });
 });
 
@@ -218,8 +343,56 @@ describe("dashboard rendering", () => {
       "completionText",
     ]);
     expect(completionText({ recordedDone: 2, released: 1, sourceCompleted: 4, mergeVerified: null })).toBe(
-      "Done 2 · released 1 · Linear completed 4 · merge unverified",
+      "Done 2 · ownership released 1 · Linear completed 4 · merge unverified",
     );
+  });
+
+  test("review cards and metrics never invent gate success, including empty and failing evidence", async () => {
+    const w = await world();
+    const snap = await buildSnapshot(w.dirs, w.cfg, w.clock, null);
+    const nodes: Record<string, { innerHTML: string; textContent: string }> = {};
+    const { renderMetrics, renderKanban, renderProjects } = dashboardFunctions<{
+      renderMetrics: (m: SnapshotResponse["metrics"]) => void;
+      renderKanban: (d: unknown) => void;
+      renderProjects: (p: SnapshotResponse["projects"], a: []) => void;
+    }>(
+      [
+        "escapeHtml",
+        "completionText",
+        "gateRateText",
+        "gateEvidenceText",
+        "renderMetrics",
+        "renderKanban",
+        "renderProjects",
+      ],
+      {
+        document: {
+          getElementById: (id: string) => {
+            nodes[id] ??= { innerHTML: "", textContent: "" };
+            return nodes[id];
+          },
+        },
+      },
+    );
+    for (const gates of [{}, { plan: { verdict: "FAIL" } }, { plan: { verdict: "STALE" } }]) {
+      renderKanban({ ...snap, activeWorktrees: [{ identifier: "JRF-882", stage: "review", gates }] });
+      expect(nodes.kanbanBoard?.innerHTML).toContain("In review");
+      expect(nodes.kanbanBoard?.innerHTML).not.toContain("Gates Passed");
+      expect(nodes.kanbanBoard?.innerHTML).toContain("No observed gates");
+    }
+    renderMetrics(snap.metrics);
+    expect(nodes.statsGrid?.innerHTML).toContain("No observed gates");
+    expect(nodes.statsGrid?.innerHTML).toContain("0 / 0 observed PASS/FAIL verdicts passed");
+    expect(nodes.statsGrid?.innerHTML).not.toContain("100%");
+    renderMetrics({ ...snap.metrics, gatePassRate: 50, gatesPassed: 1, gatesObserved: 2 });
+    expect(nodes.statsGrid?.innerHTML).toContain("50%");
+    expect(nodes.statsGrid?.innerHTML).toContain("1 / 2 observed PASS/FAIL verdicts passed");
+    expect(renderDashboardHtml("tok")).not.toContain("8-Gate compliance");
+    renderProjects(
+      snap.projects.map((p) => ({ ...p, completedCount: 0, releasedCount: 1 })),
+      [],
+    );
+    expect(nodes.projectsGrid?.innerHTML).toContain("Ownership released:</span><strong>1</strong>");
   });
 
   test("embeds only a sanitized CSRF token and calls the API with it", () => {

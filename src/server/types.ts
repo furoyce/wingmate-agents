@@ -10,14 +10,14 @@ export interface FunnelStats {
   inAgent: number;
   waitingOnHuman: number;
   reviewReady: number;
-  /** Recorded completions (done + released archives, or Linear-completed when larger); not a merge count. */
+  /** Unique issue IDs with observed done archives or Linear-completed state; excludes releases and unobserved sources. */
   done: number;
   /** `queue-eligible`: the dispatcher queue's eligible rows; `linear-labels`: no queue file, Linear labels only (eligibility unknown). */
   agentReadyBasis: "queue-eligible" | "linear-labels";
   completion: CompletionBreakdown;
 }
 
-/** Completion evidence by kind. `mergeVerified` is null: records carry no merge receipt, so merges are not observed here. */
+/** Unique issue counts for each evidence source (may overlap). Releases are separate; mergeVerified is unobserved. */
 export interface CompletionBreakdown {
   recordedDone: number;
   released: number;
@@ -161,7 +161,10 @@ export interface ProjectSummary {
   queuedCount: number;
   /** Queue rows the dispatcher skipped (each carries a reason). */
   skippedCount: number;
+  /** Unique issue IDs with an archived done record for this project. */
   completedCount: number;
+  /** Unique issue IDs with an archived ownership release for this project. */
+  releasedCount: number;
   /** Which pause applies: the project's own scope, the global scope, or none. */
   paused: "global" | "project" | null;
   slotHeldBy: string | null;
@@ -180,7 +183,10 @@ export interface ThroughputMetrics {
   completedCount: number;
   inProgressCount: number;
   avgCycleMinutes: number;
-  gatePassRate: number;
+  /** PASS / observed PASS-or-FAIL verdicts; null when there are no observed outcomes. */
+  gatePassRate: number | null;
+  gatesPassed: number;
+  gatesObserved: number;
   tokens: number;
   costUsd: number;
   byProvider: Record<string, { tokens: number; costUsd: number; count: number }>;

@@ -1,6 +1,5 @@
 // src/server/actions.ts — Action handlers for the Wingmate Console API. Every handler validates its target against the
 // configured scope or the current records before acting, and reports only what it observed (no success before proof).
-import { execFile } from "node:child_process";
 import { stat } from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";
 import { z } from "zod";
@@ -8,6 +7,7 @@ import { type Config, projectFor } from "../config/schema";
 import { GLOBAL_SCOPE, setPause } from "../ops/pause";
 import type { LinearPort } from "../ports";
 import { WingmateError } from "../shared/errors";
+import { run } from "../shared/exec";
 import type { Dirs } from "../shared/paths";
 import type { Clock } from "../shared/time";
 import { Ledger } from "../state/ledger";
@@ -184,18 +184,22 @@ export interface LaunchResult {
 /** Runs an opener and resolves with its exit status; a launch counts only when the opener exits 0. */
 export type Launcher = (cmd: string, args: string[]) => Promise<LaunchResult>;
 
-export const defaultLauncher: Launcher = (cmd, args) =>
-  new Promise((done) => {
-    execFile(cmd, args, { timeout: 10_000, maxBuffer: 64 * 1024 }, (err) => {
-      if (!err) return done({ code: 0, error: null });
-      const code = typeof err.code === "number" ? err.code : null;
-      done({
-        code,
-        error: (err.killed ? "timed out" : err.message).slice(0, 300),
-        missing: err.code === "ENOENT",
-      });
-    });
-  });
+export const defaultLauncher: Launcher = async (cmd, args) => {
+  try {
+    // The shared runner withholds the personal Linear token and kills the process group on timeout.
+    const result = await run([cmd, ...args], { timeoutMs: 10_000 });
+    return {
+      code: result.code,
+      error: result.timedOut ? "timed out" : result.code === 0 ? null : `exit ${result.code}`,
+    };
+  } catch (err) {
+    return {
+      code: null,
+      error: "Could not launch opener",
+      missing: (err as NodeJS.ErrnoException).code === "ENOENT",
+    };
+  }
+};
 
 /** An allowed open target: the exact worktree path of an active (non-terminal) record that exists as a directory. */
 export async function allowedWorktreePath(dirs: Dirs, path: string): Promise<string | null> {
