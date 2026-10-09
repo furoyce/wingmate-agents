@@ -273,6 +273,23 @@ export function renderDashboardHtml(): string {
     @media (prefers-color-scheme: dark) {
       body[data-theme="system"] .badge-codex { color: #10B981; }
     }
+    .badge-antigravity { background: rgba(124, 58, 237, 0.15); color: #7C3AED; border: 1px solid rgba(124, 58, 237, 0.3); }
+    body[data-theme="dark"] .badge-antigravity { color: #A855F7; }
+    @media (prefers-color-scheme: dark) {
+      body[data-theme="system"] .badge-antigravity { color: #A855F7; }
+    }
+    .badge-gemini { background: rgba(37, 99, 235, 0.15); color: #2563EB; border: 1px solid rgba(37, 99, 235, 0.3); }
+    body[data-theme="dark"] .badge-gemini { color: #60A5FA; }
+    @media (prefers-color-scheme: dark) {
+      body[data-theme="system"] .badge-gemini { color: #60A5FA; }
+    }
+    .badge-status-running { background: rgba(2, 132, 199, 0.12); color: var(--accent); border: 1px solid var(--accent); }
+    .badge-status-assigned { background: var(--surface-hover); color: var(--text-muted); border: 1px solid var(--border); }
+    .badge-status-parked { background: rgba(217, 119, 6, 0.15); color: var(--warning); border: 1px solid var(--warning); }
+    .badge-status-completed { background: rgba(5, 150, 105, 0.15); color: var(--success); border: 1px solid var(--success); }
+    .badge-status-failed { background: rgba(220, 38, 38, 0.15); color: var(--danger); border: 1px solid var(--danger); }
+    .badge-status-unknown { background: var(--surface-hover); color: var(--text-dim); border: 1px solid var(--border); }
+
     .badge-project {
       background: var(--surface-hover);
       color: var(--text-muted);
@@ -290,6 +307,82 @@ export function renderDashboardHtml(): string {
     .badge-prio-4 { background: var(--surface-hover); color: var(--text-dim); border: 1px solid var(--border); }
     .badge-waiting { background: rgba(245, 158, 11, 0.2); color: var(--warning); border: 1px solid var(--warning); }
     .badge-pass { background: rgba(16, 185, 129, 0.2); color: var(--success); border: 1px solid var(--success); }
+
+    /* Agent Roster & Provenance */
+    .roster-container {
+      margin-top: 10px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      overflow: hidden;
+    }
+    .roster-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 7px 12px;
+      background: var(--surface-elevated);
+      border-bottom: 1px solid var(--border);
+      font-size: 11px;
+      font-weight: 600;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .roster-header-left {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .roster-header-right {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-family: var(--font-mono);
+      font-size: 10px;
+      color: var(--text-dim);
+    }
+    .roster-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 11px;
+    }
+    .roster-table th {
+      padding: 6px 10px;
+      text-align: left;
+      color: var(--text-dim);
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+    }
+    .roster-table td {
+      padding: 7px 10px;
+      border-bottom: 1px solid var(--border-subtle);
+      vertical-align: middle;
+    }
+    .roster-table tr:last-child td {
+      border-bottom: none;
+    }
+    .roster-provenance-tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 10px;
+      font-family: var(--font-mono);
+      color: var(--text-dim);
+      background: var(--surface);
+      padding: 2px 6px;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+    }
+    .unverified-liveness-note {
+      font-size: 10px;
+      color: var(--text-dim);
+      font-style: italic;
+      margin-top: 2px;
+    }
 
     /* 8 Gates Pipeline Dots */
     .pipeline-bar {
@@ -1085,6 +1178,69 @@ export function renderDashboardHtml(): string {
           );
         }
 
+        const rosterEntries = w.roster || [];
+        const rosterCount = rosterEntries.length;
+        const summary = w.rosterSummary || { total: rosterCount, running: 0, assigned: 0, parked: 0, completed: 0, failed: 0, unknown: 0 };
+
+        const rosterRowsHtml = rosterEntries.map(a => {
+          const roleIcon = a.role === 'coordinator' ? '👑' : a.role.includes('review') ? '🔍' : a.role.includes('verifier') ? '🛡️' : a.role.includes('ui') ? '📱' : '⚙️';
+          const roleDisplay = a.role === 'coordinator' ? 'Coordinator' : a.role;
+          const statusBadge = '<span class="badge badge-status-' + escapeHtml(a.assignedStatus) + '" title="' + escapeHtml(a.provenanceDetail) + '">' + escapeHtml(a.statusDetail || a.assignedStatus) + '</span>';
+          const providerBadge = '<span class="badge badge-' + escapeHtml(a.provider) + '">' + escapeHtml(a.provider) + (a.model ? ' · ' + escapeHtml(a.model) : '') + '</span>';
+          
+          return (
+            '<tr>' +
+              '<td>' +
+                '<strong>' + roleIcon + ' ' + escapeHtml(roleDisplay) + '</strong>' +
+                (a.terminalHandle ? '<div style="font-size:10px; color:var(--text-dim); font-family:var(--font-mono);">' + escapeHtml(a.terminalHandle.slice(0, 18)) + '</div>' : '') +
+              '</td>' +
+              '<td>' + providerBadge + '</td>' +
+              '<td>' + statusBadge + '</td>' +
+              '<td>' +
+                '<div style="font-weight: 500;">' + escapeHtml(a.currentAction) + '</div>' +
+                '<div class="unverified-liveness-note">Evidence: ' + escapeHtml(a.provenanceDetail) + '</div>' +
+              '</td>' +
+              '<td>' +
+                (a.branch ? '<div style="font-family: var(--font-mono); font-size: 10px; color: var(--text-dim);">🌿 ' + escapeHtml(a.branch) + '</div>' : '') +
+                (a.worktreePath ? '<button class="sm btn-open-orca" data-path="' + escapeHtml(a.worktreePath) + '" style="padding:2px 6px; font-size:10px; margin-top:2px;" title="Open ' + escapeHtml(a.worktreePath) + ' in Editor">Worktree ↗</button>' : '') +
+              '</td>' +
+            '</tr>'
+          );
+        }).join("");
+
+        const rosterHtml = (
+          '<div class="roster-container">' +
+            '<div class="roster-header">' +
+              '<div class="roster-header-left">' +
+                '<span>👥 Agent Roster: <strong>' + rosterCount + ' assigned</strong></span>' +
+                '<span class="badge" style="background:var(--surface-hover); color:var(--text-muted);">' +
+                  summary.running + ' working · ' + summary.assigned + ' queued · ' + summary.parked + ' parked' +
+                  (summary.completed > 0 ? ' · ' + summary.completed + ' done' : '') +
+                '</span>' +
+              '</div>' +
+              '<div class="roster-header-right">' +
+                '<span class="roster-provenance-tag" title="Recorded state from WRecord/RoleJob schema. No live OS process probe performed.">' +
+                  '📋 Record Evidence (Process Liveness Unverified)' +
+                '</span>' +
+              '</div>' +
+            '</div>' +
+            '<table class="roster-table">' +
+              '<thead>' +
+                '<tr>' +
+                  '<th style="width: 150px;">Agent Role</th>' +
+                  '<th style="width: 125px;">Provider</th>' +
+                  '<th style="width: 140px;">Status</th>' +
+                  '<th>What This Agent Is Doing</th>' +
+                  '<th style="width: 160px;">Worktree / Ref</th>' +
+                '</tr>' +
+              '</thead>' +
+              '<tbody>' +
+                (rosterRowsHtml || '<tr><td colspan="5" style="text-align:center; color:var(--text-dim);">No agent jobs recorded</td></tr>') +
+              '</tbody>' +
+            '</table>' +
+          '</div>'
+        );
+
         return (
           '<div class="worktree-card ' + (isWaiting ? 'waiting' : '') + '" id="wt-' + w.identifier + '">' +
             '<div class="card-header">' +
@@ -1105,7 +1261,7 @@ export function renderDashboardHtml(): string {
               '</div>' +
             '</div>' +
             '<div class="pipeline-bar">' + gateDots + '</div>' +
-            (rolesHtml ? '<div class="roles-strip"><span style="font-size: 11px; color: var(--text-dim);">Sub-agent Roles:</span>' + rolesHtml + '</div>' : '') +
+            rosterHtml +
             questionHtml +
           '</div>'
         );
@@ -1222,11 +1378,12 @@ export function renderDashboardHtml(): string {
       const autoGrid = document.getElementById("automationsGrid");
       if (autoGrid && automations) {
         autoGrid.innerHTML = automations.map(a => {
-          const badgeClass = a.harness === "orca" ? "badge-orca" : a.harness === "claude-code" ? "badge-claude" : "badge-codex";
-          const harnessLabel = a.harness === "orca" ? "Orca Automation" : a.harness === "claude-code" ? "Claude Routine" : a.harness === "codex" ? "Codex Scheduled" : a.harness;
+          const badgeClass = a.harness === "orca" ? "badge-orca" : a.harness === "claude-code" ? "badge-claude" : a.harness === "codex" ? "badge-codex" : a.harness === "antigravity" ? "badge-antigravity" : a.harness === "gemini" ? "badge-gemini" : "badge-project";
+          const harnessLabel = a.harness === "orca" ? "Orca Automation" : a.harness === "claude-code" ? "Claude Routine" : a.harness === "codex" ? "Codex Scheduled" : a.harness === "antigravity" ? "Antigravity Worker" : a.harness === "gemini" ? "Gemini Agent" : a.harness;
           const statusLower = a.lastRunStatus.toLowerCase();
           const isGreen = statusLower.includes("active") || statusLower.includes("ok") || statusLower.includes("ready");
-          const statusColor = isGreen ? "var(--success)" : "var(--text-muted)";
+          const isWarn = statusLower.includes("not configured") || statusLower.includes("idle");
+          const statusColor = isGreen ? "var(--success)" : isWarn ? "var(--warning)" : "var(--text-muted)";
           return (
             '<div class="automation-card">' +
               '<div class="automation-card-title">' +
@@ -1247,8 +1404,9 @@ export function renderDashboardHtml(): string {
               '</div>' +
               '<div style="font-size: 11px; color: var(--text-dim); border-top: 1px solid var(--border-subtle); padding-top: 6px; margin-top: 4px; display: flex; justify-content: space-between;">' +
                 '<span>Last Active:</span>' +
-                '<span>' + (a.lastRunAt ? formatRelativeTime(a.lastRunAt) : 'None') + '</span>' +
+                '<span>' + (a.lastRunAt ? formatRelativeTime(a.lastRunAt) : 'None (unconfigured)') + '</span>' +
               '</div>' +
+              (a.provenance ? '<div style="font-size: 10px; color: var(--text-dim); font-family: var(--font-mono); margin-top: 4px;">Provenance: ' + escapeHtml(a.provenance) + '</div>' : '') +
             '</div>'
           );
         }).join("");
@@ -1341,6 +1499,13 @@ export function renderDashboardHtml(): string {
           '<div class="kanban-cards">' +
             (inAgent.length === 0 ? '<div class="empty-state" style="padding:16px;">No agents actively coding</div>' : inAgent.map(w => {
               const proj = w.project || "general";
+              const rosterSnippet = (w.roster && w.roster.length > 0) ? (
+                '<div style="font-size:10px; color:var(--text-muted); background:var(--surface); border:1px solid var(--border-subtle); border-radius:4px; padding:3px 6px; margin-top:4px;">' +
+                  '<span><strong>' + w.roster.length + ' Agent' + (w.roster.length > 1 ? 's' : '') + ':</strong> ' +
+                  w.roster.map(a => (a.role === 'coordinator' ? '👑 ' : '⚙️ ') + escapeHtml(a.provider) + ' (' + escapeHtml(a.role) + ': ' + escapeHtml(a.assignedStatus) + ')').join(', ') +
+                  '</span>' +
+                '</div>'
+              ) : '';
               return (
                 '<div class="kanban-card">' +
                   '<div class="kanban-card-meta">' +
@@ -1353,6 +1518,7 @@ export function renderDashboardHtml(): string {
                     '<span>Stage: <strong>' + escapeHtml(w.pipelineStage) + '</strong></span>' +
                     '<span>' + w.ageMin + 'm</span>' +
                   '</div>' +
+                  rosterSnippet +
                   '<div style="display:flex; justify-content:flex-end; gap:6px; margin-top:6px;">' +
                     '<a href="' + escapeHtml(w.linearUrl || "https://linear.app") + '" target="_blank" rel="noopener noreferrer"><button class="sm" title="Open in Linear">Linear ↗</button></a>' +
                     '<button class="sm btn-open-orca" data-path="' + escapeHtml(w.worktreePath || '') + '" title="Open Worktree in Orca / Editor">Worktree ↗</button>' +
@@ -1372,6 +1538,13 @@ export function renderDashboardHtml(): string {
           '<div class="kanban-cards">' +
             (waiting.length === 0 ? '<div class="empty-state" style="padding:16px;">No questions open</div>' : waiting.map(w => {
               const proj = w.project || "general";
+              const rosterSnippet = (w.roster && w.roster.length > 0) ? (
+                '<div style="font-size:10px; color:var(--text-muted); background:var(--surface); border:1px solid var(--border-subtle); border-radius:4px; padding:3px 6px; margin-top:4px;">' +
+                  '<span><strong>' + w.roster.length + ' Agent' + (w.roster.length > 1 ? 's' : '') + ':</strong> ' +
+                  w.roster.map(a => (a.role === 'coordinator' ? '👑 ' : '⚙️ ') + escapeHtml(a.provider) + ' (' + escapeHtml(a.role) + ': ' + escapeHtml(a.assignedStatus) + ')').join(', ') +
+                  '</span>' +
+                '</div>'
+              ) : '';
               return (
                 '<div class="kanban-card waiting">' +
                   '<div class="kanban-card-meta">' +
@@ -1383,6 +1556,7 @@ export function renderDashboardHtml(): string {
                   '<div style="font-size:11px; color:var(--text-muted); background:var(--surface); padding:6px 8px; border-radius:4px; border:1px solid var(--border-subtle); margin-top:4px;">' +
                     escapeHtml((w.openQuestion ? w.openQuestion.prompt || '' : '').slice(0, 140)) + '...' +
                   '</div>' +
+                  rosterSnippet +
                   '<div style="display:flex; gap:6px; justify-content:flex-end; margin-top:6px; flex-wrap:wrap;">' +
                     answerInLinearLink(w) +
                   '</div>' +
@@ -1401,6 +1575,13 @@ export function renderDashboardHtml(): string {
           '<div class="kanban-cards">' +
             (inReview.length === 0 ? '<div class="empty-state" style="padding:16px;">No open reviews</div>' : inReview.map(w => {
               const proj = w.project || "general";
+              const rosterSnippet = (w.roster && w.roster.length > 0) ? (
+                '<div style="font-size:10px; color:var(--text-muted); background:var(--surface); border:1px solid var(--border-subtle); border-radius:4px; padding:3px 6px; margin-top:4px;">' +
+                  '<span><strong>' + w.roster.length + ' Agent' + (w.roster.length > 1 ? 's' : '') + ':</strong> ' +
+                  w.roster.map(a => (a.role === 'coordinator' ? '👑 ' : '⚙️ ') + escapeHtml(a.provider) + ' (' + escapeHtml(a.role) + ': ' + escapeHtml(a.assignedStatus) + ')').join(', ') +
+                  '</span>' +
+                '</div>'
+              ) : '';
               return (
                 '<div class="kanban-card">' +
                   '<div class="kanban-card-meta">' +
@@ -1409,6 +1590,7 @@ export function renderDashboardHtml(): string {
                     '<span class="badge badge-pass">Gates Passed</span>' +
                   '</div>' +
                   '<a href="' + escapeHtml(w.linearUrl || "https://linear.app") + '" target="_blank" rel="noopener noreferrer" class="kanban-card-title-link" title="Open in Linear">' + escapeHtml(w.title) + '</a>' +
+                  rosterSnippet +
                   '<div style="display:flex; gap:6px; justify-content:flex-end; margin-top:6px; flex-wrap:wrap;">' +
                     (w.prUrl ? '<a href="' + escapeHtml(w.prUrl) + '" target="_blank" rel="noopener noreferrer"><button class="sm primary">View PR ↗</button></a>' : '') +
                     '<a href="' + escapeHtml(w.linearUrl || "https://linear.app") + '" target="_blank" rel="noopener noreferrer"><button class="sm" title="Open in Linear">Linear ↗</button></a>' +

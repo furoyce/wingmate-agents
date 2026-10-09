@@ -59,6 +59,45 @@ describe("server snapshot", () => {
     expect(item?.roleJobs).toHaveLength(1);
     expect(item?.roleJobs[0]?.role).toBe("plan-verifier");
     expect(item?.gates.plan?.verdict).toBe("PASS");
+
+    // Agent Roster verification
+    expect(item?.roster).toBeDefined();
+    expect(item?.roster).toHaveLength(2); // 1 coordinator + 1 roleJob
+    expect(item?.rosterSummary.total).toBe(2);
+
+    const coord = item?.roster.find((a) => a.role === "coordinator");
+    expect(coord).toBeDefined();
+    expect(coord?.provider).toBe("claude");
+    expect(coord?.assignedStatus).toBe("running");
+    expect(coord?.provenance).toBe("record");
+    expect(coord?.livenessVerified).toBe(false);
+    expect(coord?.currentAction).toContain("Analyzing ticket requirements");
+
+    const verifier = item?.roster.find((a) => a.role === "plan-verifier");
+    expect(verifier).toBeDefined();
+    expect(verifier?.provider).toBe("codex");
+    expect(verifier?.assignedStatus).toBe("completed");
+    expect(verifier?.verdict).toBe("PASS");
+    expect(verifier?.provenance).toBe("terminal-job");
+    expect(verifier?.livenessVerified).toBe(false);
+    expect(verifier?.currentAction).toContain("Completed plan-verifier (PASS)");
+
+    // Automation provenance check (never fabricates timestamps)
+    const claudeAuto = snap.automations.find((a) => a.harness === "claude-code");
+    expect(claudeAuto).toBeDefined();
+    expect(claudeAuto?.configured).toBe(false);
+    expect(claudeAuto?.lastRunAt).toBeNull();
+    expect(claudeAuto?.lastRunStatus).toContain("Not configured");
+
+    const codexAuto = snap.automations.find((a) => a.harness === "codex");
+    expect(codexAuto).toBeDefined();
+    expect(codexAuto?.configured).toBe(false);
+    expect(codexAuto?.lastRunAt).toBeNull();
+
+    const antigravityAuto = snap.automations.find((a) => a.harness === "antigravity");
+    expect(antigravityAuto).toBeDefined();
+    expect(antigravityAuto?.configured).toBe(true);
+    expect(antigravityAuto?.lastRunStatus).toContain("Active");
   });
 
   test("answer links use the existing Linear issue URL or fall back without an unsafe invented target", async () => {

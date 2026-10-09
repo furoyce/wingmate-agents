@@ -41,6 +41,39 @@ export interface RoleJobSummary {
   completedAt: string | null;
 }
 
+export type AgentAssignedStatus = "assigned" | "running" | "parked" | "completed" | "failed" | "unknown";
+export type AgentProvenance = "record" | "terminal-job" | "native-job" | "inferred" | "unknown";
+
+export interface AgentRosterEntry {
+  id: string;
+  role: string;
+  provider: string;
+  model: string | null;
+  assignedStatus: AgentAssignedStatus;
+  statusDetail: string;
+  provenance: AgentProvenance;
+  provenanceDetail: string;
+  livenessVerified: boolean;
+  currentAction: string;
+  worktreePath: string | null;
+  branch: string | null;
+  terminalHandle: string | null;
+  paneKey: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  verdict: string | null;
+}
+
+export interface AgentRosterSummary {
+  total: number;
+  running: number;
+  assigned: number;
+  parked: number;
+  completed: number;
+  failed: number;
+  unknown: number;
+}
+
 export interface GateSummary {
   verdict: "PASS" | "FAIL" | "NA" | "STALE" | null;
   failCount: number;
@@ -72,6 +105,8 @@ export interface ActiveWorktreeItem {
     relaunches: number;
   };
   roleJobs: RoleJobSummary[];
+  roster: AgentRosterEntry[];
+  rosterSummary: AgentRosterSummary;
   gates: Record<string, GateSummary>;
   openQuestion: {
     id: string;
@@ -115,11 +150,13 @@ export interface ThroughputMetrics {
 
 export interface HarnessAutomation {
   name: string;
-  harness: "orca" | "claude-code" | "codex" | "cron" | "system";
+  harness: "orca" | "claude-code" | "codex" | "antigravity" | "gemini" | "cron" | "system";
   targetProject: string;
   schedule: string;
   lastRunStatus: string;
   lastRunAt: string | null;
+  configured?: boolean;
+  provenance?: string;
 }
 
 export type SnapshotQueueItem = QueueRow & { title?: string | null; linearUrl?: string };

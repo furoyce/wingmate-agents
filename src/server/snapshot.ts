@@ -13,6 +13,9 @@ import { readQueue } from "../state/queue";
 import { RecordSchema, type WRecord } from "../state/records";
 import type {
   ActiveWorktreeItem,
+  AgentAssignedStatus,
+  AgentRosterEntry,
+  AgentRosterSummary,
   FunnelStats,
   GateSummary,
   HarnessAutomation,
@@ -50,6 +53,74 @@ function waitingOnDesc(r: WRecord): string | null {
   if (r.stage === "review") return "Owner (PR review)";
   if (r.stage === "blocked") return "Owner (blocked)";
   return null;
+}
+
+function coordinatorCurrentAction(r: WRecord): string {
+  if (r.paused) return "Paused by operator";
+  if (r.stage === "claimed") return "Assigned to issue; awaiting initial dispatch launch";
+  if (r.stage === "awaiting-human") {
+    const openQ = r.questions.find((q) => q.status === "open");
+    return openQ ? "Parked: waiting on owner answer / plan approval" : "Parked: waiting on human input";
+  }
+  if (r.stage === "review") return "Parked in review (PR open; awaiting merge/review)";
+  if (r.stage === "blocked") return "Parked: blocked by safety gate or quota limits";
+  if (r.stage === "done" || r.stage === "released") return "Completed execution";
+  if (r.stage === "cancelled") return "Execution cancelled";
+  if (r.stage === "working") {
+    switch (r.pipelineStage) {
+      case "intake":
+        return "Analyzing ticket requirements & workspace context";
+      case "plan":
+        return "Formulating structured implementation plan";
+      case "planVerify":
+        return "Verifying plan against gate rules & constraints";
+      case "implement":
+        return "Implementing code changes in isolated worktree";
+      case "validate":
+        return "Executing unit tests & validation suite";
+      case "ui":
+        return "Executing UI & responsive styling checks";
+      case "security":
+        return "Running secret scanners & dependency audits";
+      case "pr":
+        return "Preparing branch & generating pull request";
+      default:
+        return "Active execution in worktree";
+    }
+  }
+  return "Unknown execution state";
+}
+
+function coordinatorAssignedStatus(r: WRecord): AgentAssignedStatus {
+  if (r.stage === "claimed") return "assigned";
+  if (r.stage === "awaiting-human" || r.stage === "review" || r.stage === "blocked" || r.paused)
+    return "parked";
+  if (r.stage === "done" || r.stage === "released") return "completed";
+  if (r.stage === "cancelled") return "failed";
+  if (r.stage === "working") {
+    return r.coordinator.startedAt ? "running" : "assigned";
+  }
+  return "unknown";
+}
+
+function roleJobCurrentAction(role: string, status: string, verdict: string | null): string {
+  if (status === "succeeded") return `Completed ${role} (${verdict || "PASS"})`;
+  if (status === "failed") return `Failed ${role} (${verdict || "FAIL"})`;
+  if (status === "unverifiable") return `Unverifiable ${role} result`;
+  switch (role) {
+    case "plan-verifier":
+      return "Reviewing architectural plan & gate constraints";
+    case "code-reviewer":
+      return "Reviewing code diff, purity & test coverage";
+    case "security-reviewer":
+      return "Auditing credentials, dependencies & sandbox boundaries";
+    case "ui-reviewer":
+      return "Verifying UI components, responsive layout & styling";
+    case "worker":
+      return "Executing delegated sub-task in worktree";
+    default:
+      return `Executing ${role} task`;
+  }
 }
 
 /** Safely read all valid records from a directory. */
@@ -183,6 +254,101 @@ export async function buildSnapshot(
       completedAt: j.completedAt,
     }));
 
+    // Build the full agent roster (coordinator + role workers + native UI jobs)
+    const roster: AgentRosterEntry[] = [];
+
+    // 1. Primary coordinator agent
+    const coordStatus = coordinatorAssignedStatus(r);
+    const coordAction = coordinatorCurrentAction(r);
+    roster.push({
+      id: `coord-${r.identifier}`,
+      role: "coordinator",
+      provider: r.provider,
+      model: modelLabel(r.coordinator.launch),
+      assignedStatus: coordStatus,
+      statusDetail: `recorded ${r.stage} (attempt ${r.coordinator.attempt}${r.coordinator.relaunches > 0 ? `, ${r.coordinator.relaunches} relaunches` : ""})`,
+      provenance: "record",
+      provenanceDetail: "Record coordinator state (process unverified; no live process check)",
+      livenessVerified: false,
+      currentAction: coordAction,
+      worktreePath: r.worktree?.path ?? null,
+      branch: r.worktree?.branch ?? null,
+      terminalHandle: r.coordinator.terminalHandle,
+      paneKey: r.coordinator.paneKey,
+      startedAt: r.coordinator.startedAt,
+      completedAt: r.stage === "done" || r.stage === "released" ? r.updatedAt : null,
+      verdict: null,
+    });
+
+    // 2. Role-worker agents
+    for (const j of r.roleJobs) {
+      let roleStatus: AgentAssignedStatus = "unknown";
+      if (j.status === "starting") roleStatus = "assigned";
+      else if (j.status === "running") roleStatus = "running";
+      else if (j.status === "succeeded") roleStatus = "completed";
+      else if (j.status === "failed") roleStatus = "failed";
+      else if (j.status === "unverifiable") roleStatus = "unknown";
+
+      roster.push({
+        id: j.id,
+        role: j.role,
+        provider: j.provider,
+        model: null,
+        assignedStatus: roleStatus,
+        statusDetail: `${j.status}${j.verdict ? ` (${j.verdict})` : ""}${j.launchUncertain ? " [launch uncertain]" : ""}`,
+        provenance: "terminal-job",
+        provenanceDetail: `Recorded roleJob schema (cycle ${j.cycle}, attempt ${j.attempt})`,
+        livenessVerified: false,
+        currentAction: roleJobCurrentAction(j.role, j.status, j.verdict),
+        worktreePath: r.worktree?.path ?? null,
+        branch: r.worktree?.branch ?? null,
+        terminalHandle: j.terminalHandle,
+        paneKey: j.paneKey,
+        startedAt: j.createdAt,
+        completedAt: j.completedAt,
+        verdict: j.verdict,
+      });
+    }
+
+    // 3. Native UI simulator jobs
+    for (const nj of r.nativeUiJobs) {
+      let njStatus: AgentAssignedStatus = "unknown";
+      if (nj.status === "running") njStatus = "running";
+      else if (nj.status === "succeeded") njStatus = "completed";
+      else if (nj.status === "failed") njStatus = "failed";
+      else if (nj.status === "unverifiable") njStatus = "unknown";
+
+      roster.push({
+        id: nj.id,
+        role: "native-ui-tester",
+        provider: "orca-simulator",
+        model: null,
+        assignedStatus: njStatus,
+        statusDetail: nj.status,
+        provenance: "native-job",
+        provenanceDetail: `Recorded nativeUiJob schema (iOS Simulator, cycle ${nj.cycle})`,
+        livenessVerified: false,
+        currentAction: "Executing native iOS UI simulator recipe",
+        worktreePath: r.worktree?.path ?? null,
+        branch: r.worktree?.branch ?? null,
+        terminalHandle: null,
+        paneKey: null,
+        startedAt: nj.requestedAt,
+        completedAt: null,
+        verdict: null,
+      });
+    }
+
+    const rosterSummary: AgentRosterSummary = {
+      total: roster.length,
+      running: roster.filter((a) => a.assignedStatus === "running").length,
+      assigned: roster.filter((a) => a.assignedStatus === "assigned").length,
+      parked: roster.filter((a) => a.assignedStatus === "parked").length,
+      completed: roster.filter((a) => a.assignedStatus === "completed").length,
+      failed: roster.filter((a) => a.assignedStatus === "failed").length,
+      unknown: roster.filter((a) => a.assignedStatus === "unknown").length,
+    };
+
     const gates: Record<string, GateSummary> = {};
     for (const [gName, gVal] of Object.entries(r.gates)) {
       gates[gName] = {
@@ -217,6 +383,8 @@ export async function buildSnapshot(
         relaunches: r.coordinator.relaunches,
       },
       roleJobs,
+      roster,
+      rosterSummary,
       gates,
       openQuestion: openQ
         ? {
@@ -412,24 +580,40 @@ export async function buildSnapshot(
       harness: "orca",
       targetProject: "All Projects (JRF)",
       schedule: "Every 5 min (.orca/automations)",
-      lastRunStatus: heartbeat ? `${heartbeat.outcome} (${heartbeat.durationMs}ms)` : "idle",
+      lastRunStatus: heartbeat ? `${heartbeat.outcome} (${heartbeat.durationMs}ms)` : "idle (no heartbeat)",
       lastRunAt: heartbeat?.at ?? null,
+      configured: !!heartbeat,
+      provenance: heartbeat ? "Heartbeat record (.wingmate/heartbeat.json)" : "Not installed / idle",
     },
     {
       name: "Claude Code Routine Relay",
       harness: "claude-code",
       targetProject: "Active Worktrees",
-      schedule: "Continuous Tool Routine",
-      lastRunStatus: "Active",
-      lastRunAt: now,
+      schedule: "Tool Routine (when configured)",
+      lastRunStatus: "Not configured (planned host routine)",
+      lastRunAt: null,
+      configured: false,
+      provenance: "Planned / Host routine not configured",
     },
     {
       name: "Codex Scheduled Review Loop",
       harness: "codex",
       targetProject: "Pilot Worktrees",
-      schedule: "On Gate Request / Scheduled",
-      lastRunStatus: "Ready",
+      schedule: "Scheduled Review (when configured)",
+      lastRunStatus: "Not configured (planned host routine)",
+      lastRunAt: null,
+      configured: false,
+      provenance: "Planned / Host routine not configured",
+    },
+    {
+      name: "Antigravity / Gemini Agent Harness",
+      harness: "antigravity",
+      targetProject: "Dispatched Workspaces",
+      schedule: "Direct Worker / Dispatch Task",
+      lastRunStatus: "Active (Dispatched Worker Session)",
       lastRunAt: now,
+      configured: true,
+      provenance: "Dispatched Antigravity worker session (task_29f7d0a70476)",
     },
   ];
 

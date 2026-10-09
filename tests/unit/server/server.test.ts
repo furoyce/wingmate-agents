@@ -101,6 +101,10 @@ describe("server endpoints", () => {
     expect(fallback).toContain('href="https://linear.app"');
     expect(fallback).toContain("Find JRF-890 in Linear");
     expect(html).toContain("toastContainer");
+    expect(html).toContain("roster-container");
+    expect(html).toContain("Agent Roster");
+    expect(html).toContain("Record Evidence (Process Liveness Unverified)");
+    expect(html).toContain("badge-antigravity");
   });
 
   test("GET /api/snapshot returns valid snapshot payload", async () => {
@@ -111,6 +115,11 @@ describe("server endpoints", () => {
     expect(data.activeWorktrees).toBeDefined();
     expect(data.projects).toBeDefined();
     expect(data.metrics).toBeDefined();
+    expect(data.automations).toBeDefined();
+    expect(Array.isArray(data.automations)).toBe(true);
+    const antigravity = data.automations.find((a: { harness: string }) => a.harness === "antigravity");
+    expect(antigravity).toBeDefined();
+    expect(antigravity.configured).toBe(true);
   });
 
   test("POST /api/actions/pause toggles dispatcher pause state", async () => {
