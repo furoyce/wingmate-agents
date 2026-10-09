@@ -2,6 +2,96 @@
 
 ## Current state
 
+Checkpoint at `2026-10-09T04:05:49Z`. Slice 2 has owner acceptance; formal unassisted/native acceptance under spec §15.1
+remains incomplete. Automation is **disabled**. This is an operational checkpoint, not application merge, deployment,
+production or native acceptance. The earlier dated checkpoints and their failures below remain historical evidence.
+
+Framework [PR #23](https://github.com/furoyce/wingmate-agents/pull/23) merged at
+`d4b1becdb07d95497a2561f5e50d2ef204dc9db4`, preserving tested head `467cc24eae492289de4af7492171f58ee45f23e7`
+and tree `84bdc6cbfa200d980a4c70174a3483c01bde5f21`: **972 tests passed, 0 failed**. The Console answer handler now
+refuses before record/inbox/Linear I/O, returns an explicit unavailable result, and directs owners to Linear. It preserves
+PR #22's Architect Command Center, matched issue/project/queue links and Orca worktree actions. The separately restarted
+loopback UI daemon uses artifact SHA-256 `648ef08a263617862db99d26ba71f8be390015fef803248bf31a19bb9837b1c6` and
+UI config SHA-256 `f914175561293c8b34c8d8c46527470d1139d7c804e7760faa3139380e13946f`. Its rollout checked only
+GET health/HTML; all 240 protected-file hashes matched before/after. No live answer action or stranded-answer repair was
+performed by that rollout.
+
+Framework [PR #24](https://github.com/furoyce/wingmate-agents/pull/24) then merged at
+`6e6b9dc3cc5c4e0b9e4fa2047a24bd48eae610b1`, preserving tested head `ff491eb50a4960d30e3d4630a6dee1776ff77743`
+and tree `fff082939239de04e5036d627d4abb5274562e2d`: **1,000 tests passed, 0 failed**. Typecheck, lint, compiled build
+and binary config validation passed; independent source and final evidence reviews cleared that exact source. Correlated
+authenticated-answer delivery is distinguished from an undelivered/deferred reply; current author checks remain first.
+The working-coordinator adoption regression failed before its correction and passed afterward; adopting activity alone
+is not proof that an answer was delivered. The RED and intermediate checkpoints remain archived. Both remote feature
+branches were deleted with their exact-head leases; their Orca worktrees and history were retained.
+
+PR #24's plain install completed at `2026-10-09T04:03:18.287Z`, binary SHA-256
+`681667fef29093649efc0465547d7f208b580064e31386d031991f4a2c51e6be`, with `enabled=false`. The canonical private pilot
+config remains pinned at `/Users/jujufugh/.config/wingmate/pilot-projects.yaml`, SHA-256
+`fe4aa7ae3f59f3d51eb115491f582796163e47aaf17d26783ec3c816ae48bbc4`; the owner's dispatcher-checkout config remains
+`4392292397e9bb31a1d4f8fe6dd8ed1e99907c90c0bac0111f51f60ef7d0ffee`. The first quick-doctor invocation failed because
+the operator's explicit PATH omitted `~/.local/bin`, hiding the provider executables. That failure is retained. With only
+the invoking PATH corrected, quick doctor v2 at `2026-10-09T04:05:00.577Z` returned `ok=true` across 15 checks, with no
+blocking failures. The web folder-trust warning and skipped sandbox probes remain nonblocking; this is not a new full
+sandbox-probe receipt. Actual automation read-back remains `enabled=false`; sealed kits and config were not rewritten.
+
+For JRF-404, the owner's **“Proceed with the guard (Recommended)”** was relayed in authenticated comment
+`d23a50ef-2711-4ef3-b41f-0f02234c1f73` for question `01M4F0KYCW7Y84RVBFWJ91QA4T`. After the same accepted reply was
+incorrectly reclassified as a possible self-answer, supported owner `continue` comment
+`8edfece3-ab43-432d-8ddf-8e1c66c1b3ec` recovered the existing work. This is assisted owner approval/recovery, not a gate
+PASS, retry reset or authorization to merge/deploy the app. The integrated committed candidate is
+`178b8434a83166149ce39752521424bba6f714a1`, tree `66990a444b6b880289dfb1ecf395cca1fa434dae`, with the approved plan
+hash unchanged at `3294a40ddba4ecc97763dfdfe48eff4617737ee2983be8e202c846a8dbb199f6`. Coordinator validation reports
+69 API tests and 47 mobile verification checks, plus offline iOS bundling; those mobile checks do not establish native UI
+execution. The separate sibling static/unit evidence and earlier assisted mobile RED/GREEN schedules keep their scopes.
+
+The new exact-`178b843` trusted-operator PostgreSQL run completed with operator/outer result 0, verification and cleanup
+complete: base **49** and candidate **69** API tests, both typechecks/builds, **88/88** progress checks including nine CAS
+cases, and **6/6** compatibility checks with **24** response comparisons. Both negative admission controls exited 1 and
+preserved their sentinel rows. Independent review verified all 120 raw payload hashes, 181 committed source exports,
+both build inventories and all three unchanged dependency trees. Dependency reuse is qualified local-copy reuse, not a
+fresh install or immutable cache; HTTP fetch interception is not OS network isolation. The protected canonical validate
+gate remains **FAIL, failure count 1**, from `d0b6587`; the earlier canonical code FAIL and planVerify failure count 2 remain
+retained. Fresh canonical code request `01M4FCME8HGQJP9D97TS7WHNFS` is running at this cutoff. The operator evidence was
+copied under `.wingmate/evidence/operator-postgres-178b843/` with its manifest verified; copying evidence grants no PASS.
+Trusted native validation remains a hard pre-publication blocker, along with every remaining canonical gate.
+
+Bouncr friend-code JRF-417 [PR #3](https://github.com/furoyce/bouncr.lol/pull/3) remains open, non-draft and unmerged at
+`19c70fb7c0752a2e54f7322cf4a7db80432713c6`; Learning JRF-418
+[PR #17](https://github.com/furoyce/jr-learning-plus/pull/17) remains open, non-draft and unmerged at
+`4f6b72ae337393d06f71f7a3058207077f5133d2`. Their Review-Ready and assisted-workflow qualifications remain; Learning's
+recorded CI success and unexplained Vercel block below are unchanged.
+
+Travel JRF-419 has re-parked at `awaiting-human/validate`, question `01M4FBXWSQEFAC152Y8EPMHHAS`. Its second canonical
+validate **FAIL** is retained at failure count **2**. The older app-authored reply
+`aec3ad16-c04b-443a-a798-a85673708c55` remains `unverified_input`, with no resume attempt credited; it is not an owner
+waiver or trusted runner. Full unchanged socket-using validation still requires an appropriate isolated runner. Smart
+JRF-420 remains unclaimed with the recorded Unix-socket/tsx and stripped-Git HOME-denial preflight blockers. Native
+acceptance still needs an isolated host, immutable artifact producer, execution adapter and fresh app-bound foreground,
+PID and AX proof. No production adapter or native PASS is claimed, and automation must remain disabled.
+
+New private evidence under `~/.local/share/wingmate/evidence/`:
+
+- `console-answer-guard-20261009/`: PR #23 exact-source checks, original RED and read-only rollout evidence; manifest
+  SHA-256 `1a24113f628fe5964159458f0e137c9be0f8e05fa40b754409c049296bd5a029`.
+- `owner-answer-delivery-reconcile-20261009/`: PR #24 exact-source checks and adoption RED/GREEN, 59 files, no scanner
+  findings; manifest SHA-256 `b2ae907cae9d5cfe27afc695f109e25ae5c4cbe02ad04f6772695efc7f159900`. Final independent
+  evidence-review receipt SHA-256 `fb040b8b86a824288c6188cbc6658c7ed1385e314b1b2c72b0f648f4ce0996d2`.
+- `runtime-6e6b9dc-20261009/`: disabled install, retained quick-doctor v1 FAIL and v2 PASS, automation read-back and the
+  `04:05:28Z` idle manual tick; 17 payloads plus manifest, full entropy/token screen clean. Manifest SHA-256
+  `2689d0c341d28b87e8eaf43a7910e9dea9eebcd0706d1005bba9ca997500d144`.
+- `JRF-404-profile-cas-slices-20261009/`: reviewed sibling source/static/unit evidence before integration, preserving the
+  initial fixture failure and P2 correction; manifest SHA-256 `9e505fa650617d62a4ba62f1da6a1fb2cc27eae644d9aa9ff18b774bbc260806`.
+- `JRF-404-final-postgres-178b8434a831-success-20261009/`: exact-source assisted API/PG evidence, 313 payloads plus
+  manifest; SHA-256 `602444fe7fb7397c7873cb56e65e950b95defdf40315b2a939aa2f07bda838f0`. Full entropy/token screening
+  found zero credentials and only two verified Git metadata heuristic matches. Old failed runs and canonical FAILs remain
+  separate and unchanged; no native, canonical or whole-candidate acceptance follows from this archive.
+
+The original read-only provider session remains untouched. The operator's unrelated dirty cleanup work was preserved;
+this documentation change neither edits target applications nor changes the dispatcher, owner configuration or automation.
+
+### Earlier operational checkpoint: 2026-10-09T03:26:46Z
+
 Checkpoint at `2026-10-09T03:26:46Z`. Slice 2 has owner acceptance; formal unassisted/native acceptance under spec §15.1 remains
 incomplete. The dispatcher is still the disabled PR #18 installation described below (958 tests passed, 0 failed); latest
 automation read-back remains `enabled=false`. Remote `main` separately advanced through PRs #20/#21 to
