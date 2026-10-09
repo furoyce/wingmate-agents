@@ -1199,7 +1199,7 @@ export function renderDashboardHtml(): string {
           const roleDisplay = a.role === 'coordinator' ? 'Coordinator' : a.role;
           const statusBadge = '<span class="badge badge-status-' + escapeHtml(a.assignedStatus) + '" title="' + escapeHtml(a.provenanceDetail) + '">' + escapeHtml(a.statusDetail || a.assignedStatus) + '</span>';
           const providerBadge = '<span class="badge badge-' + escapeHtml(a.provider) + '">' + escapeHtml(a.provider) + (a.model ? ' · ' + escapeHtml(a.model) : '') + '</span>';
-          
+
           return (
             '<tr>' +
               '<td>' +
