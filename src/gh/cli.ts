@@ -51,6 +51,29 @@ function repoFlag(repo: string): string[] {
 export class GhCli implements GhPort {
   constructor(private readonly exec: Runner = run) {}
 
+  async hasOpenPr(repo: string, branch: string): Promise<boolean> {
+    const r = await this.exec(
+      [
+        "gh",
+        "pr",
+        "list",
+        ...repoFlag(repo),
+        "--head",
+        branch,
+        "--state",
+        "open",
+        "--json",
+        "number,url",
+        "--limit",
+        "1",
+      ],
+      { cwd: GH_CWD, timeoutMs: 60_000, env: { ...DISPATCHER_GIT_ENV } },
+    );
+    if (r.code !== 0 || r.timedOut || r.truncated)
+      throw new WingmateError("gh_failed", "open PR inventory incomplete");
+    return parsed("pr list", z.array(PrRow), r.stdout).length > 0;
+  }
+
   /** Reuses the open PR of `head` when there is one (replay-safe, Appendix D), else creates it from a 0600 body file. */
   async prCreate(
     repo: string,
@@ -108,7 +131,7 @@ export class GhCli implements GhPort {
       ["gh", "pr", "view", String(number), ...repoFlag(repo), "--json", "state,headRefName,url"],
       { cwd: GH_CWD, timeoutMs: 60_000, env: { ...DISPATCHER_GIT_ENV } },
     );
-    if (r.code !== 0)
+    if (r.code !== 0 || r.timedOut || r.truncated)
       throw new WingmateError("gh_failed", `gh pr view failed (${r.code}): ${r.stderr.trim().slice(0, 200)}`);
     return parsed("pr view", PrView, r.stdout);
   }

@@ -72,6 +72,9 @@ export class FakeGit implements GitPort {
   async hasTrackedChanges(at: GitAt): Promise<boolean> {
     return new GitCli().hasTrackedChanges(at);
   }
+  async cleanupStatus(at: GitTarget) {
+    return new GitCli().cleanupStatus(at);
+  }
   /** Test helpers (no longer on the port: the claim reads the git dirs from the worktree's own links, C22). */
   async commonDir(cwd: string) {
     return this.commonDirs.get(cwd) ?? `${cwd}/.git-common`;
@@ -145,6 +148,10 @@ export class FakeGit implements GitPort {
 }
 
 export class FakeGh implements GhPort {
+  async hasOpenPr(repo: string, branch: string) {
+    this.repos.push(repo);
+    return this.prs.some((p) => p.head === branch && (this.states.get(p.number) ?? "OPEN") === "OPEN");
+  }
   prs: { number: number; url: string; head: string }[] = [];
   /** `gh pr view` state per PR number (default OPEN); tests merge or close PRs here. */
   states = new Map<number, string>();

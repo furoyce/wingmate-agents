@@ -32,6 +32,8 @@ export interface AcquiredLock {
    * external action and aborts with outcome `lock_lost`.
    */
   lost(): boolean;
+  /** Synchronous callers must not wait for the heartbeat to discover a replaced lock. */
+  verify(): Promise<boolean>;
   release(): Promise<void>;
 }
 export interface AcquireOptions {
@@ -145,6 +147,11 @@ export const TickLock = {
     return {
       kind,
       lost: () => lost,
+      verify: async () => {
+        const cur = await readLock(path);
+        if (cur.kind !== "ok" || cur.lock.token !== mine.token) lost = true;
+        return !lost;
+      },
       release: async () => {
         clearInterval(timer);
         try {

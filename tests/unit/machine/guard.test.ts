@@ -22,6 +22,8 @@ const LINEAR: Record<keyof LinearPort, Kind> = {
   subscribe: "write",
 };
 const ORCA: Record<keyof OrcaPort, Kind> = {
+  cleanupTerminals: "read",
+  cleanupWorkers: "read",
   worktreePs: "read",
   worktreeCurrent: "read",
   terminalList: "read",
@@ -47,6 +49,7 @@ const ORCA: Record<keyof OrcaPort, Kind> = {
   automationsEdit: "write",
 };
 const GIT: Record<keyof GitPort, Kind> = {
+  cleanupStatus: "read",
   revParse: "read",
   hasTrackedChanges: "read",
   changedPaths: "read",
@@ -63,7 +66,7 @@ const GIT: Record<keyof GitPort, Kind> = {
   disableReplaceRefs: "write", // R30: it writes the repository's config
   credentialConfig: "read",
 };
-const GH: Record<keyof GhPort, Kind> = { prCreate: "write", prView: "read" };
+const GH: Record<keyof GhPort, Kind> = { prCreate: "write", prView: "read", hasOpenPr: "read" };
 const PORTS = { linear: LINEAR, orca: ORCA, git: GIT, gh: GH } as const;
 const of = (m: Record<string, Kind>, kind: Kind) =>
   Object.entries(m)

@@ -26,6 +26,7 @@ const OBJECT_NAME = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
  * replaces), and the base checks another history than GitHub's.
  */
 export const DISPATCHER_GIT_ENV: Readonly<Record<string, string>> = {
+  GIT_OPTIONAL_LOCKS: "0", // read-only status must not refresh/write the index (cleanup preview)
   GIT_TERMINAL_PROMPT: "0",
   GIT_NO_REPLACE_OBJECTS: "1",
   GIT_CONFIG_COUNT: "2",
@@ -101,7 +102,7 @@ export class GitCli implements GitPort {
   private async g(at: GitAt, args: string[], timeoutMs = 60_000): Promise<string> {
     const r = await this.run(at, args, timeoutMs);
     const verb = args[args[0] === "-c" ? 2 : 0];
-    if (r.code !== 0)
+    if (r.code !== 0 || r.timedOut)
       throw new WingmateError(
         "git_failed",
         `git ${verb} failed (${r.code}): ${r.stderr.trim().slice(0, 300)}`,
@@ -147,6 +148,22 @@ export class GitCli implements GitPort {
       if (r.code === 1) return true;
     }
     return false;
+  }
+  async cleanupStatus(at: GitTarget): Promise<{ dirty: boolean; branch: string }> {
+    const status = await this.g(at, [
+      "status",
+      "--porcelain=v1",
+      "-z",
+      "--untracked-files=all",
+      "--ignore-submodules=none",
+      "--",
+      ".",
+      ":(top,exclude).wingmate",
+    ]);
+    return {
+      dirty: status.length > 0 || (await this.hasTrackedChanges(at)),
+      branch: (await this.g(at, ["symbolic-ref", "--quiet", "--short", "HEAD"])).trim(),
+    };
   }
   async commonDir(at: GitAt): Promise<string> {
     return (await this.g(at, ["rev-parse", "--path-format=absolute", "--git-common-dir"])).trim();
@@ -288,6 +305,7 @@ export class GitCli implements GitPort {
     if (!OBJECT_NAME.test(ancestor) || !OBJECT_NAME.test(descendant))
       throw new WingmateError("sha_invalid", "git merge-base: a commit to compare is not a full object name");
     const r = await this.run(t, ["merge-base", "--is-ancestor", ancestor, descendant], 60_000);
+    if (r.timedOut || r.truncated) return null;
     return r.code === 0 ? true : r.code === 1 ? false : null;
   }
   /** F7: `git for-each-ref` of `refs/replace/` on the pinned target — packed and loose refs alike, at most ten names. */

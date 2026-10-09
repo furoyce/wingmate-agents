@@ -76,6 +76,7 @@ export async function makeWorld(startIso = "2026-10-06T10:00:00Z") {
     gh,
     home: root,
     toolchainPaths: [],
+    inspectCleanupProcesses: async () => ({ complete: true, pids: [] }),
     sweep: async (paths, opts) => {
       swept.push(...paths);
       sweeps.push({ paths, spare: opts?.spare ?? null });

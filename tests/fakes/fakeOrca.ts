@@ -165,6 +165,7 @@ export class FakeOrca implements OrcaPort {
   async worktreePs(): Promise<FleetSnapshot> {
     await this.rec("worktreePs", null);
     return {
+      cleanupVerified: true,
       worktrees: [...[...this.rows.values()].map((r) => structuredClone(r)), ...this.mainRows()],
       truncated: false,
       omittedHostIds: this.partial ? ["ssh-1"] : [],
@@ -172,11 +173,20 @@ export class FakeOrca implements OrcaPort {
   }
   async worktreeCurrent(cwd: string) {
     await this.rec("worktreeCurrent", cwd);
+    const row = [...this.rows.values()].find((r) => r.path === cwd);
+    if (row)
+      return { repoId: row.repoId, worktreeId: row.worktreeId, path: row.path, head: this.startCommit };
     return { ...this.current };
+  }
+  async cleanupWorkers(runId: string) {
+    return { complete: true, workers: await this.workerList(runId) };
   }
   async terminalList(wt: string) {
     await this.rec("terminalList", wt);
     return structuredClone(this.terminals.get(wt) ?? []);
+  }
+  async cleanupTerminals(wt: string) {
+    return { complete: true, terminals: await this.terminalList(wt) };
   }
   async accountList() {
     await this.rec("accountList", null);

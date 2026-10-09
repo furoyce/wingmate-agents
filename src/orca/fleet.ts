@@ -37,8 +37,23 @@ const ms = (n: number | null | undefined): string | null => (n == null ? null : 
 const shortBranch = (b: string | null) => (b ?? "").replace(/^refs\/heads\//, "");
 
 export function parseFleet(envelope: unknown): FleetSnapshot {
-  const ps = PsZ.parse(Env.parse(envelope).result);
+  const raw = Env.parse(envelope).result;
+  const ps = PsZ.parse(raw);
+  const cleanupVerified = z
+    .object({
+      truncated: z.boolean(),
+      hostScope: z.object({ omittedHostIds: z.array(z.string()) }),
+      worktrees: z.array(
+        z.object({
+          liveTerminalCount: z.number(),
+          agents: z.array(AgentZ),
+          childWorktreeIds: z.array(z.string()),
+        }),
+      ),
+    })
+    .safeParse(raw).success;
   return {
+    cleanupVerified,
     truncated: ps.truncated,
     omittedHostIds: ps.hostScope.omittedHostIds,
     worktrees: ps.worktrees.map((w) => ({
@@ -84,6 +99,33 @@ export function parseTerminals(envelope: unknown): TerminalRow[] {
     title: t.title ?? "",
     lastOutputAt: ms(t.lastOutputAt),
   }));
+}
+
+/** Cleanup cannot infer a complete empty inventory from terminalList's compatibility DTO. */
+export function parseCleanupTerminals(
+  envelope: unknown,
+  worktreeId: string,
+): { complete: boolean; terminals: TerminalRow[] } {
+  const env = Env.parse(envelope);
+  const terminals = parseTerminals(envelope);
+  const proof = z
+    .object({
+      truncated: z.literal(false),
+      totalCount: z.number().int().nonnegative(),
+      hostScope: z.object({
+        hostIds: z.tuple([z.literal("local")]),
+        omittedHostIds: z.array(z.string()).length(0),
+      }),
+    })
+    .safeParse(env.result);
+  return {
+    complete:
+      env.ok &&
+      proof.success &&
+      proof.data.totalCount === terminals.length &&
+      terminals.every((t) => t.worktreeId === worktreeId),
+    terminals,
+  };
 }
 
 export const joinPane = (row: TerminalRow): string => `${row.tabId}:${row.leafId}`;

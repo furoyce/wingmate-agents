@@ -93,6 +93,10 @@ export function guardMethods<T extends object>(
 export function guardedCtx(ctx: Ctx, check: (verb: string) => Promise<void>): Ctx {
   return {
     ...ctx,
+    checkMutation: async () => {
+      await ctx.checkMutation?.();
+      await check("cleanup");
+    },
     linear: guardMethods(ctx.linear, WRITE_VERBS.linear, check),
     orca: guardMethods(ctx.orca, WRITE_VERBS.orca, check),
     git: guardMethods(ctx.git, WRITE_VERBS.git, check),

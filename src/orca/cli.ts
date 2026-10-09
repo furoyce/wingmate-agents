@@ -62,5 +62,7 @@ export async function orca(args: string[], opts: OrcaOptions = {}): Promise<unkn
       env.data.error?.message ?? "orca error",
       env.data,
     );
+  if (r.code !== 0 || r.truncated)
+    throw new OrcaError("orca_incomplete", `${label(args)} did not return a complete successful observation`);
   return env.data.result;
 }

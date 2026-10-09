@@ -53,6 +53,8 @@ export interface TickDeadline {
 }
 
 export interface Ctx {
+  /** Also fence cleanup's local evidence writes; external effects remain guarded at their ports. */
+  checkMutation?: () => Promise<void>;
   /** Canonical config file actually loaded by the trusted dispatcher; never supplied by an issue/agent command. */
   configPath?: string;
   cfg: Config;
@@ -76,6 +78,8 @@ export interface Ctx {
   /** Internal test dependency only; production runtime receipts anchor to the OS-account default state. */
   runtimeKitRoot?: string | undefined;
   sweep: SweepFn;
+  /** Read-only, complete process evidence for cleanup. No process is signalled by this operation. */
+  inspectCleanupProcesses?: (path: string) => Promise<{ complete: boolean; pids: number[] }>;
   publishImpl(): Promise<{ publish: PublishFn }>;
   /** REL-1: set by `tick` for its own run; absent outside a tick (no bound). */
   deadline?: TickDeadline;
@@ -86,6 +90,8 @@ export const remainingMs = (ctx: Ctx): number =>
   ctx.deadline ? ctx.deadline.at - ctx.deadline.now() : Number.POSITIVE_INFINITY;
 
 export interface BuildCtxInput {
+  log?: Ctx["log"];
+  inspectCleanupProcesses?: Ctx["inspectCleanupProcesses"];
   cfg: Config;
   dirs: Dirs;
   clock: Clock;
@@ -176,12 +182,15 @@ export async function buildCtx(o: BuildCtxInput): Promise<Ctx> {
     journal: new Journal(o.dirs, o.clock),
     ledger: new Ledger(o.dirs),
     // Logs go under this context's state root (never the real home when tests pass a temp Dirs).
-    log: logger(o.dirs.logs),
+    log: o.log ?? logger(o.dirs.logs),
     meta,
     now: () => o.clock.now().toISOString(),
     kitDirFor: (identifier) => join(o.dirs.kit, identifier),
     toolchainPaths: o.toolchainPaths ?? (await defaultToolchainPaths(home)),
     sweep: o.sweep ?? ((paths, opts) => import("./sweep").then((m) => m.sweep(paths, opts))),
+    inspectCleanupProcesses:
+      o.inspectCleanupProcesses ??
+      ((path) => import("./cleanupProcesses").then((m) => m.inspectCleanupProcesses(path))),
     publishImpl: o.publishImpl ?? (() => import("./publish")),
   };
 }
