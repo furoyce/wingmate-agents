@@ -57,10 +57,13 @@ describe("server endpoints", () => {
     expect(res.headers.get("content-type")).toContain("text/html");
     const html = await res.text();
     expect(html).toContain("Wingmate");
-    expect(html).toContain("Architect Console");
+    expect(html).toContain("Architect Command Center");
     expect(html).toContain("themeToggleBtn");
     expect(html).toContain("btnViewKanban");
     expect(html).toContain("kanbanBoard");
+    expect(html).toContain("Worktree ↗");
+    expect(html).toContain("issue-link");
+    expect(html).toContain("linearProjectUrl");
     expect(html).toContain("Answer in Linear");
     expect(html).toContain("signed-in owner account");
     for (const unsafeControl of [
