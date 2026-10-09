@@ -1,10 +1,13 @@
 // src/server/html.ts — Self-contained, high-performance HTML/CSS/JS dashboard for the Wingmate Architect Command Center.
-export function renderDashboardHtml(): string {
+// `csrfToken` is the session's token, embedded so only this same-origin page can read it; it is base64url (attribute-safe).
+export function renderDashboardHtml(csrfToken = ""): string {
+  const csrf = csrfToken.replace(/[^A-Za-z0-9_-]/g, "");
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="wingmate-csrf" content="${csrf}">
   <title>Wingmate · Architect Command Center</title>
   <style>
     :root, body[data-theme="light"] {
@@ -838,7 +841,7 @@ export function renderDashboardHtml(): string {
       </button>
 
       <!-- Actions -->
-      <button onclick="toggleDispatcherPause()" id="pauseBtn" class="sm">Pause Dispatcher</button>
+      <button onclick="toggleDispatcherPause()" id="pauseBtn" class="sm">Pause Global Dispatch</button>
       <button id="refreshBtn" onclick="manualRefresh()" class="sm">↻ Refresh</button>
     </div>
   </div>
@@ -929,6 +932,26 @@ export function renderDashboardHtml(): string {
 
   <script>
     let currentData = null;
+    const csrfMeta = document.querySelector('meta[name="wingmate-csrf"]');
+    const CSRF_TOKEN = csrfMeta ? csrfMeta.getAttribute("content") : "";
+    const SESSION_EXPIRED = "Console session expired or missing. Reload this page to start a new local session.";
+
+    // Same-origin API call carrying the session's CSRF token; the session cookie travels automatically.
+    async function apiFetch(path, options) {
+      const opts = options || {};
+      const headers = Object.assign({ "X-Wingmate-CSRF": CSRF_TOKEN }, opts.headers || {});
+      const res = await fetch(path, Object.assign({}, opts, { headers, credentials: "same-origin" }));
+      if (res.status === 401) throw new Error(SESSION_EXPIRED);
+      return res;
+    }
+
+    function postAction(name, body) {
+      return apiFetch("/api/actions/" + name, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      });
+    }
     let currentTheme = localStorage.getItem("wingmate_theme") || "light";
     let currentView = localStorage.getItem("wingmate_view") || "pipeline";
     let pollTimer = null;
@@ -1032,7 +1055,7 @@ export function renderDashboardHtml(): string {
       const timeoutId = setTimeout(() => controller.abort(), 6000);
 
       try {
-        const res = await fetch(url, { signal: controller.signal });
+        const res = await apiFetch(url, { signal: controller.signal });
         clearTimeout(timeoutId);
         if (!res.ok) throw new Error("HTTP " + res.status);
         currentData = await res.json();
@@ -1081,24 +1104,30 @@ export function renderDashboardHtml(): string {
     }
 
     function renderHeader(d) {
-      const hb = d.dispatcher;
-      const isPaused = (d.pausedScopes || []).length > 0;
+      const health = d.dispatcherHealth || { state: "unknown", detail: "No tick observed" };
+      const globalPaused = d.globalPaused === true;
+      const projects = d.pausedProjects || [];
       const dot = document.getElementById("pulseDot");
       const summary = document.getElementById("statusSummary");
       const pBtn = document.getElementById("pauseBtn");
+      const colors = { healthy: "var(--success)", paused: "var(--warning)", degraded: "var(--danger)", stale: "var(--warning)", unknown: "var(--text-dim)" };
+      const pauseText = d.pauseStateKnown === false ? "Pause state unknown (pause.json unreadable)" :
+        globalPaused ? "Global pause on" + (projects.length ? "; projects paused: " + projects.join(", ") : "") :
+        projects.length ? "Projects paused: " + projects.join(", ") : "";
 
-      if (isPaused) {
-        dot.style.background = "var(--warning)";
-        summary.textContent = "Dispatcher Paused (" + d.pausedScopes.join(", ") + ")";
-        pBtn.textContent = "Resume Dispatcher";
-        pBtn.className = "warning sm";
-      } else if (hb) {
-        dot.style.background = "var(--success)";
-        const dur = hb.durationMs ? hb.durationMs + "ms" : "";
-        summary.textContent = "Dispatcher " + hb.outcome + " · last tick " + dur + " · exit " + hb.exitCode;
-        pBtn.textContent = "Pause Dispatcher";
-        pBtn.className = "sm";
-      }
+      dot.style.background = globalPaused || d.pauseStateKnown === false ? "var(--warning)" : (colors[health.state] || colors.unknown);
+      summary.textContent = "Dispatcher " + health.state + " · " + health.detail + (pauseText ? " · " + pauseText : "");
+      // The header button controls the global scope only; project pauses are separate and survive a global resume.
+      pBtn.textContent = globalPaused ? "Resume Global Dispatch" : "Pause Global Dispatch";
+      pBtn.className = globalPaused ? "warning sm" : "sm";
+      pBtn.disabled = d.pauseStateKnown === false;
+    }
+
+    // Released and source-completed work is not delivery: merges are only claimed with a merge receipt.
+    function completionText(c) {
+      if (!c) return "Recorded completions · merge unverified";
+      return "Done " + c.recordedDone + " · released " + c.released + " · Linear completed " + c.sourceCompleted +
+        (c.mergeVerified === null || c.mergeVerified === undefined ? " · merge unverified" : " · merge-verified " + c.mergeVerified);
     }
 
     function renderFunnel(f) {
@@ -1114,7 +1143,7 @@ export function renderDashboardHtml(): string {
         '<div class="funnel-step">',
           '<div class="step-label">2. Agent-Ready</div>',
           '<div class="step-count">' + f.agentReady + '</div>',
-          '<div class="step-subtext">Queued for pickup</div>',
+          '<div class="step-subtext">' + (f.agentReadyBasis === "queue-eligible" ? "Eligible in dispatcher queue" : "Labeled in Linear · eligibility unknown") + '</div>',
         '</div>',
         '<div class="funnel-step">',
           '<div class="step-label">3. In Worktree</div>',
@@ -1132,9 +1161,9 @@ export function renderDashboardHtml(): string {
           '<div class="step-subtext">Implementation done</div>',
         '</div>',
         '<div class="funnel-step">',
-          '<div class="step-label">6. Done / Merged</div>',
+          '<div class="step-label">6. Completed</div>',
           '<div class="step-count" style="color: var(--success);">' + f.done + '</div>',
-          '<div class="step-subtext">In selected timeframe</div>',
+          '<div class="step-subtext">' + completionText(f.completion) + '</div>',
         '</div>'
       ].join("");
     }
@@ -1389,7 +1418,7 @@ export function renderDashboardHtml(): string {
         '<div class="stat-card">',
           '<div class="stat-label">Avg Cycle Time</div>',
           '<div class="stat-val">' + m.avgCycleMinutes + 'm</div>',
-          '<div class="step-subtext">Claim ➔ PR Shipped</div>',
+          '<div class="step-subtext">Recorded agent minutes per record</div>',
         '</div>',
         '<div class="stat-card">',
           '<div class="stat-label">Gate Pass Rate</div>',
@@ -1427,8 +1456,8 @@ export function renderDashboardHtml(): string {
               '<strong style="color: ' + (p.activeCount > 0 ? 'var(--accent)' : 'var(--text-dim)') + ';">' + p.activeCount + '</strong>' +
             '</div>' +
             '<div style="font-size: 12px; color: var(--text-muted); display: flex; justify-content: space-between;">' +
-              '<span>Queued / Ready:</span>' +
-              '<strong>' + p.queuedCount + '</strong>' +
+              '<span>Eligible / Skipped:</span>' +
+              '<strong>' + p.queuedCount + ' / ' + (p.skippedCount || 0) + '</strong>' +
             '</div>' +
             '<div style="font-size: 12px; color: var(--text-muted); display: flex; justify-content: space-between;">' +
               '<span>Completed:</span>' +
@@ -1539,7 +1568,7 @@ export function renderDashboardHtml(): string {
                   '</div>' +
                   '<a href="' + escapeHtml(qUrl) + '" target="_blank" rel="noopener noreferrer" class="kanban-card-title-link" title="Open in Linear">' + escapeHtml(q.title || "Queued Linear Issue") + '</a>' +
                   '<div style="font-size:11px; color:var(--text-dim); display:flex; justify-content:space-between; align-items:center; margin-top:6px;">' +
-                    '<span>Status: <strong style="color:var(--accent);">Queued</strong></span>' +
+                    '<span>Status: ' + (q.status === "eligible" ? '<strong style="color:var(--accent);">Eligible</strong>' : '<strong style="color:var(--warning);">Skipped' + (q.reason ? ': ' + escapeHtml(q.reason) : '') + '</strong>') + '</span>' +
                     '<a href="' + escapeHtml(qUrl) + '" target="_blank" rel="noopener noreferrer"><button class="sm" title="Open in Linear">Linear ↗</button></a>' +
                   '</div>' +
                 '</div>'
@@ -1547,7 +1576,7 @@ export function renderDashboardHtml(): string {
             }).join("") : (d.funnel.agentReady > 0 ? (
               '<div class="kanban-card" style="background:rgba(56, 189, 248, 0.05); border-color:var(--accent); text-align:center; padding:14px;">' +
                 '<div style="font-weight:700; color:var(--accent); margin-bottom:4px;">' + d.funnel.agentReady + ' issue' + (d.funnel.agentReady > 1 ? 's' : '') + ' ready</div>' +
-                '<div style="font-size:11px; color:var(--text-muted); margin-bottom:8px;">Marked agent-ready in Linear.<br>Awaiting dispatcher claim.</div>' +
+                '<div style="font-size:11px; color:var(--text-muted); margin-bottom:8px;">Labeled in Linear; no dispatcher queue observed.<br>Eligibility unknown.</div>' +
                 '<a href="https://linear.app" target="_blank" rel="noopener noreferrer"><button class="sm" style="width:100%;">View Queue in Linear ↗</button></a>' +
               '</div>'
             ) : '<div class="empty-state" style="padding:16px;">Queue is empty. Promote an issue from Todo to queue.</div>')) +
@@ -1666,23 +1695,23 @@ export function renderDashboardHtml(): string {
           '</div>' +
         '</div>' +
 
-        '<!-- Col 6: Done / Merged -->' +
+        '<!-- Col 6: Completed (merge unverified) -->' +
         '<div class="kanban-col">' +
           '<div class="kanban-col-header">' +
-            '<span class="kanban-col-title" style="color: var(--success);">Done / Merged</span>' +
+            '<span class="kanban-col-title" style="color: var(--success);">Completed</span>' +
             '<span class="kanban-col-badge">' + d.funnel.done + '</span>' +
           '</div>' +
           '<div class="kanban-cards">' +
             '<div class="kanban-card" style="background:rgba(16, 185, 129, 0.05); border-color:rgba(16, 185, 129, 0.2);">' +
               '<div style="display:flex; align-items:center; justify-content:space-between;">' +
-                '<span style="font-size:11px; color:var(--text-dim); text-transform:uppercase; font-weight:700;">Shipped</span>' +
-                '<span class="badge badge-pass">Merged</span>' +
+                '<span style="font-size:11px; color:var(--text-dim); text-transform:uppercase; font-weight:700;">Recorded</span>' +
+                '<span class="badge">Merge unverified</span>' +
               '</div>' +
               '<div style="font-size:24px; font-weight:800; font-family:var(--font-mono); color:var(--success); margin:4px 0;">' +
                 d.funnel.done + ' <span style="font-size:12px; font-weight:500; color:var(--text-muted);">issues</span>' +
               '</div>' +
               '<div style="font-size:11px; color:var(--text-muted); line-height:1.4;">' +
-                'Shipped in <strong>' + escapeHtml(d.metrics.timeframe) + '</strong> window.' +
+                escapeHtml(completionText(d.funnel.completion)) + ' in <strong>' + escapeHtml(d.metrics.timeframe) + '</strong> window.' +
               '</div>' +
               '<div style="margin-top:8px; padding-top:8px; border-top:1px solid var(--border-subtle); font-size:11px; color:var(--text-dim); display:flex; justify-content:space-between;">' +
                 '<span>Pass Rate: <strong style="color:var(--text);">' + d.metrics.gatePassRate + '%</strong></span>' +
@@ -1703,14 +1732,10 @@ export function renderDashboardHtml(): string {
 
       showToast("Promoting " + identifier + " to agent-ready in Linear...", "info");
       try {
-        const res = await fetch("/api/actions/promote", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ linearId, providerLabel: provider || "agent-ready" })
-        });
+        const res = await postAction("promote", { linearId, providerLabel: provider || "agent-ready" });
         const d = await res.json();
         if (d.ok) {
-          showToast("✓ " + identifier + " marked as agent-ready! Dispatcher will claim it.", "success");
+          showToast(d.message, "success");
           fetchData().catch(() => {});
         } else {
           showToast("Failed to promote: " + (d.error || d.message), "error");
@@ -1731,17 +1756,14 @@ export function renderDashboardHtml(): string {
     }
 
     async function toggleDispatcherPause() {
-      const isPaused = currentData && (currentData.pausedScopes || []).length > 0;
+      if (!currentData || currentData.pauseStateKnown === false) return;
+      const globalPaused = currentData.globalPaused === true;
       const pBtn = document.getElementById("pauseBtn");
       pBtn.disabled = true;
       try {
-        const res = await fetch("/api/actions/pause", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ scope: "global", on: !isPaused })
-        });
+        const res = await postAction("pause", { scope: "global", on: !globalPaused });
         const d = await res.json();
-        showToast(isPaused ? "Dispatcher resumed" : "Dispatcher paused", "info");
+        showToast(d.ok ? d.message : "Pause failed: " + (d.error || d.message), d.ok ? "info" : "error");
         fetchData().catch(() => {});
       } catch (err) {
         showToast("Error: " + err.message, "error");
@@ -1758,16 +1780,12 @@ export function renderDashboardHtml(): string {
       const dirName = path.split("/").slice(-1)[0] || path;
       showToast("Opening worktree in Orca / Workspace (" + dirName + ")...", "info");
       try {
-        const res = await fetch("/api/actions/open", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ target: "orca", path })
-        });
+        const res = await postAction("open", { target: "orca", path });
         const d = await res.json();
         if (d.ok) {
-          showToast("✓ Worktree opened in Orca / Workspace!", "success");
+          showToast(d.message, "success");
         } else {
-          showToast(d.message || "Failed to open worktree", "error");
+          showToast(d.message || d.error || "Failed to open worktree", "error");
         }
       } catch (err) {
         showToast("Open error: " + err.message, "error");

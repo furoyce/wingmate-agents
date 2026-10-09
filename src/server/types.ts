@@ -10,7 +10,27 @@ export interface FunnelStats {
   inAgent: number;
   waitingOnHuman: number;
   reviewReady: number;
+  /** Recorded completions (done + released archives, or Linear-completed when larger); not a merge count. */
   done: number;
+  /** `queue-eligible`: the dispatcher queue's eligible rows; `linear-labels`: no queue file, Linear labels only (eligibility unknown). */
+  agentReadyBasis: "queue-eligible" | "linear-labels";
+  completion: CompletionBreakdown;
+}
+
+/** Completion evidence by kind. `mergeVerified` is null: records carry no merge receipt, so merges are not observed here. */
+export interface CompletionBreakdown {
+  recordedDone: number;
+  released: number;
+  sourceCompleted: number;
+  mergeVerified: number | null;
+}
+
+/** Observed scheduler health from the last tick's freshness and outcome (a heartbeat alone is not "healthy"). */
+export interface DispatcherHealth {
+  state: "healthy" | "degraded" | "paused" | "stale" | "unknown";
+  outcome: string | null;
+  ageMin: number | null;
+  detail: string;
 }
 
 export interface TriageItem {
@@ -137,14 +157,19 @@ export interface ProjectSummary {
   linearProjectId: string;
   linearProjectUrl?: string;
   activeCount: number;
+  /** Eligible queue rows only. */
   queuedCount: number;
+  /** Queue rows the dispatcher skipped (each carries a reason). */
+  skippedCount: number;
   completedCount: number;
+  /** Which pause applies: the project's own scope, the global scope, or none. */
+  paused: "global" | "project" | null;
   slotHeldBy: string | null;
   automation: {
     type: "orca" | "cron" | "manual";
     cadence: string;
     enabled: boolean;
-    status?: "active" | "disabled" | "not_installed" | "paused" | "stale" | "unknown";
+    status?: "active" | "degraded" | "disabled" | "not_installed" | "paused" | "stale" | "unknown";
     provenance?: string;
   };
 }
@@ -178,8 +203,13 @@ export type SnapshotQueueItem = QueueRow & { title?: string | null; linearUrl?: 
 export interface SnapshotResponse {
   at: string;
   dispatcher: Heartbeat | null;
+  dispatcherHealth: DispatcherHealth;
   stopRequested: boolean;
   pausedScopes: string[];
+  /** False when pause.json is unreadable: pause state is then unknown, not "not paused". */
+  pauseStateKnown: boolean;
+  globalPaused: boolean;
+  pausedProjects: string[];
   funnel: FunnelStats;
   triage: TriageItem[];
   queue: SnapshotQueueItem[];

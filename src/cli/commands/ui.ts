@@ -1,6 +1,5 @@
 // src/cli/commands/ui.ts — `wingmate ui [--port <port>] [--open [orca|browser]] [--serve]`
-import { spawn } from "node:child_process";
-import { type WingmateServer, startServer } from "../../server";
+import { type Launcher, type WingmateServer, defaultLauncher, startServer } from "../../server";
 import { homeDirs } from "../../shared/paths";
 import { SystemClock } from "../../shared/time";
 import type { Argv } from "../index";
@@ -12,7 +11,41 @@ export interface UiDeps {
   out?: (s: string) => void;
   err?: (s: string) => void;
   start?: typeof startServer;
-  openTarget?: (target: "orca" | "browser", url: string) => void;
+  openTarget?: (target: "orca" | "browser", url: string) => void | Promise<void>;
+  launcher?: Launcher;
+}
+
+/**
+ * Opens the bare Console URL (no token: the page bootstraps its own session on navigation) and reports only an opener that
+ * exited 0; on failure the URL stays usable and the user is told to open it.
+ */
+export async function openConsole(
+  target: "orca" | "browser",
+  url: string,
+  launch: Launcher,
+  out: (s: string) => void,
+  err: (s: string) => void,
+): Promise<boolean> {
+  if (target === "orca") {
+    const orca = await launch("orca", ["tab", "create", "--url", url]);
+    if (orca.code === 0) {
+      out(`Opened ${url} in an Orca browser tab`);
+      return true;
+    }
+    // Only fall back when Orca is absent; a failed or timed-out Orca launch may already have opened a tab.
+    if (!orca.missing) {
+      err(`Orca could not open a tab (${orca.error ?? `exit ${orca.code}`}); open ${url} manually`);
+      return false;
+    }
+    err("Orca CLI not found; trying the system browser");
+  }
+  const sys = await launch("open", [url]);
+  if (sys.code === 0) {
+    out(`Opened ${url} in the system browser`);
+    return true;
+  }
+  err(`Could not open the Console (${sys.error ?? `exit ${sys.code}`}); open ${url} manually`);
+  return false;
 }
 
 export async function uiCommand(argv: Argv, deps: UiDeps = {}): Promise<number> {
@@ -76,23 +109,13 @@ export async function uiCommand(argv: Argv, deps: UiDeps = {}): Promise<number> 
   out(`Wingmate Console listening at ${server.url}`);
 
   if (openTarget) {
+    const launch = deps.launcher ?? defaultLauncher;
     const opener =
       deps.openTarget ??
-      ((target, url) => {
-        if (target === "orca") {
-          const child = spawn("orca", ["tab", "create", "--url", url], {
-            stdio: "ignore",
-            detached: true,
-          });
-          child.on("error", () => {
-            spawn("open", [url], { stdio: "ignore", detached: true }).unref();
-          });
-          child.unref();
-        } else {
-          spawn("open", [url], { stdio: "ignore", detached: true }).unref();
-        }
+      (async (target, url) => {
+        await openConsole(target, url, launch, out, err);
       });
-    opener(openTarget, server.url);
+    await opener(openTarget, server.url);
   }
 
   // If in an automated test environment, exit early if requested

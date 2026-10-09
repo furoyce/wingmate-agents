@@ -28,16 +28,29 @@ function fileTree(root: string, rel = ""): Record<string, string> {
 describe("server endpoints", () => {
   let w: World;
   let server: WingmateServer;
+  let session: { cookie: string; csrf: string };
+
+  /** Same-origin browser request headers for a bootstrapped Console session. */
+  const browser = (json = false): Record<string, string> => ({
+    cookie: session.cookie,
+    "x-wingmate-csrf": session.csrf,
+    origin: server.url,
+    "sec-fetch-site": "same-origin",
+    ...(json ? { "content-type": "application/json" } : {}),
+  });
 
   beforeAll(async () => {
     w = await world();
     server = await startServer({
-      port: 4899,
+      port: 0,
       dirs: w.dirs,
       cfg: w.cfg,
       clock: w.clock,
       linearClient: w.linear,
     });
+    const page = await fetch(`${server.url}/`);
+    const csrf = (await page.text()).match(/name="wingmate-csrf" content="([^"]+)"/)?.[1] ?? "";
+    session = { cookie: page.headers.get("set-cookie")?.split(";")[0] ?? "", csrf };
   });
 
   afterAll(() => {
@@ -153,7 +166,7 @@ describe("server endpoints", () => {
   });
 
   test("GET /api/snapshot returns valid snapshot payload", async () => {
-    const res = await fetch(`${server.url}/api/snapshot?timeframe=7d`);
+    const res = await fetch(`${server.url}/api/snapshot?timeframe=7d`, { headers: browser() });
     expect(res.status).toBe(200);
     const data = await res.json();
     expect(data.funnel).toBeDefined();
@@ -175,7 +188,7 @@ describe("server endpoints", () => {
   test("POST /api/actions/pause toggles dispatcher pause state", async () => {
     const res = await fetch(`${server.url}/api/actions/pause`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: browser(true),
       body: JSON.stringify({ scope: "global", on: true }),
     });
     expect(res.status).toBe(200);
@@ -186,7 +199,7 @@ describe("server endpoints", () => {
     // Unpause so subsequent tests are not blocked
     await fetch(`${server.url}/api/actions/pause`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: browser(true),
       body: JSON.stringify({ scope: "global", on: false }),
     });
   });
@@ -216,7 +229,7 @@ describe("server endpoints", () => {
     for (const questionId of ["q_test_123", "q_test_123", "unknown-question"]) {
       const res = await fetch(`${server.url}/api/actions/answer`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: browser(true),
         body: JSON.stringify({
           identifier: "JRF-890",
           questionId,
