@@ -10,7 +10,27 @@ export interface FunnelStats {
   inAgent: number;
   waitingOnHuman: number;
   reviewReady: number;
+  /** Unique issue IDs with observed done archives or Linear-completed state; excludes releases and unobserved sources. */
   done: number;
+  /** `queue-eligible`: the dispatcher queue's eligible rows; `linear-labels`: no queue file, Linear labels only (eligibility unknown). */
+  agentReadyBasis: "queue-eligible" | "linear-labels";
+  completion: CompletionBreakdown;
+}
+
+/** Unique issue counts for each evidence source (may overlap). Releases are separate; mergeVerified is unobserved. */
+export interface CompletionBreakdown {
+  recordedDone: number;
+  released: number;
+  sourceCompleted: number;
+  mergeVerified: number | null;
+}
+
+/** Observed scheduler health from the last tick's freshness and outcome (a heartbeat alone is not "healthy"). */
+export interface DispatcherHealth {
+  state: "healthy" | "degraded" | "paused" | "stale" | "unknown";
+  outcome: string | null;
+  ageMin: number | null;
+  detail: string;
 }
 
 export interface TriageItem {
@@ -137,14 +157,22 @@ export interface ProjectSummary {
   linearProjectId: string;
   linearProjectUrl?: string;
   activeCount: number;
+  /** Eligible queue rows only. */
   queuedCount: number;
+  /** Queue rows the dispatcher skipped (each carries a reason). */
+  skippedCount: number;
+  /** Unique issue IDs with an archived done record for this project. */
   completedCount: number;
+  /** Unique issue IDs with an archived ownership release for this project. */
+  releasedCount: number;
+  /** Which pause applies: the project's own scope, the global scope, or none. */
+  paused: "global" | "project" | null;
   slotHeldBy: string | null;
   automation: {
     type: "orca" | "cron" | "manual";
     cadence: string;
     enabled: boolean;
-    status?: "active" | "disabled" | "not_installed" | "paused" | "stale" | "unknown";
+    status?: "active" | "degraded" | "disabled" | "not_installed" | "paused" | "stale" | "unknown";
     provenance?: string;
   };
 }
@@ -155,7 +183,10 @@ export interface ThroughputMetrics {
   completedCount: number;
   inProgressCount: number;
   avgCycleMinutes: number;
-  gatePassRate: number;
+  /** PASS / observed PASS-or-FAIL verdicts; null when there are no observed outcomes. */
+  gatePassRate: number | null;
+  gatesPassed: number;
+  gatesObserved: number;
   tokens: number;
   costUsd: number;
   byProvider: Record<string, { tokens: number; costUsd: number; count: number }>;
@@ -178,8 +209,13 @@ export type SnapshotQueueItem = QueueRow & { title?: string | null; linearUrl?: 
 export interface SnapshotResponse {
   at: string;
   dispatcher: Heartbeat | null;
+  dispatcherHealth: DispatcherHealth;
   stopRequested: boolean;
   pausedScopes: string[];
+  /** False when pause.json is unreadable: pause state is then unknown, not "not paused". */
+  pauseStateKnown: boolean;
+  globalPaused: boolean;
+  pausedProjects: string[];
   funnel: FunnelStats;
   triage: TriageItem[];
   queue: SnapshotQueueItem[];

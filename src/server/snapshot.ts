@@ -3,13 +3,13 @@ import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import type { Config } from "../config/schema";
 import { type InstallState, readInstallState } from "../ops/install";
-import { readPause } from "../ops/pause";
+import { GLOBAL_SCOPE, readPause } from "../ops/pause";
 import { modelLabel } from "../policy/providers";
 import type { LinearIssue, LinearPort } from "../ports";
 import type { Dirs } from "../shared/paths";
 import type { Clock } from "../shared/time";
 import { readText } from "../state/fs";
-import { readLastTick, stopRequested } from "../state/heartbeat";
+import { type Heartbeat, readLastTick, stopRequested } from "../state/heartbeat";
 import { readQueue } from "../state/queue";
 import { RecordSchema, type WRecord } from "../state/records";
 import type {
@@ -17,6 +17,7 @@ import type {
   AgentAssignedStatus,
   AgentRosterEntry,
   AgentRosterSummary,
+  DispatcherHealth,
   ExecutionTaskSummary,
   FunnelStats,
   GateSummary,
@@ -36,6 +37,40 @@ const TIMEFRAME_DAYS: Record<Timeframe, number> = {
   "30d": 30,
   all: 3650,
 };
+
+/** A tick older than this is stale: the installer cadence is 5 minutes, so three missed ticks. */
+export const HEARTBEAT_STALE_MIN = 15;
+const HEALTHY_OUTCOMES = new Set(["idle", "work"]);
+
+/**
+ * Observed dispatcher health from the last tick: healthy only for a fresh tick whose outcome is idle/work. A fresh tick that
+ * errored, lost its lock or could not reach Orca/Linear is degraded; a paused outcome is paused; an old one is stale.
+ */
+export function dispatcherHealth(
+  heartbeat: Heartbeat | null,
+  invalid: boolean,
+  nowIso: string,
+): DispatcherHealth {
+  if (invalid)
+    return { state: "unknown", outcome: null, ageMin: null, detail: "Last tick evidence is invalid" };
+  if (!heartbeat) return { state: "unknown", outcome: null, ageMin: null, detail: "No tick observed" };
+  const ageMs = Math.max(0, Date.parse(nowIso) - Date.parse(heartbeat.at));
+  const ageMin = Math.floor(ageMs / 60_000);
+  const base = { outcome: heartbeat.outcome, ageMin };
+  const reason = heartbeat.reason ? `: ${heartbeat.reason}` : "";
+  if (ageMs > HEARTBEAT_STALE_MIN * 60_000)
+    return { ...base, state: "stale", detail: `Last tick ${ageMin}m ago (${heartbeat.outcome})` };
+  if (heartbeat.outcome === "paused")
+    return { ...base, state: "paused", detail: `Last tick ${ageMin}m ago: paused` };
+  // Exit codes are not health: §4.3's precheck exits 1 even after a healthy idle/work tick, so judge the outcome.
+  if (!HEALTHY_OUTCOMES.has(heartbeat.outcome))
+    return {
+      ...base,
+      state: "degraded",
+      detail: `Last tick ${ageMin}m ago: ${heartbeat.outcome} (exit ${heartbeat.exitCode})${reason}`,
+    };
+  return { ...base, state: "healthy", detail: `Last tick ${ageMin}m ago: ${heartbeat.outcome}` };
+}
 
 /** Use the actual issue URL when available; never interpolate a scheme from ticket data into an answer link. */
 function linearIssueUrl(value: string | undefined): string | null {
@@ -68,7 +103,8 @@ function coordinatorRoleStageDescription(r: WRecord): string {
   }
   if (r.stage === "review") return "Recorded stage: review (PR open, parked for review)";
   if (r.stage === "blocked") return "Recorded stage: blocked (safety gate / limit)";
-  if (r.stage === "done" || r.stage === "released") return `Recorded stage: ${r.stage} (completed)`;
+  if (r.stage === "done") return "Recorded stage: done (completed)";
+  if (r.stage === "released") return "Recorded stage: ownership released";
   if (r.stage === "cancelled") return "Recorded stage: cancelled";
   if (r.stage === "working") {
     return `Recorded pipeline stage: ${r.pipelineStage}`;
@@ -80,7 +116,7 @@ function coordinatorAssignedStatus(r: WRecord): AgentAssignedStatus {
   if (r.paused) return "parked";
   if (r.stage === "claimed") return "assigned";
   if (r.stage === "awaiting-human" || r.stage === "review" || r.stage === "blocked") return "parked";
-  if (r.stage === "done" || r.stage === "released") return "completed";
+  if (r.stage === "done") return "completed";
   if (r.stage === "cancelled") return "failed";
   if (r.stage === "working") {
     return r.coordinator.startedAt ? "running" : "assigned";
@@ -205,7 +241,14 @@ export async function buildSnapshot(
   }
   if (invalidTickEvidence) problems.push("last_tick_invalid");
   const isStopRequested = await stopRequested(dirs).catch(() => false);
-  const pausedScopes: string[] = await readPause(dirs).catch(() => [] as string[]);
+  // An unreadable pause file is unknown pause state, never "not paused".
+  let pauseStateKnown = true;
+  const pausedScopes: string[] = await readPause(dirs).catch(() => {
+    pauseStateKnown = false;
+    problems.push("pause_invalid");
+    return [] as string[];
+  });
+  const globalPaused = pausedScopes.includes(GLOBAL_SCOPE);
 
   let installState: InstallState | null = null;
   let installMalformed = false;
@@ -217,7 +260,8 @@ export async function buildSnapshot(
   }
 
   // 3. Evaluate scheduler installation & heartbeat provenance
-  let schedulerStatus: "active" | "disabled" | "stale" | "unknown" = "unknown";
+  let schedulerStatus: "active" | "degraded" | "paused" | "disabled" | "stale" | "unknown" = "unknown";
+  const health = dispatcherHealth(heartbeat, invalidTickEvidence, now);
   let schedulerConfigured = false;
   let schedulerEnabled = false;
   let schedulerSchedule = "Not installed";
@@ -279,15 +323,16 @@ export async function buildSnapshot(
       schedulerProvenance =
         "Recorded enabled in install.json (live state unverified; awaiting first heartbeat)";
     } else {
-      const heartbeatAgeMin = (Date.parse(now) - Date.parse(heartbeat.at)) / 60_000;
-      if (heartbeatAgeMin > 15) {
+      const heartbeatAgeMin = health.ageMin ?? 0;
+      if (health.state === "stale") {
         schedulerStatus = "stale";
         schedulerLastRunStatus = `Stale (${Math.floor(heartbeatAgeMin)}m ago; last: ${heartbeat.outcome})`;
         schedulerProvenance = `Recorded enabled in install.json (live state unverified; tick stale ${Math.floor(heartbeatAgeMin)}m ago)`;
       } else {
-        schedulerStatus = "active";
+        schedulerStatus =
+          health.state === "healthy" ? "active" : health.state === "paused" ? "paused" : "degraded";
         schedulerEnabled = true;
-        schedulerLastRunStatus = `${heartbeat.outcome} (${heartbeat.durationMs}ms)`;
+        schedulerLastRunStatus = `${heartbeat.outcome} (${heartbeat.durationMs}ms, exit ${heartbeat.exitCode})`;
         schedulerProvenance = `Recorded enabled in install.json (live state unverified; fresh heartbeat ${heartbeat.durationMs}ms)`;
       }
     }
@@ -370,7 +415,7 @@ export async function buildSnapshot(
       terminalHandle: r.coordinator.terminalHandle,
       paneKey: r.coordinator.paneKey,
       startedAt: r.coordinator.startedAt,
-      completedAt: r.stage === "done" || r.stage === "released" ? r.updatedAt : null,
+      completedAt: r.stage === "done" ? r.updatedAt : null,
       verdict: null,
     });
 
@@ -560,13 +605,14 @@ export async function buildSnapshot(
       !li.labels.some((l) => l.name === "agent-ready" || l.name === "claude" || l.name === "codex"),
   ).length;
 
-  const agentReadyCount =
-    (queueData?.items.filter((i) => inScope(i.project)).length ?? 0) ||
-    linearIssues.filter(
-      (li) =>
-        li.state.type === "unstarted" &&
-        li.labels.some((l) => l.name === "agent-ready" || l.name === "claude" || l.name === "codex"),
-    ).length;
+  // The dispatcher's queue is authoritative for eligibility: count only its eligible rows (skipped rows carry a reason). Without
+  // a queue file the count falls back to Linear labels, which says nothing about eligibility, and is labeled as such.
+  const agentReadyCount = queueData
+    ? queueData.items.filter((i) => inScope(i.project) && i.status === "eligible").length
+    : linearIssues.filter(
+        (li) =>
+          li.state.type === "unstarted" && li.labels.some((l) => cfg.labels.agent.supported.includes(l.name)),
+      ).length;
 
   const inAgentCount = activeRecords.filter((r) => r.stage === "claimed" || r.stage === "working").length;
   const waitingHumanCount = activeRecords.filter(
@@ -574,13 +620,15 @@ export async function buildSnapshot(
   ).length;
   const reviewReadyCount = activeRecords.filter((r) => r.stage === "review").length;
 
-  const completedFromArchive = recentArchived.filter(
-    (r) => r.stage === "done" || r.stage === "released",
-  ).length;
-  const completedFromLinear = linearIssues.filter(
-    (li) => li.state.type === "completed" && li.updatedAt >= sinceIso,
-  ).length;
-  const doneCount = Math.max(completedFromArchive, completedFromLinear);
+  // Release relinquishes ownership; only recorded done or Linear-completed issues are completion evidence.
+  // Count unique immutable issue IDs across both observed sources and repeated archive cycles; sources may overlap.
+  // Neither source carries a merge receipt, and unavailable sources cannot establish a complete inventory.
+  const recordedDoneIds = new Set(recentArchived.filter((r) => r.stage === "done").map((r) => r.linearId));
+  const releasedIds = new Set(recentArchived.filter((r) => r.stage === "released").map((r) => r.linearId));
+  const sourceCompletedIds = new Set(
+    linearIssues.filter((li) => li.state.type === "completed" && li.updatedAt >= sinceIso).map((li) => li.id),
+  );
+  const doneCount = new Set([...recordedDoneIds, ...sourceCompletedIds]).size;
 
   const funnel: FunnelStats = {
     todo: todoCount,
@@ -589,6 +637,13 @@ export async function buildSnapshot(
     waitingOnHuman: waitingHumanCount,
     reviewReady: reviewReadyCount,
     done: doneCount,
+    agentReadyBasis: queueData ? "queue-eligible" : "linear-labels",
+    completion: {
+      recordedDone: recordedDoneIds.size,
+      released: releasedIds.size,
+      sourceCompleted: sourceCompletedIds.size,
+      mergeVerified: null,
+    },
   };
 
   // 7. Throughput Metrics
@@ -635,7 +690,7 @@ export async function buildSnapshot(
 
   const avgCycleMinutes =
     allRecordsInScope.length > 0 ? Math.round(totalMinutes / Math.max(1, allRecordsInScope.length)) : 0;
-  const gatePassRate = totalGates > 0 ? Math.round((passedGates / totalGates) * 1000) / 10 : 100;
+  const gatePassRate = totalGates > 0 ? Math.round((passedGates / totalGates) * 1000) / 10 : null;
 
   const metrics: ThroughputMetrics = {
     timeframe,
@@ -644,6 +699,8 @@ export async function buildSnapshot(
     inProgressCount: inAgentCount + waitingHumanCount + reviewReadyCount,
     avgCycleMinutes,
     gatePassRate,
+    gatesPassed: passedGates,
+    gatesObserved: totalGates,
     tokens: totalTokens,
     costUsd: Math.round(totalCost * 100) / 100,
     byProvider,
@@ -656,21 +713,31 @@ export async function buildSnapshot(
     if (!inScope(key)) continue;
     const activeForProj = activeRecords.filter((r) => r.project === key);
     const activeCount = activeForProj.length;
-    const queuedCount = queueData?.items.filter((i) => i.project === key).length ?? 0;
-    const completedCount = recentArchived.filter(
-      (r) => r.project === key && (r.stage === "done" || r.stage === "released"),
-    ).length;
+    const queuedCount =
+      queueData?.items.filter((i) => i.project === key && i.status === "eligible").length ?? 0;
+    const skippedCount =
+      queueData?.items.filter((i) => i.project === key && i.status !== "eligible").length ?? 0;
+    const completedCount = new Set(
+      recentArchived.filter((r) => r.project === key && r.stage === "done").map((r) => r.linearId),
+    ).size;
+    const releasedCount = new Set(
+      recentArchived.filter((r) => r.project === key && r.stage === "released").map((r) => r.linearId),
+    ).size;
 
     // Slot is held if there is a working or claimed coordinator
     const holder = activeForProj.find((r) => r.stage === "working" || r.stage === "claimed");
 
     const teamSlug = cfg.workspace.team.toLowerCase();
     // Project automation is only enabled if the scheduler is installed and enabled, and scope is not paused
-    const isPaused = pausedScopes.includes(key) || pausedScopes.includes("all");
-    const projAutomationEnabled = schedulerEnabled && !isPaused;
-    let projAutomationStatus: "active" | "disabled" | "not_installed" | "paused" | "stale" | "unknown" =
-      "not_installed";
-    if (installMalformed) {
+    const pausedBy: "global" | "project" | null = pausedScopes.includes(key)
+      ? "project"
+      : globalPaused
+        ? "global"
+        : null;
+    const isPaused = pausedBy !== null;
+    const projAutomationEnabled = pauseStateKnown && schedulerEnabled && !isPaused;
+    let projAutomationStatus: ProjectSummary["automation"]["status"] = "not_installed";
+    if (installMalformed || !pauseStateKnown) {
       projAutomationStatus = "unknown";
     } else if (!installState) {
       projAutomationStatus = "unknown";
@@ -689,11 +756,13 @@ export async function buildSnapshot(
         ? "Unknown"
         : !installState.enabled
           ? "Recorded disabled"
-          : isPaused
-            ? "Paused"
-            : schedulerStatus === "stale"
-              ? "Recorded */5; heartbeat stale"
-              : "Recorded every 5 min";
+          : pausedBy === "project"
+            ? "Paused (project)"
+            : pausedBy === "global"
+              ? "Paused (global)"
+              : schedulerStatus === "stale"
+                ? "Recorded */5; heartbeat stale"
+                : "Recorded every 5 min";
 
     projects.push({
       key,
@@ -702,7 +771,10 @@ export async function buildSnapshot(
       linearProjectUrl: `https://linear.app/${teamSlug}/project/${p.linearProject}`,
       activeCount,
       queuedCount,
+      skippedCount,
       completedCount,
+      releasedCount,
+      paused: pausedBy,
       slotHeldBy: holder ? holder.identifier : null,
       automation: {
         type: "orca",
@@ -751,8 +823,12 @@ export async function buildSnapshot(
   return {
     at: now,
     dispatcher: heartbeat,
+    dispatcherHealth: health,
     stopRequested: isStopRequested,
     pausedScopes,
+    pauseStateKnown,
+    globalPaused,
+    pausedProjects: pausedScopes.filter((s) => s !== GLOBAL_SCOPE),
     funnel,
     triage,
     queue: (queueData?.items ?? [])
