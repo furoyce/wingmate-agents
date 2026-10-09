@@ -819,37 +819,11 @@ export function renderDashboardHtml(): string {
     </div>
   </div>
 
-  <!-- Custom Answer / Review Plan Modal -->
-  <div id="answerModal" class="modal-backdrop" style="display: none;">
-    <div class="modal">
-      <div class="modal-header">
-        <div class="modal-title" id="modalTitle">Review Plan & Answer Question</div>
-        <button class="modal-close" onclick="closeModal()">✕</button>
-      </div>
-      <div class="modal-body">
-        <div class="modal-prompt-box" id="modalPrompt"></div>
-        <label class="modal-label">Your Instructions / Answer:</label>
-        <textarea id="modalAnswerInput" class="modal-textarea" rows="4" placeholder="Enter instructions, plan approval, or feedback..."></textarea>
-        <div class="quick-chips">
-          <span class="chip-label">Quick presets:</span>
-          <button class="chip" onclick="setQuickAnswer('Approved, please proceed with implementation.')">✓ Approved, proceed</button>
-          <button class="chip" onclick="setQuickAnswer('Please revise the plan to handle unit tests and edge cases first.')">Needs Revision</button>
-          <button class="chip" onclick="setQuickAnswer('Use integer milliseconds for round timing.')">Integer Milliseconds</button>
-        </div>
-      </div>
-      <div class="modal-footer">
-        <button onclick="closeModal()">Cancel</button>
-        <button id="modalSubmitBtn" class="primary" onclick="submitModalAnswer()">Submit Answer</button>
-      </div>
-    </div>
-  </div>
-
   <!-- Toast Notification Container -->
   <div id="toastContainer" class="toast-container"></div>
 
   <script>
     let currentData = null;
-    let activeModalTarget = null;
     let currentTheme = localStorage.getItem("wingmate_theme") || "light";
     let currentView = localStorage.getItem("wingmate_view") || "pipeline";
     let pollTimer = null;
@@ -1105,9 +1079,7 @@ export function renderDashboardHtml(): string {
               '<div class="alert-header"><span>⚠️ Waiting on Your Input / Plan Approval</span></div>' +
               '<div class="alert-text">' + escapeHtml(w.openQuestion.prompt || "The agent has asked a clarification or plan approval question before proceeding.") + '</div>' +
               '<div class="alert-actions">' +
-                '<button class="primary sm btn-approve" data-id="' + w.identifier + '" data-qid="' + w.openQuestion.id + '">✓ Approve Plan</button>' +
-                '<button class="sm btn-answer-modal" data-id="' + w.identifier + '" data-qid="' + w.openQuestion.id + '">Review / Custom Answer...</button>' +
-                '<a href="' + escapeHtml(w.linearUrl) + '" target="_blank" rel="noopener noreferrer" style="font-size: 12px; font-weight: 600; color: var(--accent); margin-left: 8px; text-decoration: none;" class="hover-underline">View in Linear ↗</a>' +
+                answerInLinearLink(w) +
               '</div>' +
             '</div>'
           );
@@ -1119,15 +1091,15 @@ export function renderDashboardHtml(): string {
               '<div>' +
                 '<div class="card-meta">' +
                   '<span class="badge badge-project">' + escapeHtml(w.project) + '</span>' +
-                  '<a href="' + escapeHtml(w.linearUrl) + '" target="_blank" rel="noopener noreferrer" class="issue-link" title="Open ' + escapeHtml(w.identifier) + ' in Linear"><strong>' + escapeHtml(w.identifier) + ' ↗</strong></a>' +
+                  '<a href="' + escapeHtml(w.linearUrl || "https://linear.app") + '" target="_blank" rel="noopener noreferrer" class="issue-link" title="Open ' + escapeHtml(w.identifier) + ' in Linear"><strong>' + escapeHtml(w.identifier) + ' ↗</strong></a>' +
                   '<span class="badge badge-' + escapeHtml(w.provider) + '">' + escapeHtml(w.provider) + (w.model ? ' · ' + escapeHtml(w.model) : '') + '</span>' +
                   '<span style="color: var(--text-dim);">Uptime: ' + w.ageMin + 'm</span>' +
                   (w.worktreePath ? '<span style="color: var(--text-dim); font-family: var(--font-mono);">' + escapeHtml(w.worktreePath.split("/").slice(-2).join("/")) + '</span>' : '') +
                 '</div>' +
-                '<a href="' + escapeHtml(w.linearUrl) + '" target="_blank" rel="noopener noreferrer" style="color: var(--text); text-decoration: none;" class="hover-underline"><div class="card-title">' + escapeHtml(w.title) + '</div></a>' +
+                '<a href="' + escapeHtml(w.linearUrl || "https://linear.app") + '" target="_blank" rel="noopener noreferrer" style="color: var(--text); text-decoration: none;" class="hover-underline"><div class="card-title">' + escapeHtml(w.title) + '</div></a>' +
               '</div>' +
               '<div style="display: flex; gap: 8px; align-items: center;">' +
-                '<a href="' + escapeHtml(w.linearUrl) + '" target="_blank" rel="noopener noreferrer"><button class="sm" title="Open in Linear">Linear ↗</button></a>' +
+                '<a href="' + escapeHtml(w.linearUrl || "https://linear.app") + '" target="_blank" rel="noopener noreferrer"><button class="sm" title="Open in Linear">Linear ↗</button></a>' +
                 (w.prUrl ? '<a href="' + escapeHtml(w.prUrl) + '" target="_blank" rel="noopener noreferrer"><button class="sm primary">View PR ↗</button></a>' : '') +
                 '<button class="sm btn-open-orca" data-path="' + escapeHtml(w.worktreePath || '') + '" title="Open Worktree in Orca / Editor">Worktree ↗</button>' +
               '</div>' +
@@ -1373,16 +1345,16 @@ export function renderDashboardHtml(): string {
                 '<div class="kanban-card">' +
                   '<div class="kanban-card-meta">' +
                     '<span class="badge badge-project" title="' + escapeHtml(proj) + '">' + escapeHtml(proj) + '</span>' +
-                    '<a href="' + escapeHtml(w.linearUrl) + '" target="_blank" rel="noopener noreferrer" class="issue-link" title="Open ' + escapeHtml(w.identifier) + ' in Linear"><strong>' + escapeHtml(w.identifier) + ' ↗</strong></a>' +
+                    '<a href="' + escapeHtml(w.linearUrl || "https://linear.app") + '" target="_blank" rel="noopener noreferrer" class="issue-link" title="Open ' + escapeHtml(w.identifier) + ' in Linear"><strong>' + escapeHtml(w.identifier) + ' ↗</strong></a>' +
                     '<span class="badge badge-' + escapeHtml(w.provider) + '">' + escapeHtml(w.provider) + '</span>' +
                   '</div>' +
-                  '<a href="' + escapeHtml(w.linearUrl) + '" target="_blank" rel="noopener noreferrer" class="kanban-card-title-link" title="Open in Linear">' + escapeHtml(w.title) + '</a>' +
+                  '<a href="' + escapeHtml(w.linearUrl || "https://linear.app") + '" target="_blank" rel="noopener noreferrer" class="kanban-card-title-link" title="Open in Linear">' + escapeHtml(w.title) + '</a>' +
                   '<div style="font-size:11px; color:var(--text-dim); display:flex; justify-content:space-between; align-items:center; margin-top:4px;">' +
                     '<span>Stage: <strong>' + escapeHtml(w.pipelineStage) + '</strong></span>' +
                     '<span>' + w.ageMin + 'm</span>' +
                   '</div>' +
                   '<div style="display:flex; justify-content:flex-end; gap:6px; margin-top:6px;">' +
-                    '<a href="' + escapeHtml(w.linearUrl) + '" target="_blank" rel="noopener noreferrer"><button class="sm" title="Open in Linear">Linear ↗</button></a>' +
+                    '<a href="' + escapeHtml(w.linearUrl || "https://linear.app") + '" target="_blank" rel="noopener noreferrer"><button class="sm" title="Open in Linear">Linear ↗</button></a>' +
                     '<button class="sm btn-open-orca" data-path="' + escapeHtml(w.worktreePath || '') + '" title="Open Worktree in Orca / Editor">Worktree ↗</button>' +
                   '</div>' +
                 '</div>'
@@ -1404,17 +1376,15 @@ export function renderDashboardHtml(): string {
                 '<div class="kanban-card waiting">' +
                   '<div class="kanban-card-meta">' +
                     '<span class="badge badge-project" title="' + escapeHtml(proj) + '">' + escapeHtml(proj) + '</span>' +
-                    '<a href="' + escapeHtml(w.linearUrl) + '" target="_blank" rel="noopener noreferrer" class="issue-link" title="Open ' + escapeHtml(w.identifier) + ' in Linear"><strong>' + escapeHtml(w.identifier) + ' ↗</strong></a>' +
+                    '<a href="' + escapeHtml(w.linearUrl || "https://linear.app") + '" target="_blank" rel="noopener noreferrer" class="issue-link" title="Open ' + escapeHtml(w.identifier) + ' in Linear"><strong>' + escapeHtml(w.identifier) + ' ↗</strong></a>' +
                     '<span class="badge badge-waiting">Action Needed</span>' +
                   '</div>' +
-                  '<a href="' + escapeHtml(w.linearUrl) + '" target="_blank" rel="noopener noreferrer" class="kanban-card-title-link" title="Open in Linear">' + escapeHtml(w.title) + '</a>' +
+                  '<a href="' + escapeHtml(w.linearUrl || "https://linear.app") + '" target="_blank" rel="noopener noreferrer" class="kanban-card-title-link" title="Open in Linear">' + escapeHtml(w.title) + '</a>' +
                   '<div style="font-size:11px; color:var(--text-muted); background:var(--surface); padding:6px 8px; border-radius:4px; border:1px solid var(--border-subtle); margin-top:4px;">' +
                     escapeHtml((w.openQuestion ? w.openQuestion.prompt || '' : '').slice(0, 140)) + '...' +
                   '</div>' +
                   '<div style="display:flex; gap:6px; justify-content:flex-end; margin-top:6px; flex-wrap:wrap;">' +
-                    '<a href="' + escapeHtml(w.linearUrl) + '" target="_blank" rel="noopener noreferrer"><button class="sm" title="Open in Linear">Linear ↗</button></a>' +
-                    '<button class="primary sm btn-approve" data-id="' + w.identifier + '" data-qid="' + (w.openQuestion ? w.openQuestion.id : '') + '">✓ Approve</button>' +
-                    '<button class="sm btn-answer-modal" data-id="' + w.identifier + '" data-qid="' + (w.openQuestion ? w.openQuestion.id : '') + '">Answer...</button>' +
+                    answerInLinearLink(w) +
                   '</div>' +
                 '</div>'
               );
@@ -1435,13 +1405,13 @@ export function renderDashboardHtml(): string {
                 '<div class="kanban-card">' +
                   '<div class="kanban-card-meta">' +
                     '<span class="badge badge-project" title="' + escapeHtml(proj) + '">' + escapeHtml(proj) + '</span>' +
-                    '<a href="' + escapeHtml(w.linearUrl) + '" target="_blank" rel="noopener noreferrer" class="issue-link" title="Open ' + escapeHtml(w.identifier) + ' in Linear"><strong>' + escapeHtml(w.identifier) + ' ↗</strong></a>' +
+                    '<a href="' + escapeHtml(w.linearUrl || "https://linear.app") + '" target="_blank" rel="noopener noreferrer" class="issue-link" title="Open ' + escapeHtml(w.identifier) + ' in Linear"><strong>' + escapeHtml(w.identifier) + ' ↗</strong></a>' +
                     '<span class="badge badge-pass">Gates Passed</span>' +
                   '</div>' +
-                  '<a href="' + escapeHtml(w.linearUrl) + '" target="_blank" rel="noopener noreferrer" class="kanban-card-title-link" title="Open in Linear">' + escapeHtml(w.title) + '</a>' +
+                  '<a href="' + escapeHtml(w.linearUrl || "https://linear.app") + '" target="_blank" rel="noopener noreferrer" class="kanban-card-title-link" title="Open in Linear">' + escapeHtml(w.title) + '</a>' +
                   '<div style="display:flex; gap:6px; justify-content:flex-end; margin-top:6px; flex-wrap:wrap;">' +
                     (w.prUrl ? '<a href="' + escapeHtml(w.prUrl) + '" target="_blank" rel="noopener noreferrer"><button class="sm primary">View PR ↗</button></a>' : '') +
-                    '<a href="' + escapeHtml(w.linearUrl) + '" target="_blank" rel="noopener noreferrer"><button class="sm" title="Open in Linear">Linear ↗</button></a>' +
+                    '<a href="' + escapeHtml(w.linearUrl || "https://linear.app") + '" target="_blank" rel="noopener noreferrer"><button class="sm" title="Open in Linear">Linear ↗</button></a>' +
                     '<button class="sm btn-open-orca" data-path="' + escapeHtml(w.worktreePath || '') + '" title="Open Worktree in Orca / Editor">Worktree ↗</button>' +
                   '</div>' +
                 '</div>'
@@ -1506,99 +1476,12 @@ export function renderDashboardHtml(): string {
       }
     }
 
-    async function submitApprovePlan(identifier, questionId) {
-      const btns = document.querySelectorAll('[data-id="' + identifier + '"].btn-approve');
-      btns.forEach(b => { b.disabled = true; b.textContent = "Approving..."; });
-
-      showToast("Approving plan for " + identifier + "...", "info");
-
-      try {
-        const res = await fetch("/api/actions/answer", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            identifier,
-            questionId,
-            answerText: "Approved, please proceed with implementation."
-          })
-        });
-        const d = await res.json();
-        if (d.ok) {
-          showToast("✓ Plan approved for " + identifier + "! Agent resumed in worktree.", "success");
-          const box = document.getElementById("box-" + identifier);
-          if (box) {
-            box.style.background = "rgba(16, 185, 129, 0.1)";
-            box.style.borderColor = "var(--success)";
-            box.innerHTML = '<div style="color:var(--success); font-weight:700;">✓ Plan Approved</div><div style="font-size:12px; color:var(--text-muted);">Answer delivered to worktree inbox. Resuming implementation.</div>';
-          }
-          fetchData().catch(() => {});
-        } else {
-          showToast("Error: " + (d.error || d.message), "error");
-          btns.forEach(b => { b.disabled = false; b.textContent = "✓ Approve Plan"; });
-        }
-      } catch (err) {
-        showToast("Error: " + err.message, "error");
-        btns.forEach(b => { b.disabled = false; b.textContent = "✓ Approve Plan"; });
-      }
-    }
-
-    function openAnswerModal(identifier, questionId) {
-      activeModalTarget = { identifier, questionId };
-      const item = currentData && currentData.activeWorktrees ? currentData.activeWorktrees.find(w => w.identifier === identifier) : null;
-      const linearUrl = item && item.linearUrl ? item.linearUrl : ("https://linear.app/issue/" + identifier);
-      const promptSnippet = item && item.openQuestion ? item.openQuestion.prompt : "";
-      document.getElementById("modalTitle").innerHTML = 'Answer Question · <a href="' + escapeHtml(linearUrl) + '" target="_blank" rel="noopener noreferrer" class="issue-link" title="Open in Linear">' + escapeHtml(identifier) + ' ↗</a>';
-      document.getElementById("modalPrompt").textContent = promptSnippet || "No prompt details provided.";
-      document.getElementById("modalAnswerInput").value = "";
-      document.getElementById("answerModal").style.display = "flex";
-      document.getElementById("modalAnswerInput").focus();
-    }
-
-    function closeModal() {
-      document.getElementById("answerModal").style.display = "none";
-      activeModalTarget = null;
-    }
-
-    function setQuickAnswer(text) {
-      document.getElementById("modalAnswerInput").value = text;
-    }
-
-    async function submitModalAnswer() {
-      if (!activeModalTarget) return;
-      const text = document.getElementById("modalAnswerInput").value.trim();
-      if (!text) {
-        showToast("Please enter an answer or note.", "error");
-        return;
-      }
-
-      const submitBtn = document.getElementById("modalSubmitBtn");
-      submitBtn.disabled = true;
-      submitBtn.textContent = "Submitting...";
-
-      try {
-        const res = await fetch("/api/actions/answer", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            identifier: activeModalTarget.identifier,
-            questionId: activeModalTarget.questionId,
-            answerText: text
-          })
-        });
-        const d = await res.json();
-        if (d.ok) {
-          showToast("✓ Answer delivered for " + activeModalTarget.identifier + "!", "success");
-          closeModal();
-          fetchData().catch(() => {});
-        } else {
-          showToast("Error: " + (d.error || d.message), "error");
-        }
-      } catch (err) {
-        showToast("Error: " + err.message, "error");
-      } finally {
-        submitBtn.disabled = false;
-        submitBtn.textContent = "Submit Answer";
-      }
+    function answerInLinearLink(w) {
+      const url = w.linearUrl || "https://linear.app";
+      const guidance = w.linearUrl ? "Reply to Wingmate's existing question as your signed-in owner account." :
+        "Find " + w.identifier + " in Linear and reply to Wingmate's existing question as your signed-in owner account.";
+      return '<a class="sm" href="' + escapeHtml(url) + '" target="_blank" rel="noopener noreferrer">Answer in Linear ↗</a>' +
+        '<div style="font-size:11px; color:var(--text-muted);">' + escapeHtml(guidance) + '</div>';
     }
 
     async function toggleDispatcherPause() {
@@ -1667,16 +1550,6 @@ export function renderDashboardHtml(): string {
 
     // Global Event Delegation for buttons
     document.addEventListener("click", e => {
-      const approveBtn = e.target.closest(".btn-approve");
-      if (approveBtn) {
-        submitApprovePlan(approveBtn.dataset.id, approveBtn.dataset.qid);
-        return;
-      }
-      const modalBtn = e.target.closest(".btn-answer-modal");
-      if (modalBtn) {
-        openAnswerModal(modalBtn.dataset.id, modalBtn.dataset.qid);
-        return;
-      }
       const promoteBtn = e.target.closest(".btn-promote");
       if (promoteBtn) {
         promoteIssue(promoteBtn.dataset.linearId, promoteBtn.dataset.id, promoteBtn.dataset.provider);

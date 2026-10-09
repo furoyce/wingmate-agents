@@ -32,6 +32,18 @@ const TIMEFRAME_DAYS: Record<Timeframe, number> = {
   all: 3650,
 };
 
+/** Use the actual issue URL when available; never interpolate a scheme from ticket data into an answer link. */
+function linearIssueUrl(value: string | undefined): string | null {
+  try {
+    const url = new URL(value ?? "");
+    return url.protocol === "https:" && url.hostname === "linear.app" && !url.username && !url.password
+      ? url.href
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 function waitingOnDesc(r: WRecord): string | null {
   if (r.paused) return "Owner (paused)";
   if (r.stage === "awaiting-human") return "Owner (question approval)";
@@ -155,8 +167,6 @@ export async function buildSnapshot(
     const matchedLinear = linearById.get(r.linearId) ?? linearById.get(r.identifier);
     const cachedTitle = await tryReadWorktreeTitle(r.worktree?.path ?? null);
     const title = matchedLinear?.title ?? cachedTitle ?? r.identifier;
-    const teamSlug = cfg.workspace.team.toLowerCase();
-    const linearUrl = matchedLinear?.url || `https://linear.app/${teamSlug}/issue/${r.identifier}`;
 
     const openQ = r.questions.find((q) => q.status === "open");
     let questionPrompt: string | null = null;
@@ -186,8 +196,8 @@ export async function buildSnapshot(
     activeWorktrees.push({
       identifier: r.identifier,
       linearId: r.linearId,
+      linearUrl: linearIssueUrl(matchedLinear?.url),
       title,
-      linearUrl,
       project: r.project,
       repo: r.repo,
       stage: r.stage,

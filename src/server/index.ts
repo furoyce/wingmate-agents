@@ -213,12 +213,20 @@ export async function startServer(options: ServerOptions = {}): Promise<Wingmate
             headers: { "Content-Type": "application/json" },
           });
         } catch (err) {
-          const status = err instanceof WingmateError ? 400 : 500;
+          const answerUnavailable = err instanceof WingmateError && err.code === "console_answer_unavailable";
+          const status = answerUnavailable ? 503 : err instanceof WingmateError ? 400 : 500;
           const msg = err instanceof Error ? err.message : String(err);
-          return new Response(JSON.stringify({ ok: false, error: msg }), {
-            status,
-            headers: { "Content-Type": "application/json" },
-          });
+          return new Response(
+            JSON.stringify({
+              ok: false,
+              error: msg,
+              ...(answerUnavailable ? { code: "console_answer_unavailable" } : {}),
+            }),
+            {
+              status,
+              headers: { "Content-Type": "application/json" },
+            },
+          );
         }
       }
 
