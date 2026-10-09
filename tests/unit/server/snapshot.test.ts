@@ -1,6 +1,8 @@
-// tests/unit/server/snapshot.test.ts — Unit tests for Wingmate Console snapshot aggregation.
 import { describe, expect, test } from "bun:test";
+import { join } from "node:path";
 import { buildSnapshot } from "../../../src/server/snapshot";
+import { writeAtomic } from "../../../src/state/fs";
+import { writeHeartbeat } from "../../../src/state/heartbeat";
 import { readRecord, writeRecord } from "../../../src/state/records";
 import { labeledByOwner, runTick, todo, world } from "../../sim/harness";
 
@@ -70,8 +72,8 @@ describe("server snapshot", () => {
     expect(coord?.provider).toBe("claude");
     expect(coord?.assignedStatus).toBe("running");
     expect(coord?.provenance).toBe("record");
-    expect(coord?.livenessVerified).toBe(false);
-    expect(coord?.currentAction).toContain("Analyzing ticket requirements");
+    expect(coord?.currentAction).toContain("Recorded pipeline stage: intake");
+    expect(coord?.recordedRoleStage).toBe("Recorded pipeline stage: intake");
 
     const verifier = item?.roster.find((a) => a.role === "plan-verifier");
     expect(verifier).toBeDefined();
@@ -80,7 +82,7 @@ describe("server snapshot", () => {
     expect(verifier?.verdict).toBe("PASS");
     expect(verifier?.provenance).toBe("terminal-job");
     expect(verifier?.livenessVerified).toBe(false);
-    expect(verifier?.currentAction).toContain("Completed plan-verifier (PASS)");
+    expect(verifier?.currentAction).toContain("Recorded role result: plan-verifier succeeded (PASS)");
 
     // Automation provenance check (never fabricates timestamps)
     const claudeAuto = snap.automations.find((a) => a.harness === "claude-code");
@@ -94,10 +96,10 @@ describe("server snapshot", () => {
     expect(codexAuto?.configured).toBe(false);
     expect(codexAuto?.lastRunAt).toBeNull();
 
-    const antigravityAuto = snap.automations.find((a) => a.harness === "antigravity");
-    expect(antigravityAuto).toBeDefined();
-    expect(antigravityAuto?.configured).toBe(true);
-    expect(antigravityAuto?.lastRunStatus).toContain("Active");
+    expect(snap.automations.map((a) => a.harness)).toEqual(["orca", "claude-code", "codex"]);
+    expect((snap.automations as Array<{ harness: string }>).some((a) => a.harness === "antigravity")).toBe(
+      false,
+    );
   });
 
   test("answer links use the existing Linear issue URL or fall back without an unsafe invented target", async () => {
@@ -135,5 +137,258 @@ describe("server snapshot", () => {
     expect(found?.project).toBeDefined();
     expect(found?.priority).toBe(2);
     expect(snap.funnel.todo).toBeGreaterThanOrEqual(1);
+  });
+
+  test("evaluates scheduler installation and heartbeat states correctly", async () => {
+    const w = await world();
+
+    // 1. No install.json, heartbeat present (manual tick)
+    await writeHeartbeat(w.dirs, {
+      kind: "tick",
+      at: "2026-10-09T08:00:00.000Z",
+      exitCode: 1,
+      outcome: "idle",
+      reason: null,
+      durationMs: 1200,
+      pausedScopes: [],
+      linearAuth: { ok: true, expiresAt: null },
+      orcaReachable: true,
+      counts: {},
+    });
+
+    let snap = await buildSnapshot(w.dirs, w.cfg, w.clock, null);
+    let orcaAuto = snap.automations.find((a) => a.harness === "orca");
+    expect(orcaAuto?.configured).toBe(false);
+    expect(orcaAuto?.lastRunStatus).toContain("manual tick recorded: idle");
+    expect(orcaAuto?.schedule).toBe("Not installed");
+    expect(snap.projects[0]?.automation.enabled).toBe(false);
+    expect(snap.projects[0]?.automation.status).toBe("not_installed");
+
+    // 2. install.json with enabled: false
+    const disabledInstall = {
+      version: "0.1.0",
+      automationId: "auto-1",
+      worktreeId: "wt-1",
+      binPath: "/bin/wingmate",
+      sha256: "0".repeat(64),
+      viewUrls: [],
+      installedAt: "2026-10-09T00:00:00.000Z",
+      enabled: false,
+    };
+    await writeAtomic(join(w.dirs.state, "install.json"), JSON.stringify(disabledInstall, null, 2));
+
+    snap = await buildSnapshot(w.dirs, w.cfg, w.clock, null);
+    orcaAuto = snap.automations.find((a) => a.harness === "orca");
+    expect(orcaAuto?.configured).toBe(false);
+    expect(orcaAuto?.lastRunStatus).toContain("Disabled");
+    expect(snap.projects[0]?.automation.enabled).toBe(false);
+    expect(snap.projects[0]?.automation.status).toBe("disabled");
+
+    // 3. install.json malformed
+    await writeAtomic(join(w.dirs.state, "install.json"), "{ invalid json");
+
+    snap = await buildSnapshot(w.dirs, w.cfg, w.clock, null);
+    orcaAuto = snap.automations.find((a) => a.harness === "orca");
+    expect(orcaAuto?.configured).toBe(false);
+    expect(orcaAuto?.lastRunStatus).toContain("State unknown (malformed install.json)");
+    expect(snap.projects[0]?.automation.status).toBe("unknown");
+    expect(snap.problems.some((p) => p.startsWith("install_state_invalid"))).toBe(true);
+
+    // 4. install.json enabled: true, but heartbeat is stale (>15m)
+    const enabledInstall = {
+      ...disabledInstall,
+      enabled: true,
+    };
+    await writeAtomic(join(w.dirs.state, "install.json"), JSON.stringify(enabledInstall, null, 2));
+    const staleTime = new Date(w.clock.now().getTime() - 25 * 60 * 1000).toISOString();
+    await writeHeartbeat(w.dirs, {
+      kind: "tick",
+      at: staleTime,
+      exitCode: 1,
+      outcome: "idle",
+      reason: null,
+      durationMs: 1200,
+      pausedScopes: [],
+      linearAuth: { ok: true, expiresAt: null },
+      orcaReachable: true,
+      counts: {},
+    });
+
+    snap = await buildSnapshot(w.dirs, w.cfg, w.clock, null);
+    orcaAuto = snap.automations.find((a) => a.harness === "orca");
+    expect(orcaAuto?.configured).toBe(false);
+    expect(orcaAuto?.lastRunStatus).toContain("Stale");
+    expect(snap.projects[0]?.automation.status).toBe("stale");
+    expect(snap.projects[0]?.automation.enabled).toBe(false);
+  });
+
+  test("scopes roleJobs strictly to current cycle and attempt, separating nativeUiJobs into executionTasks", async () => {
+    const w = await world();
+    labeledByOwner(w, todo("i2", "JRF-804"));
+    await runTick(w);
+
+    const record = await readRecord(w.dirs, "JRF-804");
+    if (!record) throw new Error("record not found");
+
+    record.cycle = 2;
+    record.coordinator.attempt = 2;
+
+    // Prior cycle job (must be excluded from roster)
+    record.roleJobs.push({
+      id: "01M4CTVA1ZC6W2RW3K2YS2VW01",
+      mode: "terminal-job",
+      role: "plan-verifier",
+      cycle: 1,
+      attempt: 1,
+      provider: "codex",
+      status: "running",
+      launchUncertain: false,
+      terminalHandle: null,
+      paneKey: null,
+      headSha: "0".repeat(40),
+      planHash: "0".repeat(64),
+      createdAt: w.ctx.now(),
+      completedAt: null,
+      verdict: null,
+      reportPath: null,
+      reportHash: null,
+      notified: false,
+    });
+
+    // Prior attempt job in current cycle (must be excluded from roster)
+    record.roleJobs.push({
+      id: "01M4CTVA1ZC6W2RW3K2YS2VW02",
+      mode: "terminal-job",
+      role: "security-reviewer",
+      cycle: 2,
+      attempt: 1,
+      provider: "codex",
+      status: "running",
+      launchUncertain: false,
+      terminalHandle: null,
+      paneKey: null,
+      headSha: "0".repeat(40),
+      planHash: "0".repeat(64),
+      createdAt: w.ctx.now(),
+      completedAt: null,
+      verdict: null,
+      reportPath: null,
+      reportHash: null,
+      notified: false,
+    });
+
+    // Current cycle and attempt job (must be included)
+    record.roleJobs.push({
+      id: "01M4CTVA1ZC6W2RW3K2YS2VW03",
+      mode: "terminal-job",
+      role: "code-reviewer",
+      cycle: 2,
+      attempt: 2,
+      provider: "codex",
+      status: "running",
+      launchUncertain: false,
+      terminalHandle: null,
+      paneKey: null,
+      headSha: "0".repeat(40),
+      planHash: "0".repeat(64),
+      createdAt: w.ctx.now(),
+      completedAt: null,
+      verdict: null,
+      reportPath: null,
+      reportHash: null,
+      notified: false,
+    });
+
+    // Native UI simulator recipe (must be separated into executionTasks)
+    record.nativeUiJobs.push({
+      id: "native1",
+      issue: "JRF-804",
+      cycle: 2,
+      attempt: 2,
+      worktreeId: "wt-1",
+      headSha: "0".repeat(40),
+      policyHash: "0".repeat(64),
+      executionIsolationHash: "0".repeat(64),
+      runtimeBinding: null,
+      runtimeAcquireUncertain: false,
+      runtimeReleased: true,
+      deviceCleanupComplete: true,
+      recipeHash: "0".repeat(64),
+      requestedAt: w.ctx.now(),
+      status: "succeeded",
+      udid: null,
+      createUncertain: false,
+      cleanupComplete: true,
+      receiptHash: "0".repeat(64),
+      evidencePath: ".wingmate/evidence/native.json",
+      notified: true,
+    });
+
+    await writeRecord(w.dirs, record);
+
+    const snap = await buildSnapshot(w.dirs, w.cfg, w.clock, null);
+    const item = snap.activeWorktrees[0];
+    expect(item).toBeDefined();
+
+    // Roster should only include coordinator + current worker
+    expect(item?.roster).toHaveLength(2);
+    expect(item?.rosterSummary.total).toBe(2);
+    const rosterRoles = item?.roster.map((r) => r.role);
+    expect(rosterRoles).toContain("coordinator");
+    expect(rosterRoles).toContain("code-reviewer");
+    expect(rosterRoles).not.toContain("plan-verifier");
+    expect(rosterRoles).not.toContain("security-reviewer");
+    expect(rosterRoles).not.toContain("native-ui-tester");
+
+    // Native UI job appears in executionTasks
+    expect(item?.executionTasks).toHaveLength(1);
+    const execTask = item?.executionTasks?.[0];
+    expect(execTask?.id).toBe("native1");
+    expect(execTask?.status).toBe("completed");
+    expect(execTask?.recordedAction).toBe("Recorded native test result: completed (succeeded)");
+    expect(execTask?.recordedAction).not.toContain("executing");
+  });
+
+  test("null verdict on succeeded roleJob reports succeeded (verdict unknown) and never invents PASS", async () => {
+    const w = await world();
+    labeledByOwner(w, todo("i3", "JRF-805"));
+    await runTick(w);
+
+    const record = await readRecord(w.dirs, "JRF-805");
+    if (!record) throw new Error("record not found");
+
+    record.roleJobs.push({
+      id: "01M4CTVA1ZC6W2RW3K2YS2VW04",
+      mode: "terminal-job",
+      role: "plan-verifier",
+      cycle: 1,
+      attempt: 1,
+      provider: "codex",
+      status: "succeeded",
+      launchUncertain: false,
+      terminalHandle: null,
+      paneKey: null,
+      headSha: "0".repeat(40),
+      planHash: "0".repeat(64),
+      createdAt: w.ctx.now(),
+      completedAt: w.ctx.now(),
+      verdict: null,
+      reportPath: null,
+      reportHash: null,
+      notified: true,
+    });
+
+    await writeRecord(w.dirs, record);
+
+    const snap = await buildSnapshot(w.dirs, w.cfg, w.clock, null);
+    const item = snap.activeWorktrees[0];
+    const reviewer = item?.roster.find((r) => r.role === "plan-verifier");
+    expect(reviewer).toBeDefined();
+    expect(reviewer?.statusDetail).toBe("succeeded (verdict unknown)");
+    expect(reviewer?.recordedRoleStage).toBe(
+      "Recorded role result: plan-verifier succeeded (verdict unknown)",
+    );
+    expect(reviewer?.currentAction).toBe("Recorded role result: plan-verifier succeeded (verdict unknown)");
+    expect(reviewer?.currentAction).not.toContain("PASS");
   });
 });

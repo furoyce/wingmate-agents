@@ -283,6 +283,11 @@ export function renderDashboardHtml(): string {
     @media (prefers-color-scheme: dark) {
       body[data-theme="system"] .badge-gemini { color: #60A5FA; }
     }
+    .badge-simulator { background: rgba(99, 102, 241, 0.15); color: #4F46E5; border: 1px solid rgba(99, 102, 241, 0.35); }
+    body[data-theme="dark"] .badge-simulator { color: #818CF8; }
+    @media (prefers-color-scheme: dark) {
+      body[data-theme="system"] .badge-simulator { color: #818CF8; }
+    }
     .badge-status-running { background: rgba(2, 132, 199, 0.12); color: var(--accent); border: 1px solid var(--accent); }
     .badge-status-assigned { background: var(--surface-hover); color: var(--text-muted); border: 1px solid var(--border); }
     .badge-status-parked { background: rgba(217, 119, 6, 0.15); color: var(--warning); border: 1px solid var(--warning); }
@@ -341,6 +346,11 @@ export function renderDashboardHtml(): string {
       font-family: var(--font-mono);
       font-size: 10px;
       color: var(--text-dim);
+    }
+    .roster-table-wrap {
+      overflow-x: auto;
+      width: 100%;
+      -webkit-overflow-scrolling: touch;
     }
     .roster-table {
       width: 100%;
@@ -1224,22 +1234,66 @@ export function renderDashboardHtml(): string {
                 '</span>' +
               '</div>' +
             '</div>' +
-            '<table class="roster-table">' +
-              '<thead>' +
-                '<tr>' +
-                  '<th style="width: 150px;">Agent Role</th>' +
-                  '<th style="width: 125px;">Provider</th>' +
-                  '<th style="width: 140px;">Status</th>' +
-                  '<th>What This Agent Is Doing</th>' +
-                  '<th style="width: 160px;">Worktree / Ref</th>' +
-                '</tr>' +
-              '</thead>' +
-              '<tbody>' +
-                (rosterRowsHtml || '<tr><td colspan="5" style="text-align:center; color:var(--text-dim);">No agent jobs recorded</td></tr>') +
-              '</tbody>' +
-            '</table>' +
+            '<div class="roster-table-wrap">' +
+              '<table class="roster-table">' +
+                '<thead>' +
+                  '<tr>' +
+                    '<th style="width: 150px;">Agent Role</th>' +
+                    '<th style="width: 125px;">Provider</th>' +
+                    '<th style="width: 140px;">Status</th>' +
+                    '<th>What This Agent Is Doing</th>' +
+                    '<th style="width: 160px;">Worktree / Ref</th>' +
+                  '</tr>' +
+                '</thead>' +
+                '<tbody>' +
+                  (rosterRowsHtml || '<tr><td colspan="5" style="text-align:center; color:var(--text-dim);">No agent jobs recorded</td></tr>') +
+                '</tbody>' +
+              '</table>' +
+            '</div>' +
           '</div>'
         );
+
+        let executionTasksHtml = "";
+        const execTasks = w.executionTasks || [];
+        if (execTasks.length > 0) {
+          const taskRowsHtml = execTasks.map(t => {
+            const statusClass = t.status === "completed" ? "badge-status-completed" : t.status === "running" ? "badge-status-running" : t.status === "failed" ? "badge-status-failed" : "badge-status-unknown";
+            return (
+              '<tr>' +
+                '<td><strong>📱 ' + escapeHtml(t.device) + '</strong></td>' +
+                '<td><span class="badge badge-simulator">Simulator</span></td>' +
+                '<td><span class="badge ' + statusClass + '">' + escapeHtml(t.statusDetail) + '</span></td>' +
+                '<td>' + escapeHtml(t.recordedAction) + '</td>' +
+                '<td><span style="font-family:var(--font-mono); font-size:10px; color:var(--text-dim);">' + escapeHtml(t.id.slice(0, 16)) + '</span></td>' +
+              '</tr>'
+            );
+          }).join("");
+
+          executionTasksHtml = (
+            '<div class="execution-tasks-container" style="margin-top: 8px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; overflow: hidden;">' +
+              '<div class="execution-tasks-header" style="display: flex; justify-content: space-between; align-items: center; padding: 6px 12px; background: var(--surface-elevated); border-bottom: 1px solid var(--border); font-size: 11px; font-weight: 600;">' +
+                '<span>🧪 Native UI Test Tasks: <strong>' + execTasks.length + ' recorded</strong></span>' +
+                '<span class="roster-provenance-tag">Native Simulator</span>' +
+              '</div>' +
+              '<div class="roster-table-wrap">' +
+                '<table class="roster-table">' +
+                  '<thead>' +
+                    '<tr>' +
+                      '<th style="width: 150px;">Target</th>' +
+                      '<th style="width: 125px;">Type</th>' +
+                      '<th style="width: 140px;">Status</th>' +
+                      '<th>Recorded Task Status</th>' +
+                      '<th style="width: 160px;">Task ID</th>' +
+                    '</tr>' +
+                  '</thead>' +
+                  '<tbody>' +
+                    taskRowsHtml +
+                  '</tbody>' +
+                '</table>' +
+              '</div>' +
+            '</div>'
+          );
+        }
 
         return (
           '<div class="worktree-card ' + (isWaiting ? 'waiting' : '') + '" id="wt-' + w.identifier + '">' +
@@ -1262,6 +1316,7 @@ export function renderDashboardHtml(): string {
             '</div>' +
             '<div class="pipeline-bar">' + gateDots + '</div>' +
             rosterHtml +
+            executionTasksHtml +
             questionHtml +
           '</div>'
         );
@@ -1368,8 +1423,9 @@ export function renderDashboardHtml(): string {
               '<span>Completed:</span>' +
               '<strong style="color: var(--success);">' + p.completedCount + '</strong>' +
             '</div>' +
-            '<div style="font-size: 11px; color: var(--text-dim); border-top: 1px solid var(--border-subtle); padding-top: 6px; margin-top: 4px;">' +
+            '<div style="font-size: 11px; color: var(--text-dim); border-top: 1px solid var(--border-subtle); padding-top: 6px; margin-top: 4px; display: flex; justify-content: space-between;">' +
               '<span>Slot: ' + (p.slotHeldBy ? '<span style="color: var(--warning);">Held by ' + escapeHtml(p.slotHeldBy) + '</span>' : '<span style="color: var(--success);">Available</span>') + '</span>' +
+              (p.automation ? '<span title="' + escapeHtml(p.automation.provenance || '') + '">Auto: <strong>' + escapeHtml(p.automation.cadence) + '</strong></span>' : '') +
             '</div>' +
           '</div>'
         )).join("");
@@ -1378,8 +1434,8 @@ export function renderDashboardHtml(): string {
       const autoGrid = document.getElementById("automationsGrid");
       if (autoGrid && automations) {
         autoGrid.innerHTML = automations.map(a => {
-          const badgeClass = a.harness === "orca" ? "badge-orca" : a.harness === "claude-code" ? "badge-claude" : a.harness === "codex" ? "badge-codex" : a.harness === "antigravity" ? "badge-antigravity" : a.harness === "gemini" ? "badge-gemini" : "badge-project";
-          const harnessLabel = a.harness === "orca" ? "Orca Automation" : a.harness === "claude-code" ? "Claude Routine" : a.harness === "codex" ? "Codex Scheduled" : a.harness === "antigravity" ? "Antigravity Worker" : a.harness === "gemini" ? "Gemini Agent" : a.harness;
+          const badgeClass = a.harness === "orca" ? "badge-orca" : a.harness === "claude-code" ? "badge-claude" : a.harness === "codex" ? "badge-codex" : "badge-project";
+          const harnessLabel = a.harness === "orca" ? "Orca Automation" : a.harness === "claude-code" ? "Claude Routine" : a.harness === "codex" ? "Codex Scheduled" : a.harness;
           const statusLower = a.lastRunStatus.toLowerCase();
           const isGreen = statusLower.includes("active") || statusLower.includes("ok") || statusLower.includes("ready");
           const isWarn = statusLower.includes("not configured") || statusLower.includes("idle");

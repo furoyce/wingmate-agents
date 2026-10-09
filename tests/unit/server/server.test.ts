@@ -117,9 +117,14 @@ describe("server endpoints", () => {
     expect(data.metrics).toBeDefined();
     expect(data.automations).toBeDefined();
     expect(Array.isArray(data.automations)).toBe(true);
-    const antigravity = data.automations.find((a: { harness: string }) => a.harness === "antigravity");
-    expect(antigravity).toBeDefined();
-    expect(antigravity.configured).toBe(true);
+    const harnesses = data.automations.map((a: { harness: string }) => a.harness);
+    expect(harnesses).toContain("orca");
+    expect(harnesses).toContain("claude-code");
+    expect(harnesses).toContain("codex");
+    expect(harnesses).not.toContain("antigravity");
+    const claude = data.automations.find((a: { harness: string }) => a.harness === "claude-code");
+    expect(claude.configured).toBe(false);
+    expect(claude.lastRunAt).toBeNull();
   });
 
   test("POST /api/actions/pause toggles dispatcher pause state", async () => {

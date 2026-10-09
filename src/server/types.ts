@@ -54,6 +54,7 @@ export interface AgentRosterEntry {
   provenance: AgentProvenance;
   provenanceDetail: string;
   livenessVerified: boolean;
+  recordedRoleStage: string;
   currentAction: string;
   worktreePath: string | null;
   branch: string | null;
@@ -72,6 +73,16 @@ export interface AgentRosterSummary {
   completed: number;
   failed: number;
   unknown: number;
+}
+
+export interface ExecutionTaskSummary {
+  id: string;
+  kind: "native-ui-test";
+  status: "running" | "completed" | "failed" | "unknown";
+  statusDetail: string;
+  recordedAction: string;
+  requestedAt: string;
+  device: string;
 }
 
 export interface GateSummary {
@@ -107,6 +118,7 @@ export interface ActiveWorktreeItem {
   roleJobs: RoleJobSummary[];
   roster: AgentRosterEntry[];
   rosterSummary: AgentRosterSummary;
+  executionTasks?: ExecutionTaskSummary[];
   gates: Record<string, GateSummary>;
   openQuestion: {
     id: string;
@@ -132,6 +144,8 @@ export interface ProjectSummary {
     type: "orca" | "cron" | "manual";
     cadence: string;
     enabled: boolean;
+    status?: "active" | "disabled" | "not_installed" | "paused" | "stale" | "unknown";
+    provenance?: string;
   };
 }
 
@@ -150,7 +164,7 @@ export interface ThroughputMetrics {
 
 export interface HarnessAutomation {
   name: string;
-  harness: "orca" | "claude-code" | "codex" | "antigravity" | "gemini" | "cron" | "system";
+  harness: "orca" | "claude-code" | "codex" | "cron" | "system";
   targetProject: string;
   schedule: string;
   lastRunStatus: string;

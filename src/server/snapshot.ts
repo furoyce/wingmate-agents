@@ -2,6 +2,7 @@
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import type { Config } from "../config/schema";
+import { type InstallState, readInstallState } from "../ops/install";
 import { readPause } from "../ops/pause";
 import { modelLabel } from "../policy/providers";
 import type { LinearIssue, LinearPort } from "../ports";
@@ -16,6 +17,7 @@ import type {
   AgentAssignedStatus,
   AgentRosterEntry,
   AgentRosterSummary,
+  ExecutionTaskSummary,
   FunnelStats,
   GateSummary,
   HarnessAutomation,
@@ -55,40 +57,23 @@ function waitingOnDesc(r: WRecord): string | null {
   return null;
 }
 
-function coordinatorCurrentAction(r: WRecord): string {
-  if (r.paused) return "Paused by operator";
-  if (r.stage === "claimed") return "Assigned to issue; awaiting initial dispatch launch";
+function coordinatorRoleStageDescription(r: WRecord): string {
+  if (r.paused) return "Recorded stage: paused by operator";
+  if (r.stage === "claimed") return "Recorded stage: claimed (awaiting initial launch)";
   if (r.stage === "awaiting-human") {
     const openQ = r.questions.find((q) => q.status === "open");
-    return openQ ? "Parked: waiting on owner answer / plan approval" : "Parked: waiting on human input";
+    return openQ
+      ? "Recorded stage: awaiting-human (parked for owner answer / plan approval)"
+      : "Recorded stage: awaiting-human (parked for owner input)";
   }
-  if (r.stage === "review") return "Parked in review (PR open; awaiting merge/review)";
-  if (r.stage === "blocked") return "Parked: blocked by safety gate or quota limits";
-  if (r.stage === "done" || r.stage === "released") return "Completed execution";
-  if (r.stage === "cancelled") return "Execution cancelled";
+  if (r.stage === "review") return "Recorded stage: review (PR open, parked for review)";
+  if (r.stage === "blocked") return "Recorded stage: blocked (safety gate / limit)";
+  if (r.stage === "done" || r.stage === "released") return `Recorded stage: ${r.stage} (completed)`;
+  if (r.stage === "cancelled") return "Recorded stage: cancelled";
   if (r.stage === "working") {
-    switch (r.pipelineStage) {
-      case "intake":
-        return "Analyzing ticket requirements & workspace context";
-      case "plan":
-        return "Formulating structured implementation plan";
-      case "planVerify":
-        return "Verifying plan against gate rules & constraints";
-      case "implement":
-        return "Implementing code changes in isolated worktree";
-      case "validate":
-        return "Executing unit tests & validation suite";
-      case "ui":
-        return "Executing UI & responsive styling checks";
-      case "security":
-        return "Running secret scanners & dependency audits";
-      case "pr":
-        return "Preparing branch & generating pull request";
-      default:
-        return "Active execution in worktree";
-    }
+    return `Recorded pipeline stage: ${r.pipelineStage}`;
   }
-  return "Unknown execution state";
+  return `Recorded stage: ${r.stage}`;
 }
 
 function coordinatorAssignedStatus(r: WRecord): AgentAssignedStatus {
@@ -103,24 +88,29 @@ function coordinatorAssignedStatus(r: WRecord): AgentAssignedStatus {
   return "unknown";
 }
 
-function roleJobCurrentAction(role: string, status: string, verdict: string | null): string {
-  if (status === "succeeded") return `Completed ${role} (${verdict || "PASS"})`;
-  if (status === "failed") return `Failed ${role} (${verdict || "FAIL"})`;
-  if (status === "unverifiable") return `Unverifiable ${role} result`;
-  switch (role) {
-    case "plan-verifier":
-      return "Reviewing architectural plan & gate constraints";
-    case "code-reviewer":
-      return "Reviewing code diff, purity & test coverage";
-    case "security-reviewer":
-      return "Auditing credentials, dependencies & sandbox boundaries";
-    case "ui-reviewer":
-      return "Verifying UI components, responsive layout & styling";
-    case "worker":
-      return "Executing delegated sub-task in worktree";
-    default:
-      return `Executing ${role} task`;
+function roleJobActionDescription(role: string, status: string, verdict: string | null): string {
+  if (status === "succeeded") {
+    if (verdict) {
+      return `Recorded role result: ${role} succeeded (${verdict})`;
+    }
+    return `Recorded role result: ${role} succeeded (verdict unknown)`;
   }
+  if (status === "failed") {
+    if (verdict) {
+      return `Recorded role result: ${role} failed (${verdict})`;
+    }
+    return `Recorded role result: ${role} failed (verdict unknown)`;
+  }
+  if (status === "unverifiable") {
+    return `Recorded role status: ${role} unverifiable`;
+  }
+  if (status === "starting") {
+    return `Recorded role status: ${role} assigned (starting)`;
+  }
+  if (status === "running") {
+    return `Recorded role status: ${role} running`;
+  }
+  return `Recorded role status: ${role} (${status})`;
 }
 
 /** Safely read all valid records from a directory. */
@@ -197,13 +187,81 @@ export async function buildSnapshot(
   const activeRecords = allActiveRecords.filter((r) => inScope(r.project));
   const recentArchived = allArchivedRecords.filter((r) => inScope(r.project) && r.updatedAt >= sinceIso);
 
-  // 2. Read queue and heartbeat
+  // 2. Read queue, heartbeat, and install state
   const queueData = await readQueue(dirs).catch(() => null);
   const heartbeat = await readHeartbeat(dirs).catch(() => null);
   const isStopRequested = await stopRequested(dirs).catch(() => false);
   const pausedScopes: string[] = await readPause(dirs).catch(() => [] as string[]);
 
-  // 3. Query Linear if client is available
+  let installState: InstallState | null = null;
+  let installMalformed = false;
+  try {
+    installState = await readInstallState(dirs);
+  } catch (err) {
+    installMalformed = true;
+    problems.push(`install_state_invalid: ${(err as Error).message}`);
+  }
+
+  // 3. Evaluate scheduler installation & heartbeat provenance
+  let schedulerStatus: "active" | "disabled" | "not_installed" | "stale" | "unknown" = "not_installed";
+  let schedulerEnabled = false;
+  let schedulerSchedule = "Not installed";
+  let schedulerLastRunStatus = "Not installed";
+  let schedulerProvenance = "Scheduler not installed (no install.json)";
+
+  if (installMalformed) {
+    schedulerStatus = "unknown";
+    schedulerEnabled = false;
+    schedulerSchedule = "State unknown";
+    schedulerLastRunStatus = "State unknown (malformed install.json)";
+    schedulerProvenance = "Malformed local install state (install.json unparseable)";
+  } else if (!installState) {
+    schedulerStatus = "not_installed";
+    schedulerEnabled = false;
+    schedulerSchedule = "Not installed";
+    if (heartbeat) {
+      schedulerLastRunStatus = `Unscheduled (manual tick recorded: ${heartbeat.outcome})`;
+      schedulerProvenance = "Manual tick heartbeat recorded (scheduler not installed)";
+    } else {
+      schedulerLastRunStatus = "Not installed";
+      schedulerProvenance = "Scheduler not installed (no install.json or heartbeat)";
+    }
+  } else if (!installState.enabled) {
+    schedulerStatus = "disabled";
+    schedulerEnabled = false;
+    schedulerSchedule = "Disabled in install.json";
+    if (heartbeat) {
+      schedulerLastRunStatus = `Disabled (last manual/prior tick: ${heartbeat.outcome})`;
+      schedulerProvenance = "Local install state: installed but disabled (install.json)";
+    } else {
+      schedulerLastRunStatus = "Disabled (installed, not enabled)";
+      schedulerProvenance = "Local install state: installed but disabled (install.json)";
+    }
+  } else {
+    // installState.enabled is true
+    schedulerSchedule = "Every 5 min (cron */5)";
+    if (!heartbeat) {
+      schedulerStatus = "active";
+      schedulerEnabled = true;
+      schedulerLastRunStatus = "Installed (awaiting first run)";
+      schedulerProvenance = "Local install state: installed and enabled (awaiting first heartbeat)";
+    } else {
+      const heartbeatAgeMin = Math.max(0, Math.round((Date.parse(now) - Date.parse(heartbeat.at)) / 60_000));
+      if (heartbeatAgeMin > 15) {
+        schedulerStatus = "stale";
+        schedulerEnabled = false;
+        schedulerLastRunStatus = `Stale (${heartbeatAgeMin}m ago; last: ${heartbeat.outcome})`;
+        schedulerProvenance = `Local install state: installed/enabled, but heartbeat is stale (${heartbeatAgeMin}m ago)`;
+      } else {
+        schedulerStatus = "active";
+        schedulerEnabled = true;
+        schedulerLastRunStatus = `${heartbeat.outcome} (${heartbeat.durationMs}ms)`;
+        schedulerProvenance = `Local install state: installed/enabled with fresh heartbeat (${heartbeat.durationMs}ms)`;
+      }
+    }
+  }
+
+  // 4. Query Linear if client is available
   let linearIssues: LinearIssue[] = [];
   const projectLinearIds = Object.entries(cfg.projects)
     .filter(([key]) => inScope(key))
@@ -254,12 +312,15 @@ export async function buildSnapshot(
       completedAt: j.completedAt,
     }));
 
-    // Build the full agent roster (coordinator + role workers + native UI jobs)
+    // Build the agent roster scoped to current cycle and coordinator attempt
     const roster: AgentRosterEntry[] = [];
+    const currentRoleJobs = r.roleJobs.filter(
+      (j) => j.cycle === r.cycle && j.attempt === r.coordinator.attempt,
+    );
 
     // 1. Primary coordinator agent
     const coordStatus = coordinatorAssignedStatus(r);
-    const coordAction = coordinatorCurrentAction(r);
+    const coordAction = coordinatorRoleStageDescription(r);
     roster.push({
       id: `coord-${r.identifier}`,
       role: "coordinator",
@@ -270,6 +331,7 @@ export async function buildSnapshot(
       provenance: "record",
       provenanceDetail: "Record coordinator state (process unverified; no live process check)",
       livenessVerified: false,
+      recordedRoleStage: coordAction,
       currentAction: coordAction,
       worktreePath: r.worktree?.path ?? null,
       branch: r.worktree?.branch ?? null,
@@ -280,8 +342,8 @@ export async function buildSnapshot(
       verdict: null,
     });
 
-    // 2. Role-worker agents
-    for (const j of r.roleJobs) {
+    // 2. Role-worker agents (strictly scoped to current record cycle and coordinator attempt)
+    for (const j of currentRoleJobs) {
       let roleStatus: AgentAssignedStatus = "unknown";
       if (j.status === "starting") roleStatus = "assigned";
       else if (j.status === "running") roleStatus = "running";
@@ -289,17 +351,32 @@ export async function buildSnapshot(
       else if (j.status === "failed") roleStatus = "failed";
       else if (j.status === "unverifiable") roleStatus = "unknown";
 
+      let detail: string = j.status;
+      if (j.status === "succeeded") {
+        detail = j.verdict ? `succeeded (${j.verdict})` : "succeeded (verdict unknown)";
+      } else if (j.status === "failed") {
+        detail = j.verdict ? `failed (${j.verdict})` : "failed (verdict unknown)";
+      } else if (j.verdict) {
+        detail = `${j.status} (${j.verdict})`;
+      }
+      if (j.launchUncertain) {
+        detail += " [launch uncertain]";
+      }
+
+      const actionDesc = roleJobActionDescription(j.role, j.status, j.verdict);
+
       roster.push({
         id: j.id,
         role: j.role,
         provider: j.provider,
         model: null,
         assignedStatus: roleStatus,
-        statusDetail: `${j.status}${j.verdict ? ` (${j.verdict})` : ""}${j.launchUncertain ? " [launch uncertain]" : ""}`,
+        statusDetail: detail,
         provenance: "terminal-job",
         provenanceDetail: `Recorded roleJob schema (cycle ${j.cycle}, attempt ${j.attempt})`,
         livenessVerified: false,
-        currentAction: roleJobCurrentAction(j.role, j.status, j.verdict),
+        recordedRoleStage: actionDesc,
+        currentAction: actionDesc,
         worktreePath: r.worktree?.path ?? null,
         branch: r.worktree?.branch ?? null,
         terminalHandle: j.terminalHandle,
@@ -310,34 +387,21 @@ export async function buildSnapshot(
       });
     }
 
-    // 3. Native UI simulator jobs
-    for (const nj of r.nativeUiJobs) {
-      let njStatus: AgentAssignedStatus = "unknown";
-      if (nj.status === "running") njStatus = "running";
-      else if (nj.status === "succeeded") njStatus = "completed";
-      else if (nj.status === "failed") njStatus = "failed";
-      else if (nj.status === "unverifiable") njStatus = "unknown";
-
-      roster.push({
+    // 3. Execution tasks (native UI simulator recipes are test tasks, NOT coding agents)
+    const executionTasks: ExecutionTaskSummary[] = (r.nativeUiJobs ?? []).map((nj) => {
+      const isDone = nj.status === "succeeded" || nj.status === "failed";
+      return {
         id: nj.id,
-        role: "native-ui-tester",
-        provider: "orca-simulator",
-        model: null,
-        assignedStatus: njStatus,
-        statusDetail: nj.status,
-        provenance: "native-job",
-        provenanceDetail: `Recorded nativeUiJob schema (iOS Simulator, cycle ${nj.cycle})`,
-        livenessVerified: false,
-        currentAction: "Executing native iOS UI simulator recipe",
-        worktreePath: r.worktree?.path ?? null,
-        branch: r.worktree?.branch ?? null,
-        terminalHandle: null,
-        paneKey: null,
-        startedAt: nj.requestedAt,
-        completedAt: null,
-        verdict: null,
-      });
-    }
+        kind: "native-ui-test",
+        status: nj.status === "running" ? "running" : isDone ? "completed" : "unknown",
+        statusDetail: `${nj.status} (cycle ${nj.cycle}, attempt ${nj.attempt})`,
+        recordedAction: isDone
+          ? `Recorded native test result: completed (${nj.status})`
+          : "Recorded native test status: executing recipe on simulator",
+        requestedAt: nj.requestedAt,
+        device: "iOS Simulator",
+      };
+    });
 
     const rosterSummary: AgentRosterSummary = {
       total: roster.length,
@@ -385,6 +449,7 @@ export async function buildSnapshot(
       roleJobs,
       roster,
       rosterSummary,
+      executionTasks,
       gates,
       openQuestion: openQ
         ? {
@@ -556,6 +621,35 @@ export async function buildSnapshot(
     const holder = activeForProj.find((r) => r.stage === "working" || r.stage === "claimed");
 
     const teamSlug = cfg.workspace.team.toLowerCase();
+    // Project automation is only enabled if the scheduler is installed and enabled, and scope is not paused
+    const isPaused = pausedScopes.includes(key) || pausedScopes.includes("all");
+    const projAutomationEnabled = schedulerEnabled && !isPaused;
+    let projAutomationStatus: "active" | "disabled" | "not_installed" | "paused" | "stale" | "unknown" =
+      "not_installed";
+    if (installMalformed) {
+      projAutomationStatus = "unknown";
+    } else if (!installState) {
+      projAutomationStatus = "not_installed";
+    } else if (isPaused) {
+      projAutomationStatus = "paused";
+    } else if (!installState.enabled) {
+      projAutomationStatus = "disabled";
+    } else if (schedulerStatus === "stale") {
+      projAutomationStatus = "stale";
+    } else {
+      projAutomationStatus = "active";
+    }
+
+    const cadenceText = !installState
+      ? "Not installed"
+      : installMalformed
+        ? "Unknown"
+        : !installState.enabled
+          ? "Disabled"
+          : isPaused
+            ? "Paused"
+            : "Every 5 min";
+
     projects.push({
       key,
       name: key.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
@@ -567,53 +661,45 @@ export async function buildSnapshot(
       slotHeldBy: holder ? holder.identifier : null,
       automation: {
         type: "orca",
-        cadence: "Every 5 min",
-        enabled: !pausedScopes.includes(key) && !pausedScopes.includes("all"),
+        cadence: cadenceText,
+        enabled: projAutomationEnabled,
+        status: projAutomationStatus,
+        provenance: schedulerProvenance,
       },
     });
   }
 
-  // 9. Native Harness Automations & Routines
+  // 9. Native Harness Automations & Routines (reflecting actual local installation evidence)
   const automations: HarnessAutomation[] = [
     {
       name: "Orca Dispatcher Automation",
       harness: "orca",
-      targetProject: "All Projects (JRF)",
-      schedule: "Every 5 min (.orca/automations)",
-      lastRunStatus: heartbeat ? `${heartbeat.outcome} (${heartbeat.durationMs}ms)` : "idle (no heartbeat)",
+      targetProject: "All Configured Projects",
+      schedule: schedulerSchedule,
+      lastRunStatus: schedulerLastRunStatus,
       lastRunAt: heartbeat?.at ?? null,
-      configured: !!heartbeat,
-      provenance: heartbeat ? "Heartbeat record (.wingmate/heartbeat.json)" : "Not installed / idle",
+      configured: schedulerEnabled,
+      provenance: schedulerProvenance,
     },
     {
       name: "Claude Code Routine Relay",
       harness: "claude-code",
       targetProject: "Active Worktrees",
-      schedule: "Tool Routine (when configured)",
-      lastRunStatus: "Not configured (planned host routine)",
+      schedule: "Not configured",
+      lastRunStatus: "Not configured (host routine absent)",
       lastRunAt: null,
       configured: false,
-      provenance: "Planned / Host routine not configured",
+      provenance: "No host configuration detected",
     },
     {
       name: "Codex Scheduled Review Loop",
       harness: "codex",
       targetProject: "Pilot Worktrees",
-      schedule: "Scheduled Review (when configured)",
-      lastRunStatus: "Not configured (planned host routine)",
+      schedule: "Not configured",
+      lastRunStatus: "Not configured (host routine absent)",
       lastRunAt: null,
       configured: false,
-      provenance: "Planned / Host routine not configured",
-    },
-    {
-      name: "Antigravity / Gemini Agent Harness",
-      harness: "antigravity",
-      targetProject: "Dispatched Workspaces",
-      schedule: "Direct Worker / Dispatch Task",
-      lastRunStatus: "Active (Dispatched Worker Session)",
-      lastRunAt: now,
-      configured: true,
-      provenance: "Dispatched Antigravity worker session (task_29f7d0a70476)",
+      provenance: "No host configuration detected",
     },
   ];
 
