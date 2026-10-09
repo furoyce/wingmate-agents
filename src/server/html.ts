@@ -1460,7 +1460,7 @@ export function renderDashboardHtml(): string {
               '</div>' +
               '<div style="font-size: 11px; color: var(--text-dim); border-top: 1px solid var(--border-subtle); padding-top: 6px; margin-top: 4px; display: flex; justify-content: space-between;">' +
                 '<span>Last Active:</span>' +
-                '<span>' + (a.lastRunAt ? formatRelativeTime(a.lastRunAt) : 'None (unconfigured)') + '</span>' +
+                '<span>' + (a.lastRunAt ? formatRelativeTime(a.lastRunAt) : a.configured ? 'None (awaiting first heartbeat)' : 'None (unconfigured)') + '</span>' +
               '</div>' +
               (a.provenance ? '<div style="font-size: 10px; color: var(--text-dim); font-family: var(--font-mono); margin-top: 4px;">Provenance: ' + escapeHtml(a.provenance) + '</div>' : '') +
             '</div>'

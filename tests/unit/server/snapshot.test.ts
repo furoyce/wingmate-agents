@@ -89,12 +89,15 @@ describe("server snapshot", () => {
     expect(claudeAuto).toBeDefined();
     expect(claudeAuto?.configured).toBe(false);
     expect(claudeAuto?.lastRunAt).toBeNull();
-    expect(claudeAuto?.lastRunStatus).toContain("Not configured");
+    expect(claudeAuto?.lastRunStatus).toContain("Adapter not implemented / unobserved");
+    expect(claudeAuto?.schedule).toContain("Unobserved");
+    expect(claudeAuto?.provenance).toContain("No adapter implemented");
 
     const codexAuto = snap.automations.find((a) => a.harness === "codex");
     expect(codexAuto).toBeDefined();
     expect(codexAuto?.configured).toBe(false);
     expect(codexAuto?.lastRunAt).toBeNull();
+    expect(codexAuto?.lastRunStatus).toContain("Adapter not implemented / unobserved");
 
     expect(snap.automations.map((a) => a.harness)).toEqual(["orca", "claude-code", "codex"]);
     expect((snap.automations as Array<{ harness: string }>).some((a) => a.harness === "antigravity")).toBe(
@@ -159,10 +162,12 @@ describe("server snapshot", () => {
     let snap = await buildSnapshot(w.dirs, w.cfg, w.clock, null);
     let orcaAuto = snap.automations.find((a) => a.harness === "orca");
     expect(orcaAuto?.configured).toBe(false);
-    expect(orcaAuto?.lastRunStatus).toContain("manual tick recorded: idle");
-    expect(orcaAuto?.schedule).toBe("Not installed");
+    expect(orcaAuto?.lastRunStatus).toContain("origin unknown");
+    expect(orcaAuto?.schedule).toBe("Unknown (no local installation record)");
+    expect(orcaAuto?.provenance).toContain("No local installation record; scheduler state unknown");
     expect(snap.projects[0]?.automation.enabled).toBe(false);
     expect(snap.projects[0]?.automation.status).toBe("not_installed");
+    expect(snap.projects[0]?.automation.cadence).toBe("Not installed");
 
     // 2. install.json with enabled: false
     const disabledInstall = {
@@ -179,10 +184,27 @@ describe("server snapshot", () => {
 
     snap = await buildSnapshot(w.dirs, w.cfg, w.clock, null);
     orcaAuto = snap.automations.find((a) => a.harness === "orca");
-    expect(orcaAuto?.configured).toBe(false);
+    expect(orcaAuto?.configured).toBe(true);
     expect(orcaAuto?.lastRunStatus).toContain("Disabled");
+    expect(orcaAuto?.provenance).toContain("Recorded disabled in install.json (live state unverified)");
     expect(snap.projects[0]?.automation.enabled).toBe(false);
     expect(snap.projects[0]?.automation.status).toBe("disabled");
+    expect(snap.projects[0]?.automation.cadence).toBe("Disabled");
+
+    // 2b. install.json with automationId: null
+    const missingAutoIdInstall = {
+      ...disabledInstall,
+      automationId: null,
+      enabled: true,
+    };
+    await writeAtomic(join(w.dirs.state, "install.json"), JSON.stringify(missingAutoIdInstall, null, 2));
+
+    snap = await buildSnapshot(w.dirs, w.cfg, w.clock, null);
+    orcaAuto = snap.automations.find((a) => a.harness === "orca");
+    expect(orcaAuto?.configured).toBe(false);
+    expect(orcaAuto?.lastRunStatus).toContain("Unconfigured (missing automationId in install.json)");
+    expect(snap.projects[0]?.automation.status).toBe("disabled");
+    expect(snap.projects[0]?.automation.cadence).toBe("Disabled");
 
     // 3. install.json malformed
     await writeAtomic(join(w.dirs.state, "install.json"), "{ invalid json");
@@ -192,6 +214,7 @@ describe("server snapshot", () => {
     expect(orcaAuto?.configured).toBe(false);
     expect(orcaAuto?.lastRunStatus).toContain("State unknown (malformed install.json)");
     expect(snap.projects[0]?.automation.status).toBe("unknown");
+    expect(snap.projects[0]?.automation.cadence).toBe("Unknown");
     expect(snap.problems.some((p) => p.startsWith("install_state_invalid"))).toBe(true);
 
     // 4. install.json enabled: true, but heartbeat is stale (>15m)
@@ -216,10 +239,19 @@ describe("server snapshot", () => {
 
     snap = await buildSnapshot(w.dirs, w.cfg, w.clock, null);
     orcaAuto = snap.automations.find((a) => a.harness === "orca");
-    expect(orcaAuto?.configured).toBe(false);
+    expect(orcaAuto?.configured).toBe(true);
     expect(orcaAuto?.lastRunStatus).toContain("Stale");
     expect(snap.projects[0]?.automation.status).toBe("stale");
     expect(snap.projects[0]?.automation.enabled).toBe(false);
+
+    // 5. install.json enabled: true, awaiting first heartbeat
+    const wFresh = await world();
+    await writeAtomic(join(wFresh.dirs.state, "install.json"), JSON.stringify(enabledInstall, null, 2));
+    const snapFresh = await buildSnapshot(wFresh.dirs, wFresh.cfg, wFresh.clock, null);
+    const orcaAutoFresh = snapFresh.automations.find((a) => a.harness === "orca");
+    expect(orcaAutoFresh?.configured).toBe(true);
+    expect(orcaAutoFresh?.lastRunAt).toBeNull();
+    expect(orcaAutoFresh?.lastRunStatus).toContain("Installed (awaiting first heartbeat)");
   });
 
   test("scopes roleJobs strictly to current cycle and attempt, separating nativeUiJobs into executionTasks", async () => {
@@ -324,6 +356,31 @@ describe("server snapshot", () => {
       notified: true,
     });
 
+    // Unverifiable native job (must not say executing)
+    record.nativeUiJobs.push({
+      id: "native2",
+      issue: "JRF-804",
+      cycle: 2,
+      attempt: 2,
+      worktreeId: "wt-1",
+      headSha: "0".repeat(40),
+      policyHash: "0".repeat(64),
+      executionIsolationHash: "0".repeat(64),
+      runtimeBinding: null,
+      runtimeAcquireUncertain: false,
+      runtimeReleased: true,
+      deviceCleanupComplete: true,
+      recipeHash: "0".repeat(64),
+      requestedAt: w.ctx.now(),
+      status: "unverifiable",
+      udid: null,
+      createUncertain: false,
+      cleanupComplete: false,
+      receiptHash: null,
+      evidencePath: ".wingmate/evidence/native.json",
+      notified: false,
+    });
+
     await writeRecord(w.dirs, record);
 
     const snap = await buildSnapshot(w.dirs, w.cfg, w.clock, null);
@@ -340,13 +397,21 @@ describe("server snapshot", () => {
     expect(rosterRoles).not.toContain("security-reviewer");
     expect(rosterRoles).not.toContain("native-ui-tester");
 
-    // Native UI job appears in executionTasks
-    expect(item?.executionTasks).toHaveLength(1);
+    // Native UI jobs appear in executionTasks
+    expect(item?.executionTasks).toHaveLength(2);
     const execTask = item?.executionTasks?.[0];
     expect(execTask?.id).toBe("native1");
     expect(execTask?.status).toBe("completed");
     expect(execTask?.recordedAction).toBe("Recorded native test result: completed (succeeded)");
     expect(execTask?.recordedAction).not.toContain("executing");
+
+    const unverifiableTask = item?.executionTasks?.[1];
+    expect(unverifiableTask?.id).toBe("native2");
+    expect(unverifiableTask?.status).toBe("unknown");
+    expect(unverifiableTask?.recordedAction).toBe(
+      "Recorded native test status: unverifiable (recipe unconfirmed)",
+    );
+    expect(unverifiableTask?.recordedAction).not.toContain("executing");
   });
 
   test("null verdict on succeeded roleJob reports succeeded (verdict unknown) and never invents PASS", async () => {

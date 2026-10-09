@@ -204,59 +204,74 @@ export async function buildSnapshot(
 
   // 3. Evaluate scheduler installation & heartbeat provenance
   let schedulerStatus: "active" | "disabled" | "not_installed" | "stale" | "unknown" = "not_installed";
+  let schedulerConfigured = false;
   let schedulerEnabled = false;
   let schedulerSchedule = "Not installed";
   let schedulerLastRunStatus = "Not installed";
-  let schedulerProvenance = "Scheduler not installed (no install.json)";
+  let schedulerProvenance = "No local installation record; scheduler state unknown";
 
   if (installMalformed) {
     schedulerStatus = "unknown";
+    schedulerConfigured = false;
     schedulerEnabled = false;
     schedulerSchedule = "State unknown";
     schedulerLastRunStatus = "State unknown (malformed install.json)";
     schedulerProvenance = "Malformed local install state (install.json unparseable)";
   } else if (!installState) {
     schedulerStatus = "not_installed";
+    schedulerConfigured = false;
     schedulerEnabled = false;
-    schedulerSchedule = "Not installed";
+    schedulerSchedule = "Unknown (no local installation record)";
     if (heartbeat) {
-      schedulerLastRunStatus = `Unscheduled (manual tick recorded: ${heartbeat.outcome})`;
-      schedulerProvenance = "Manual tick heartbeat recorded (scheduler not installed)";
+      schedulerLastRunStatus = `${heartbeat.outcome} (${heartbeat.durationMs}ms; origin unknown)`;
+      schedulerProvenance =
+        "No local installation record; scheduler state unknown (heartbeat origin unknown)";
     } else {
-      schedulerLastRunStatus = "Not installed";
-      schedulerProvenance = "Scheduler not installed (no install.json or heartbeat)";
+      schedulerLastRunStatus = "No local installation record (scheduler state unknown)";
+      schedulerProvenance = "No local installation record; scheduler state unknown";
     }
+  } else if (!installState.automationId) {
+    // Missing automationId cannot support active; record is incomplete
+    schedulerStatus = "disabled";
+    schedulerConfigured = false;
+    schedulerEnabled = false;
+    schedulerSchedule = "Missing automationId in install.json";
+    schedulerLastRunStatus = "Unconfigured (missing automationId in install.json)";
+    schedulerProvenance = "Recorded install.json lacks automationId; live state unverified";
   } else if (!installState.enabled) {
     schedulerStatus = "disabled";
+    schedulerConfigured = true;
     schedulerEnabled = false;
-    schedulerSchedule = "Disabled in install.json";
+    schedulerSchedule = "Recorded disabled in install.json";
     if (heartbeat) {
-      schedulerLastRunStatus = `Disabled (last manual/prior tick: ${heartbeat.outcome})`;
-      schedulerProvenance = "Local install state: installed but disabled (install.json)";
+      schedulerLastRunStatus = `Disabled (${heartbeat.outcome}; live state unverified)`;
+      schedulerProvenance = "Recorded disabled in install.json (live state unverified)";
     } else {
-      schedulerLastRunStatus = "Disabled (installed, not enabled)";
-      schedulerProvenance = "Local install state: installed but disabled (install.json)";
+      schedulerLastRunStatus = "Disabled (recorded in install.json; live state unverified)";
+      schedulerProvenance = "Recorded disabled in install.json (live state unverified)";
     }
   } else {
-    // installState.enabled is true
-    schedulerSchedule = "Every 5 min (cron */5)";
+    // Valid install record with automationId and recorded enabled: true
+    schedulerConfigured = true;
+    schedulerSchedule = "Every 5 min (.orca/automations)";
     if (!heartbeat) {
       schedulerStatus = "active";
       schedulerEnabled = true;
-      schedulerLastRunStatus = "Installed (awaiting first run)";
-      schedulerProvenance = "Local install state: installed and enabled (awaiting first heartbeat)";
+      schedulerLastRunStatus = "Installed (awaiting first heartbeat)";
+      schedulerProvenance =
+        "Recorded enabled in install.json (live state unverified; awaiting first heartbeat)";
     } else {
       const heartbeatAgeMin = Math.max(0, Math.round((Date.parse(now) - Date.parse(heartbeat.at)) / 60_000));
       if (heartbeatAgeMin > 15) {
         schedulerStatus = "stale";
-        schedulerEnabled = false;
+        schedulerEnabled = false; // Heartbeat health is stale, but schedulerConfigured remains true
         schedulerLastRunStatus = `Stale (${heartbeatAgeMin}m ago; last: ${heartbeat.outcome})`;
-        schedulerProvenance = `Local install state: installed/enabled, but heartbeat is stale (${heartbeatAgeMin}m ago)`;
+        schedulerProvenance = `Recorded enabled in install.json (live state unverified; heartbeat stale ${heartbeatAgeMin}m ago)`;
       } else {
         schedulerStatus = "active";
         schedulerEnabled = true;
         schedulerLastRunStatus = `${heartbeat.outcome} (${heartbeat.durationMs}ms)`;
-        schedulerProvenance = `Local install state: installed/enabled with fresh heartbeat (${heartbeat.durationMs}ms)`;
+        schedulerProvenance = `Recorded enabled in install.json (live state unverified; fresh heartbeat ${heartbeat.durationMs}ms)`;
       }
     }
   }
@@ -390,14 +405,26 @@ export async function buildSnapshot(
     // 3. Execution tasks (native UI simulator recipes are test tasks, NOT coding agents)
     const executionTasks: ExecutionTaskSummary[] = (r.nativeUiJobs ?? []).map((nj) => {
       const isDone = nj.status === "succeeded" || nj.status === "failed";
+      let recordedAction: string;
+      if (nj.status === "running") {
+        recordedAction = "Recorded native test status: executing recipe on simulator";
+      } else if (isDone) {
+        recordedAction = `Recorded native test result: completed (${nj.status})`;
+      } else {
+        recordedAction = `Recorded native test status: ${nj.status} (recipe unconfirmed)`;
+      }
+
+      let taskStatus: "running" | "completed" | "failed" | "unknown" = "unknown";
+      if (nj.status === "running") taskStatus = "running";
+      else if (nj.status === "succeeded") taskStatus = "completed";
+      else if (nj.status === "failed") taskStatus = "failed";
+
       return {
         id: nj.id,
         kind: "native-ui-test",
-        status: nj.status === "running" ? "running" : isDone ? "completed" : "unknown",
+        status: taskStatus,
         statusDetail: `${nj.status} (cycle ${nj.cycle}, attempt ${nj.attempt})`,
-        recordedAction: isDone
-          ? `Recorded native test result: completed (${nj.status})`
-          : "Recorded native test status: executing recipe on simulator",
+        recordedAction,
         requestedAt: nj.requestedAt,
         device: "iOS Simulator",
       };
@@ -632,7 +659,7 @@ export async function buildSnapshot(
       projAutomationStatus = "not_installed";
     } else if (isPaused) {
       projAutomationStatus = "paused";
-    } else if (!installState.enabled) {
+    } else if (!installState.enabled || !installState.automationId) {
       projAutomationStatus = "disabled";
     } else if (schedulerStatus === "stale") {
       projAutomationStatus = "stale";
@@ -640,11 +667,11 @@ export async function buildSnapshot(
       projAutomationStatus = "active";
     }
 
-    const cadenceText = !installState
-      ? "Not installed"
-      : installMalformed
-        ? "Unknown"
-        : !installState.enabled
+    const cadenceText = installMalformed
+      ? "Unknown"
+      : !installState
+        ? "Not installed"
+        : !installState.enabled || !installState.automationId
           ? "Disabled"
           : isPaused
             ? "Paused"
@@ -678,28 +705,28 @@ export async function buildSnapshot(
       schedule: schedulerSchedule,
       lastRunStatus: schedulerLastRunStatus,
       lastRunAt: heartbeat?.at ?? null,
-      configured: schedulerEnabled,
+      configured: schedulerConfigured,
       provenance: schedulerProvenance,
     },
     {
       name: "Claude Code Routine Relay",
       harness: "claude-code",
       targetProject: "Active Worktrees",
-      schedule: "Not configured",
-      lastRunStatus: "Not configured (host routine absent)",
+      schedule: "Unobserved (host routine absent or unconfigured)",
+      lastRunStatus: "Adapter not implemented / unobserved",
       lastRunAt: null,
       configured: false,
-      provenance: "No host configuration detected",
+      provenance: "No adapter implemented; host routine unobserved (no probe performed)",
     },
     {
       name: "Codex Scheduled Review Loop",
       harness: "codex",
       targetProject: "Pilot Worktrees",
-      schedule: "Not configured",
-      lastRunStatus: "Not configured (host routine absent)",
+      schedule: "Unobserved (host routine absent or unconfigured)",
+      lastRunStatus: "Adapter not implemented / unobserved",
       lastRunAt: null,
       configured: false,
-      provenance: "No host configuration detected",
+      provenance: "No adapter implemented; host routine unobserved (no probe performed)",
     },
   ];
 
