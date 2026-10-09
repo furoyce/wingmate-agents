@@ -97,9 +97,7 @@
       "foreignSnapshotStatus": 200,
       "cors": "*",
       "foreignTextPlainPauseStatus": 200,
-      "pausedScopes": [
-        "global"
-      ],
+      "pausedScopes": ["global"],
       "projectAutomation": {
         "type": "orca",
         "cadence": "Recorded every 5 min",
@@ -130,9 +128,7 @@
           "expectedAuthorized": false,
           "actualAuthorized": true,
           "stageAfter": "done",
-          "doneSummary": [
-            "JRF-995"
-          ],
+          "doneSummary": ["JRF-995"],
           "attention": [],
           "actualProviderCalls": 0,
           "networkCalls": 0,
@@ -144,9 +140,7 @@
           "actualAuthorized": false,
           "stageAfter": "awaiting-human",
           "doneSummary": [],
-          "attention": [
-            "possible_self_close"
-          ],
+          "attention": ["possible_self_close"],
           "actualProviderCalls": 0,
           "networkCalls": 0,
           "realWorktreesCreated": 0
@@ -157,9 +151,7 @@
           "actualAuthorized": false,
           "stageAfter": "awaiting-human",
           "doneSummary": [],
-          "attention": [
-            "possible_self_close"
-          ],
+          "attention": ["possible_self_close"],
           "actualProviderCalls": 0,
           "networkCalls": 0,
           "realWorktreesCreated": 0

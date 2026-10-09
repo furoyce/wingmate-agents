@@ -325,6 +325,9 @@ export class OrcaClient implements OrcaPort {
       ["orchestration", "worker-list", "--run", runId, "--include-remote"],
       30_000,
     );
+    return OrcaClient.mapCleanupWorkers(runId, result);
+  }
+  static mapCleanupWorkers(runId: string, result: R): { complete: boolean; workers: WorkerRow[] } {
     // Pagination or an old adapter without an explicit completion marker is insufficient evidence.
     const page = rec(result.page);
     const scope = rec(result.scope);
@@ -332,6 +335,9 @@ export class OrcaClient implements OrcaPort {
     const complete =
       page?.hasMore === false &&
       scope?.runId === runId &&
+      scope?.includeRemote === true &&
+      Array.isArray(scope.omittedHostIds) &&
+      scope.omittedHostIds.length === 0 &&
       Array.isArray(result.workers) &&
       workers.length === result.workers.length &&
       workers.every((w) => w.dispatchId && w.taskId && w.runId === runId);

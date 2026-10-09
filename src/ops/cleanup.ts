@@ -159,7 +159,8 @@ async function planOne(ctx: Ctx, inv: Inventory, r: WRecord, opts: CleanupOption
           s.name === "worktree" &&
           s.state === "done" &&
           receipt?.id === wt.id &&
-          receipt.branch === wt.branch &&
+          typeof receipt.branch === "string" &&
+          receipt.branch.replace(/^refs\/heads\//, "") === wt.branch &&
           receipt.reused === false
         );
       }),
@@ -250,12 +251,6 @@ async function planOne(ctx: Ctx, inv: Inventory, r: WRecord, opts: CleanupOption
   const current = await ctx.orca.worktreeCurrent(wt.path);
   if (current.worktreeId !== wt.id || current.repoId !== repo.orcaRepo || current.path !== wt.path)
     return keep("identity_mismatch");
-  const terminals = await ctx.orca.terminalList(wt.id);
-  if (terminals.length || row.liveTerminalCount || row.agents.length) return keep("active_terminals");
-  if (!ctx.inspectCleanupProcesses) return keep("process_inventory_unverified");
-  const processes = await ctx.inspectCleanupProcesses(wt.path);
-  if (!processes.complete) return keep("process_inventory_incomplete");
-  if (processes.pids.length) return keep("active_processes");
   const target = gitTarget(wt);
   await verifyGitLinks(target);
   if ((await realpath(wt.path)) !== wt.path || (await realpath(wt.gitCommonDir)) !== wt.gitCommonDir)
@@ -269,6 +264,21 @@ async function planOne(ctx: Ctx, inv: Inventory, r: WRecord, opts: CleanupOption
   if (!base) return keep("base_unverified");
   if (head !== base && (await ctx.git.isAncestor(target, head, base)) !== true)
     return keep("unmerged_or_unknown");
+  // Re-observe runtime state after potentially slow GitHub/git reads, immediately before admission.
+  const latest = await ctx.orca.worktreePs();
+  if (!latest.cleanupVerified || latest.truncated || latest.omittedHostIds.length)
+    return keep("inventory_incomplete");
+  const latestRows = latest.worktrees.filter(
+    (w) => w.worktreeId === wt.id || resolve(w.path) === resolve(wt.path),
+  );
+  if (latestRows.length !== 1 || JSON.stringify(latestRows[0]) !== JSON.stringify(row))
+    return keep("resource_changed");
+  const terminals = await ctx.orca.terminalList(wt.id);
+  if (terminals.length || row.liveTerminalCount || row.agents.length) return keep("active_terminals");
+  if (!ctx.inspectCleanupProcesses) return keep("process_inventory_unverified");
+  const processes = await ctx.inspectCleanupProcesses(wt.path);
+  if (!processes.complete) return keep("process_inventory_incomplete");
+  if (processes.pids.length) return keep("active_processes");
   return {
     result: { ...result, outcome: "eligible", reason: "eligible_for_removal" },
     record: r,
@@ -339,7 +349,11 @@ export async function runCleanup(ctx: Ctx, opts: CleanupOptions): Promise<Cleanu
             });
             await scoped.checkMutation?.();
             const disk = await readRecord(scoped.dirs, r.identifier);
-            if (!disk || recordText(disk) !== recordText(current))
+            if (
+              !disk ||
+              recordText(disk) !== recordText(current) ||
+              JSON.stringify(await readState(scoped)) !== JSON.stringify(fresh.state)
+            )
               throw new RecordAbort("record_changed", r.identifier);
             if (!plan.absent) await scoped.orca.worktreeRm(old.id);
             const proof = await inventory(scoped);
@@ -370,6 +384,7 @@ export async function runCleanup(ctx: Ctx, opts: CleanupOptions): Promise<Cleanu
             });
             current.worktree = null;
             dropAttention(current, "cleanup_failed");
+            await scoped.checkMutation?.();
             await saveRecord(scoped, current);
             plan.result = {
               ...plan.result,
@@ -402,6 +417,7 @@ export async function runCleanup(ctx: Ctx, opts: CleanupOptions): Promise<Cleanu
           type: "cleanup_deferred",
           data: { why: plan.result.reason, worktree: r.worktree },
         });
+        await scoped.checkMutation?.();
         await saveRecord(scoped, disk);
       }
     }

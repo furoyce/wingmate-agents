@@ -33,6 +33,12 @@ receipts and `sweep.killed` are insufficient termination evidence. A failed,
 truncated, timed-out, malformed, or permission-limited process inventory is
 unknown. Process paths can veto removal but never authorize signalling.
 Older Orca adapters lacking explicit complete inventory metadata also defer.
+The observed **Orca 1.4.222** `worker-list --include-remote` response reports
+`scope: {run, source: "flag"}` and pagination, but no all-host coverage evidence.
+Consequently, records with `coordinator.childRunId` are currently deferred with
+`worker_inventory_incomplete`, even if their listed workers have exited. This
+increment supports cleanup of otherwise eligible records without child runs;
+it does not infer remote completeness from an empty or final page.
 
 `--orphaned` requests inspection within the chosen project repositories (and
 linked issue identity for issue scope). It is never implicit, including with

@@ -29,7 +29,7 @@ test("process cleanup evidence is read-only and rejects failed, truncated, timed
                   ? ""
                   : variant === "malformed"
                     ? "bad output"
-                    : `p123\nn${variant === "live" ? root : "/unrelated"}/file\n`,
+                    : `p123\nfcwd\nn${variant === "live" ? root : "/unrelated"}/file\n`,
               code: variant === "failed" ? 1 : 0,
               truncated: variant === "truncated",
               timedOut: variant === "timeout",

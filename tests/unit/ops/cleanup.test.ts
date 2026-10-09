@@ -431,4 +431,55 @@ describe("safe shared cleanup", () => {
     expect(w.orca.removed).toEqual([]);
     expect(await result(w, { dryRun: true })).toMatchObject({ reason: "grace" });
   });
+  test("legacy/malformed fleet completeness and invalid archive evidence never become authorization", async () => {
+    const w = await world();
+    const ps = w.orca.worktreePs.bind(w.orca);
+    w.orca.worktreePs = async () => {
+      const { cleanupVerified: _verified, ...legacy } = await ps();
+      return legacy;
+    };
+    await retained(w, "inventory_incomplete");
+    const other = await world();
+    await mkdir(other.dirs.archive, { recursive: true });
+    await writeFile(join(other.dirs.archive, "JRF-999.1.json"), "broken");
+    await expect(run(other, { dryRun: true })).rejects.toBeDefined();
+    await expect(run(other)).rejects.toBeDefined();
+    expect(other.orca.removed).toEqual([]);
+  });
+  test("a live resource appearing during content reads is re-observed before removal", async () => {
+    const w = await world();
+    w.git.lsRemoteSha = async () => {
+      present(w.orca.rows.get(w.wt.id)).liveTerminalCount = 1;
+      return "basesha";
+    };
+    expect(await result(w, { dryRun: true })).toMatchObject({ reason: "resource_changed" });
+    expect(await result(w)).toMatchObject({ reason: "active_terminals" });
+    expect(w.orca.removed).toEqual([]);
+  });
+  test("a refused removal never clears ownership and a no-effect retry remains possible", async () => {
+    const w = await world();
+    w.orca.failNext = "worktreeRm";
+    expect(await result(w)).toMatchObject({ outcome: "deferred" });
+    expect((await readRecord(w.dirs, w.r.identifier))?.worktree).not.toBeNull();
+    expect(w.orca.removed).toEqual([]);
+    w.clock.advance(24 * 3_600_000);
+    expect(await result(w)).toMatchObject({ outcome: "removed" });
+  });
+  test("dry-run with absent state directories creates nothing", async () => {
+    const w = await world();
+    const before = await snapshot(w.root);
+    const missing = join(w.root, "absent");
+    const ctx = {
+      ...w.ctx,
+      dirs: {
+        ...w.dirs,
+        state: missing,
+        records: join(missing, "records"),
+        archive: join(missing, "archive"),
+        journal: join(missing, "journal"),
+      },
+    };
+    expect((await cleanupOps(ctx, { ...options, dryRun: true })).cleaned).toEqual([]);
+    expect(await snapshot(w.root)).toEqual(before);
+  });
 });

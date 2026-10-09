@@ -30,6 +30,8 @@ export async function inspectCleanupProcesses(
   let pid: number | null = null;
   for (const line of files.stdout.split("\n").filter(Boolean)) {
     if (/^p\d+$/.test(line)) pid = Number(line.slice(1));
+    // lsof always selects the file-descriptor field, even for -F pn (e.g. fcwd, ftxt, f12).
+    else if (/^f.+$/.test(line) && pid !== null) continue;
     else if (line.startsWith("n") && pid !== null) {
       if (roots.some((root) => line.slice(1) === root || line.slice(1).startsWith(`${root}/`))) hits.add(pid);
     } else return { complete: false, pids: [] };

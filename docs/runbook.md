@@ -167,9 +167,10 @@ Wingmate does not read reviews left on GitHub or in Linear Reviews.
 
 **To accept:** approve and merge the PR on GitHub as usual, then move the issue to Done as a configured human
 approver while no agent is working. If an integration already closed it, reopen and close it yourself.
-Wingmate then releases the issue (stage `done`) and removes its worktree after `cleanup.worktreeGraceHours` (default
-24 h), once no open PR references the branch. If an open PR still references it, the issue gets attention
-`cleanup_failed` and removal is retried daily.
+Wingmate then releases the issue (stage `done`). Cleanup after `defaults.cleanup.worktreeGraceHours` (default
+24 h) also requires proved creation ownership, clean merged source, no open PR and complete evidence that resources
+are inactive. Unknown evidence retains the workspace with `cleanup_failed` and daily retries. Inspect the shared
+policy with `wingmate cleanup --issue JRF-501 --dry-run --json`; see [cleanup safety](cleanup.md).
 
 **Integration compatibility boundary (AUTH-1):** issue state and lifecycle controls require a matching history entry
 from `workspace.approvers` with an explicitly absent bot actor. Integration type, ID/name containing “GitHub,” PR
@@ -325,7 +326,7 @@ meanwhile the 80% and 90% caps rest on that old reading.
 | `publish_step_failed` | A publish step failed: push, PR, attachment, completion or Linear state. The finish retries on later ticks with its progress kept. | Read `ledger/<ID>.jsonl`; check `gh auth status` and the repository's `origin` (section 9). |
 | `journal_poisoned` † | The publish journal entry failed three times and is never replayed. | Section 12. |
 | `reroute_unknown_repo` † | The coordinator asked to move to a repository the project does not configure. The request was refused. | Nothing, or add the repository to the config. |
-| `cleanup_failed` | After Done or Canceled the worktree was not removed: an open PR references its branch, or Orca refused. Removal is retried daily. This also covers a rerouted-from worktree that could not be removed. | Merge or close the PR, or remove the worktree in Orca yourself. |
+| `cleanup_failed` | Cleanup could not prove safe removal or confirm its effect. Open PRs, dirty/unmerged work, incomplete inventories and uncertain resource termination retain the workspace; retries are daily. This also covers a rerouted-from worktree that could not be removed. | Inspect `wingmate cleanup --issue <id> --dry-run --json` and the [retention reasons](cleanup.md). `--force` overrides grace only. |
 
 ## 9. Publish refusals
 
