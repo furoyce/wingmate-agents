@@ -93,6 +93,8 @@ Isolation depends on the actual provider and host. A Git worktree by itself is n
 
 ## Development and references
 
+The [automation management design](docs/superpowers/specs/2026-10-09-wingmate-automation-control-layer.md) maps the existing core to the proposed shared routine, run, agent and workspace model. Its [alignment review](docs/superpowers/review/2026-10-09-control-layer-alignment.md) separates shipped behavior, local prototypes and remaining work.
+
 ```sh
 bun run check
 bun run lint
