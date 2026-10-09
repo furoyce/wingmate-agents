@@ -15,6 +15,7 @@ export function classifyComment(
   r: WRecord,
   approvers: string[],
   activeAt: (iso: string) => boolean,
+  acceptedPendingAnswer = false,
 ): CommentClass {
   if (c.botActorId || c.externalUserId || !c.userId) return "ignore";
   if (!approvers.includes(c.userId)) return "unverified_author";
@@ -23,6 +24,9 @@ export function classifyComment(
   if (r.stage === "awaiting-human") {
     const q = r.questions.find((x) => x.status === "open");
     if (!q || c.createdAt <= q.askedAt) return "ignore";
+    // A previously authenticated answer may itself have started the activity now inside the timing margin.
+    // Only reconcile's protected authentication + accepted-delivery correlation can grant this exemption.
+    if (acceptedPendingAnswer) return "answer";
     return activeAt(c.createdAt) ? "self_answer_suspected" : "answer";
   }
   // In review the owner's comments are review feedback: the tick forwards them when the issue returns to

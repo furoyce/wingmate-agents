@@ -152,10 +152,12 @@ export async function deliver(
   text: string,
   liveness: Liveness,
   continueFrom: string,
+  deliveryKey?: string,
 ): Promise<Delivery> {
   const inbox = await persistInbox(ctx, r, kind, text, continueFrom);
   if (inbox === "gone") return "exited";
   if (inbox === "unsafe") return "input_accepted";
+  if (deliveryKey) inbox.deliveryKey = deliveryKey;
   const pointer = `${kind} ${inbox.id} — read ${inbox.rel} and continue from stage ${continueFrom}.`;
   return sendPointer(ctx, r, kind, inbox, pointer, liveness);
 }
@@ -323,7 +325,7 @@ export async function relaunch(
   ctx: Ctx,
   r: WRecord,
   reason: string,
-  opts: { counted?: boolean } = {},
+  opts: { counted?: boolean; deliveryKey?: string } = {},
 ): Promise<boolean> {
   const wt = r.worktree;
   if (!wt) return false;
@@ -338,7 +340,7 @@ export async function relaunch(
     return relaunchFailed(ctx, r, reason, e);
   }
   if (adopted === "ambiguous") return ambiguous(ctx, r, reason);
-  if (adopted) return adopt(ctx, r, adopted.term, adopted.working, reason);
+  if (adopted) return adopt(ctx, r, adopted.term, adopted.working, reason, opts.deliveryKey);
   if (opts.counted !== false) r.coordinator.relaunches += 1;
   if (!existsSync(wt.path)) {
     addAttention(r, "worktree_gone");
@@ -370,7 +372,7 @@ export async function relaunch(
       await saveRecord(ctx, r);
       return false;
     }
-    return await resumeIn(ctx, r, term.handle, reason);
+    return await resumeIn(ctx, r, term.handle, reason, opts.deliveryKey);
   } catch (e) {
     if (isTickAbort(e)) throw e;
     return relaunchFailed(ctx, r, reason, e);
@@ -384,6 +386,7 @@ async function adopt(
   term: TerminalRow,
   working: boolean,
   reason: string,
+  deliveryKey?: string,
 ): Promise<boolean> {
   const from = r.coordinator.terminalHandle;
   r.coordinator.terminalHandle = term.handle;
@@ -398,13 +401,15 @@ async function adopt(
   if (!working) {
     try {
       if (!(await waitForTui(ctx, r, term.handle))) return false;
-      return await resumeIn(ctx, r, term.handle, reason);
+      return await resumeIn(ctx, r, term.handle, reason, deliveryKey);
     } catch (e) {
       if (isTickAbort(e)) throw e;
       ctx.log.warn({ issue: r.identifier, err: errorText(e) }, "adopted coordinator not resumed");
       return false;
     }
   }
+  // A newly supplied answer needs a send receipt. Adopting an agent already mid-turn proves only identity, not delivery.
+  if (deliveryKey) return false;
   if (r.stage === "claimed") await transition(ctx, r, "working", "turn_started", "pane_working");
   ensureAttempt(ctx, r);
   dropAttention(r, "launch_not_ready", "launch_unconfirmed", "relaunch_failed");
@@ -413,7 +418,13 @@ async function adopt(
 }
 
 /** The resume pointer to a coordinator whose TUI is ready (§7.1 step 4): `turn_started` makes the record `working`. */
-async function resumeIn(ctx: Ctx, r: WRecord, handle: string, reason: string): Promise<boolean> {
+async function resumeIn(
+  ctx: Ctx,
+  r: WRecord,
+  handle: string,
+  reason: string,
+  deliveryKey?: string,
+): Promise<boolean> {
   const wt = r.worktree;
   if (!wt) return false;
   const nonce = (await kitNonce(ctx, r)) ?? "";
@@ -426,8 +437,11 @@ async function resumeIn(ctx: Ctx, r: WRecord, handle: string, reason: string): P
     data: {
       reason,
       stage: receipt.stage,
+      requestId: receipt.requestId,
+      cycle: r.cycle,
       attempt: r.coordinator.attempt,
       relaunches: r.coordinator.relaunches,
+      ...(deliveryKey ? { deliveryKey } : {}),
     },
   });
   if (receipt.stage !== "turn_started") {
