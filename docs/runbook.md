@@ -165,10 +165,19 @@ The next tick handles it as a resume (one of `resumesPerTick`); it does not happ
 
 Wingmate does not read reviews left on GitHub or in Linear Reviews.
 
-**To accept:** approve and merge the PR on GitHub as usual. Linear's GitHub integration moves the issue to Done.
+**To accept:** approve and merge the PR on GitHub as usual, then move the issue to Done as a configured human
+approver while no agent is working. If an integration already closed it, reopen and close it yourself.
 Wingmate then releases the issue (stage `done`) and removes its worktree after `cleanup.worktreeGraceHours` (default
 24 h), once no open PR references the branch. If an open PR still references it, the issue gets attention
 `cleanup_failed` and removal is retried daily.
+
+**Integration compatibility boundary (AUTH-1):** issue state and lifecycle controls require a matching history entry
+from `workspace.approvers` with an explicitly absent bot actor. Integration type, ID/name containing “GitHub,” PR
+attachments and cached PR state do not prove trusted Done-by-merge. The current adapter cannot correlate a
+specifically trusted integration event with actual linked-PR merge evidence, so all integration controls are rejected;
+there is no integration allowlist configuration. Human completion remains valid without merge proof. Missing history,
+incomplete authorship/change fields, failed history pages and partial activity inventories cannot authorize controls.
+The verified human `human`-label kill switch still applies during activity. This does not add automatic merging.
 
 **To drop the work:**
 
@@ -302,9 +311,9 @@ meanwhile the 80% and 90% caps rest on that old reading.
 | `resume_unconfirmed` | An answer was delivered, but no turn start was seen. The next tick re-checks the pane, and a second failed delivery blocks `resume_failed`. | Nothing yet. |
 | `possible_self_answer` | A comment arrived while an agent was active during a question. The issue is blocked `self_answer_suspected`. | Comment `continue` (section 3). |
 | `unverified_input(<comment id>)` † | The commenter is not in `workspace.approvers`. Their comment is never forwarded. | Repost the content yourself if it matters. |
-| `unauthorized_state_change` † | A state change was ignored: it came from someone who is not an approver, or arrived while an agent of the issue was working. | Redo the change yourself while no agent works. |
+| `unauthorized_state_change` † | A state change was ignored: its exact history did not prove a human approver, it came from an integration, or agent inactivity could not be verified. | Redo the change as a configured human approver while no agent works. |
 | `unauthorized_label_change` † | The same, for a label change. | The same. |
-| `possible_self_close` | The issue went to Done or Canceled while an agent was active. Agents stopped once; the record and worktree are kept, and the close is not applied. | If you meant it, reopen the issue and close it again: a newer close made while no agent works releases it. If not, move it back to its previous state, which clears the code. |
+| `possible_self_close` | A Done/Canceled/Duplicate change lacked verified human authority (including integration closes) or verifiable agent inactivity. Agents stopped once; the record and worktree are kept, and the close is not applied. | If you meant it, reopen the issue and close it again as a configured human approver while no agent works. If not, move it back to its previous state, which clears the code. |
 | `inbox_unsafe` † | The worktree's `.wingmate` or `.wingmate/inbox` is a symlink or not a directory, so nothing was delivered. | Treat it as tampering: `wingmate stop --issue <ID>`, then inspect. |
 | `outbox_unsafe` | `.wingmate/outbox` or one of its subdirectories is a symlink or not a directory, so no intent was read. | The same. |
 | `intent_invalid` † | An outbox intent failed validation, or named another issue. It was moved to `outbox/invalid/`. | Usually the agent retries. The ledger has the error. |

@@ -218,20 +218,18 @@ export async function reconcile(ctx: Ctx): Promise<Reconciled> {
     const activeAt = (iso: string) => agentActiveAt(row, terms, iso, ACTIVITY_MARGIN_SEC);
     const hist = await ctx.linear.issueHistory(issue.id, r.linear.lastSeenUpdatedAt ?? r.claimedAt);
     // §7.4 authorship is resolved by WHAT changed, never by when the issue was last touched: the latest history
-    // entry that produced the observed change must be an approver (or the GitHub integration) and no agent of
-    // this issue may have been active at that entry's own time. No matching entry → not authorized.
+    // entry that produced the observed change must be a verified human approver and no agent of this issue may
+    // have been active at that entry's own time. No matching entry → not authorized. Integration type/name is
+    // not identity or linked-PR merge proof; until both are verifiable, no integration event has owner authority.
     const latestEntry = (pred: (h: LinearHistoryEntry) => boolean): LinearHistoryEntry | undefined => {
       let latest: LinearHistoryEntry | undefined;
       for (const h of hist) if (pred(h) && (!latest || h.createdAt > latest.createdAt)) latest = h;
       return latest;
     };
     const byApprover = (h: LinearHistoryEntry) =>
-      !h.botActorId && !!h.actorId && approvers.includes(h.actorId);
-    const authorizedBy = (h: LinearHistoryEntry | undefined) => {
-      if (!h) return false;
-      const byGithub = h.botActorType === "integration";
-      return (byApprover(h) || byGithub) && !activeAt(h.createdAt);
-    };
+      h.botActorId === null && h.botActorType === null && !!h.actorId && approvers.includes(h.actorId);
+    const authorizedBy = (h: LinearHistoryEntry | undefined) =>
+      !!h && !partial && byApprover(h) && !activeAt(h.createdAt);
     if (issue.state.name !== r.linear.state) {
       const entry = latestEntry((h) => h.toStateId === issue.state.id);
       events.push({
@@ -267,7 +265,7 @@ export async function reconcile(ctx: Ctx): Promise<Reconciled> {
         identifier: r.identifier,
         lifecycle: life,
         agent: agents,
-        authorized: humanEntry ? byApprover(humanEntry) : authorizedBy(entry),
+        authorized: humanAdded ? !!humanEntry && byApprover(humanEntry) : authorizedBy(entry),
         at: (humanEntry ?? entry)?.createdAt ?? issue.updatedAt,
       });
     }

@@ -64,7 +64,7 @@ const page = (key: string, nodes: unknown[], hasNextPage = false, endCursor: str
 describe("LinearClient — fix round 1", () => {
   test("issueHistory normalizes descending pages to oldest first after filtering", async () => {
     const seen: (string | null)[] = [];
-    const h = (id: string, createdAt: string) => ({ id, createdAt, actor: { id: "owner" } });
+    const h = (id: string, createdAt: string) => ({ ...historyNode, id, createdAt });
     const g = new GraphQL(tokens, (async (_u: string | URL | Request, init?: RequestInit) => {
       const after = JSON.parse(String(init?.body)).variables.after as string | null;
       seen.push(after);
@@ -202,6 +202,77 @@ describe("LinearClient — fix round 1", () => {
 function client(body: unknown): LinearClient {
   return new LinearClient(new GraphQL(tokens, (async () => respond(body)) as unknown as typeof fetch));
 }
+
+const historyNode = {
+  id: "h1",
+  createdAt: "2026-10-06T09:50:00.000Z",
+  actor: { id: "owner" },
+  botActor: null,
+  addedLabelIds: [],
+  removedLabelIds: [],
+  fromStateId: "started",
+  toStateId: "done",
+};
+const historyPage = (nodes: unknown[], hasNextPage = false, endCursor: string | null = null) => ({
+  data: { issue: { history: { nodes, pageInfo: { hasNextPage, endCursor } } } },
+});
+
+describe("AUTH-1: complete history evidence", () => {
+  for (const key of ["actor", "botActor", "addedLabelIds", "removedLabelIds", "fromStateId", "toStateId"]) {
+    test(`omitted ${key} is not normalized into authorizing evidence`, async () => {
+      const partial: Record<string, unknown> = { ...historyNode };
+      delete partial[key];
+      await expect(client(historyPage([partial])).issueHistory("i1", "1970-01-01")).rejects.toMatchObject({
+        code: "linear_shape",
+        message: expect.stringContaining(key),
+      });
+    });
+  }
+
+  test("an explicitly null bot still maps to a human; unknown bot type retains the bot identity", async () => {
+    const out = await client(
+      historyPage([historyNode, { ...historyNode, id: "h2", botActor: { id: "integration" } }]),
+    ).issueHistory("i1", "1970-01-01");
+    expect(out[0]).toMatchObject({ actorId: "owner", botActorId: null, botActorType: null });
+    expect(out[1]).toMatchObject({ actorId: "owner", botActorId: "integration", botActorType: null });
+  });
+
+  for (const cursor of [null, "", "repeated"]) {
+    test(`incomplete pagination (${JSON.stringify(cursor)}) never returns partial history`, async () => {
+      await expect(
+        client(historyPage([historyNode], true, cursor)).issueHistory("i1", "1970-01-01"),
+      ).rejects.toMatchObject({ code: "linear_shape", message: expect.stringContaining("cursor") });
+    });
+  }
+
+  for (const failure of ["partial data with errors", "transport failure", "missing bot metadata"]) {
+    test(`a later-page ${failure} discards the earlier human entry`, async () => {
+      let calls = 0;
+      const g = new GraphQL(
+        tokens,
+        (async () => {
+          if (++calls === 1) return respond(historyPage([historyNode], true, "next"));
+          if (failure === "transport failure") throw new Error("offline");
+          if (failure === "missing bot metadata") {
+            const { botActor: _bot, ...partial } = historyNode;
+            return respond(historyPage([partial]));
+          }
+          return respond({ ...historyPage([historyNode]), errors: [{ message: "history unavailable" }] });
+        }) as unknown as typeof fetch,
+        { maxRetries: 0 },
+      );
+      await expect(new LinearClient(g).issueHistory("i1", "1970-01-01")).rejects.toMatchObject({
+        code:
+          failure === "transport failure"
+            ? "linear_unreachable"
+            : failure === "missing bot metadata"
+              ? "linear_shape"
+              : "linear_graphql",
+      });
+      expect(calls).toBe(2);
+    });
+  }
+});
 
 describe("LinearClient — Task 12", () => {
   test("issueByIdentifier filters by team key and number, and returns null for a malformed or unknown identifier", async () => {

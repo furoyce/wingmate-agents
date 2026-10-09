@@ -48,14 +48,15 @@ describe("templates", () => {
     expect(md.split("note ").length - 1).toBe(5);
   });
   test("completion carries the request-changes instruction", () => {
-    expect(
-      renderCompletion({
-        prs: [{ url: "https://github.com/x/y/pull/1", repo: "api" }],
-        summary: "Done.",
-        gates: [["validate", "PASS"]],
-        limitations: [],
-        followups: [],
-      }),
-    ).toContain("move this issue back to In Progress");
+    const md = renderCompletion({
+      prs: [{ url: "https://github.com/x/y/pull/1", repo: "api" }],
+      summary: "Done.",
+      gates: [["validate", "PASS"]],
+      limitations: [],
+      followups: [],
+    });
+    expect(md).toContain("move this issue back to In Progress");
+    expect(md).toContain("move this issue to Done as a configured human approver");
+    expect(md).toContain("reopen and close it yourself");
   });
 });
