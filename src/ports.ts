@@ -109,6 +109,8 @@ export interface FleetRow {
   isMainWorktree?: boolean;
 }
 export interface FleetSnapshot {
+  /** Adapter observed every field needed for cleanup, rather than supplying compatibility defaults. */
+  cleanupVerified?: boolean;
   worktrees: FleetRow[];
   truncated: boolean;
   omittedHostIds: string[];
@@ -163,6 +165,8 @@ export interface AutomationRow {
   workspaceMode?: string | null;
 }
 export interface OrcaPort {
+  /** Cleanup requires an explicitly complete, all-host worker inventory; old adapters cannot authorize removal. */
+  cleanupWorkers?(runId: string): Promise<{ complete: boolean; workers: WorkerRow[] }>;
   worktreePs(): Promise<FleetSnapshot>;
   /**
    * `orca worktree current --json` run in `cwd` (spike §4: `result.worktree.{id, repoId, path, head}`): the worktree that directory is
@@ -235,6 +239,8 @@ export interface GitTarget {
   readonly commonDir: string;
 }
 export interface GitPort {
+  /** Includes untracked source, index flags and conflicts; ignores only root .wingmate protocol files. */
+  cleanupStatus?(t: GitTarget): Promise<{ dirty: boolean; branch: string }>;
   revParse(t: GitTarget, ref: string): Promise<string>;
   /** Tracked worktree or index changes outside root `.wingmate/`; index flags hiding source changes also count as dirty. */
   hasTrackedChanges(t: GitTarget): Promise<boolean>;
@@ -295,6 +301,8 @@ export interface GitPort {
  * resolves the repository — or runs git — through a worktree's agent-writable links.
  */
 export interface GhPort {
+  /** A fresh branch query, including PRs absent from the Wingmate record. */
+  hasOpenPr?(repo: string, branch: string): Promise<boolean>;
   prCreate(
     repo: string,
     a: { head: string; base: string; title: string; body: string; draft: boolean },

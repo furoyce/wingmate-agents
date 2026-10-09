@@ -67,7 +67,7 @@ For an authorized installation, run the existing installer from the Wingmate sou
 
 The installer prepares the shared dispatcher worktree, binary and disabled Orca automation, and may prepare repository settings and Linear views. Activate with `wingmate install --enable` once activation is authorized, the configured acceptance requirements are met and the full doctor passes. `doctor --quick` omits sandbox probes and does not establish enablement readiness.
 
-The baseline five-minute dispatcher reconciles issues, replies and gates and handles eligible cleanup after the configured grace period. Export and onboarding do not create extra schedules. Use `wingmate doctor --quick --json` for an on-demand health inspection; a separate daily health job, incident triage and dependency-maintenance jobs remain extension work.
+The baseline five-minute dispatcher reconciles issues, replies and gates and handles eligible cleanup after the configured grace period. Use `wingmate cleanup --issue JRF-501 --dry-run --json` to inspect the same cleanup policy on demand; [cleanup safety and retained cases](docs/cleanup.md) documents explicit scopes and grace-only `--force`. Export and onboarding do not create extra schedules. Use `wingmate doctor --quick --json` for an on-demand health inspection; a separate daily health job, incident triage and dependency-maintenance jobs remain extension work.
 
 ## Operate and inspect
 

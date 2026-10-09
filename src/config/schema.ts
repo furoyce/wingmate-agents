@@ -92,7 +92,10 @@ export const DefaultsSchema = z.object({
     .default({}),
   timers: Timers.default({}),
   budgets: Budgets.default({}),
-  cleanup: z.object({ worktreeGraceHours: z.number().default(24) }).default({}),
+  cleanup: z
+    .object({ worktreeGraceHours: z.number().finite().nonnegative().default(24) })
+    .strict()
+    .default({}),
   dispatcher: z
     .object({
       provider: z.enum(["claude", "codex"]).default("codex"),

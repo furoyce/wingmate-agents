@@ -161,7 +161,7 @@ export async function tick(base: Ctx, opts: TickOptions): Promise<TickSummary> {
   const deadline: TickDeadline = opts.deadline ?? tickDeadline(base.cfg, opts.startedAt ?? started);
   // §6.0 + Ruling R16: before every external action, a lost lock or a stop for everything aborts the tick; REL-1: so does the deadline
   const ctx = guardedCtx({ ...base, deadline }, async () => {
-    if (lock?.lost()) throw new TickAbort("lock_lost", "lock_lost");
+    if (lock && !(await lock.verify())) throw new TickAbort("lock_lost", "lock_lost");
     if (await stopRequested(base.dirs)) throw new TickAbort("stopped", "stop_requested");
     if (deadline.now() >= deadline.at) throw new TickAbort("error", "tick_deadline");
   });

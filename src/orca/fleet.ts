@@ -37,8 +37,23 @@ const ms = (n: number | null | undefined): string | null => (n == null ? null : 
 const shortBranch = (b: string | null) => (b ?? "").replace(/^refs\/heads\//, "");
 
 export function parseFleet(envelope: unknown): FleetSnapshot {
-  const ps = PsZ.parse(Env.parse(envelope).result);
+  const raw = Env.parse(envelope).result;
+  const ps = PsZ.parse(raw);
+  const cleanupVerified = z
+    .object({
+      truncated: z.boolean(),
+      hostScope: z.object({ omittedHostIds: z.array(z.string()) }),
+      worktrees: z.array(
+        z.object({
+          liveTerminalCount: z.number(),
+          agents: z.array(AgentZ),
+          childWorktreeIds: z.array(z.string()),
+        }),
+      ),
+    })
+    .safeParse(raw).success;
   return {
+    cleanupVerified,
     truncated: ps.truncated,
     omittedHostIds: ps.hostScope.omittedHostIds,
     worktrees: ps.worktrees.map((w) => ({

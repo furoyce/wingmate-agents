@@ -320,6 +320,23 @@ export class OrcaClient implements OrcaPort {
       await this.call(["orchestration", "worker-list", "--run", runId], 30_000),
     );
   }
+  async cleanupWorkers(runId: string): Promise<{ complete: boolean; workers: WorkerRow[] }> {
+    const result = await this.call(
+      ["orchestration", "worker-list", "--run", runId, "--include-remote"],
+      30_000,
+    );
+    // Pagination or an old adapter without an explicit completion marker is insufficient evidence.
+    const page = rec(result.page);
+    const scope = rec(result.scope);
+    const workers = OrcaClient.mapWorkers(runId, result);
+    const complete =
+      page?.hasMore === false &&
+      scope?.runId === runId &&
+      Array.isArray(result.workers) &&
+      workers.length === result.workers.length &&
+      workers.every((w) => w.dispatchId && w.taskId && w.runId === runId);
+    return { complete, workers };
+  }
   async workerStop(d: string, retry: string): Promise<{ verdict: string }> {
     const r = await this.call(
       ["orchestration", "worker-stop", "--dispatch", d, "--retry-request", retry],
