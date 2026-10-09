@@ -81,7 +81,7 @@ export const renderBlocked = (b: {
 
 /** §7.3: the completion comment and the PR body both carry this line. */
 export const REQUEST_CHANGES =
-  "To request changes: move this issue back to In Progress or reply in this Linear thread. Reviews left on GitHub or in Linear Reviews are not read in the pilot. To accept: approve and merge as usual; the GitHub integration moves the issue to Done.";
+  "To request changes: move this issue back to In Progress or reply in this Linear thread. Reviews left on GitHub or in Linear Reviews are not read in the pilot. To accept: approve and merge as usual, then move this issue to Done as a configured human approver while no agent is working. Integration-triggered completion is not verified; if the integration already closed it, reopen and close it yourself.";
 
 export const renderCompletion = (c: {
   prs: { url: string; repo: string }[];

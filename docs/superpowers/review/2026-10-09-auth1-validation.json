@@ -1,0 +1,73 @@
+{
+  "task": "AUTH-1: exact issue-event authorization",
+  "date": "2026-10-09",
+  "baseline": "df9a0d9983dde71128ff89228c794eaba8cab730",
+  "implementation": [
+    "State and lifecycle changes require exact matching history with a configured human approver, explicitly absent bot metadata, and verified inactivity on a complete fleet snapshot.",
+    "All integration events are unauthorized because current metadata has no trusted integration identity plus actual linked-PR merge correlation; generic integration type, GitHub naming and cached PR state confer no authority.",
+    "The human-label kill switch retains its activity exception but requires its own human-authored history entry; a lifecycle edit cannot substitute for missing kill-switch authorship.",
+    "History reads reject missing queried authorship/change fields and incomplete or repeated pagination cursors; failed later pages never yield partial authorizing evidence.",
+    "Existing unauthorized event attention and retained-worktree behavior are preserved; the runbook and completion/PR message explain manual human confirmation."
+  ],
+  "files": [
+    "src/machine/reconcile.ts",
+    "src/linear/client.ts",
+    "src/linear/templates.ts",
+    "tests/unit/machine/eventAuthorization.test.ts",
+    "tests/unit/linear/client.test.ts",
+    "tests/unit/linear/templates.test.ts",
+    "docs/runbook.md",
+    "docs/superpowers/review/2026-10-09-auth1-validation.json"
+  ],
+  "validation": {
+    "environment": {
+      "PATH_prefix": "/Users/jujufugh/.local/share/wingmate/toolchains/bun-1.4.2/bin",
+      "bun_version": "1.4.2",
+      "bun_revision": "744846f84",
+      "isolation": "Fake Linear/Orca/GitHub ports and temporary state; simulation git worktrees are isolated under temporary test roots."
+    },
+    "commands": [
+      {
+        "command": "bun install --frozen-lockfile",
+        "result": "passed; lockfile unchanged"
+      },
+      {
+        "command": "bun test tests/unit/machine/eventAuthorization.test.ts",
+        "revision": "original baseline source with initial regression tests",
+        "result": "31 passed, 18 failed: reproduced integration Done, review resume, lifecycle overrides, missing human-label proof and partial-fleet authorization"
+      },
+      {
+        "command": "bun test tests/unit/machine/eventAuthorization.test.ts tests/unit/machine/reconcile.test.ts tests/unit/machine/classify.test.ts tests/unit/machine/answerDelivery.test.ts tests/unit/linear/client.test.ts tests/unit/linear/graphql.test.ts tests/unit/linear/templates.test.ts",
+        "result": "130 passed, 0 failed; 395 assertions"
+      },
+      {
+        "command": "bun test tests/sim/rulings.test.ts tests/sim/answerDelivery.test.ts",
+        "result": "32 passed, 0 failed; 1735 assertions"
+      },
+      {
+        "command": "bun run check",
+        "result": "passed"
+      },
+      {
+        "command": "bun run lint",
+        "result": "passed; 225 files checked, no fixes"
+      },
+      {
+        "command": "git diff --check",
+        "result": "passed"
+      }
+    ],
+    "coverage": [
+      "Unrelated integration, GitHub-named integration, integration missing ID, application with approver actor, bot missing type, non-approver and missing actor controls for Done, review-to-InProgress, pause, unpause, lifecycle removal and human-label release.",
+      "Idle parked worktree retained across repeated unauthorized integration completion, including a cached MERGED PR; no worktree removal and only one terminal stop.",
+      "Human completion without PR/merge proof, human lifecycle pause/unpause, existing review resume and reply delivery, and human kill switch during agent activity.",
+      "Missing matching history, omitted queried fields, partial fleet, missing/repeated pagination cursors, later-page transport/GraphQL/shape failures and failed history read without state advancement."
+    ]
+  },
+  "limitations": [
+    "No trusted integration allowlist or automatic completion path is added; even genuine GitHub integration closes require human confirmation until identity and actual linked merge correlation are implemented.",
+    "An integration close is surfaced as possible_self_close; a configured human approver must reopen and close again while no agent is active to confirm it.",
+    "No autonomous merge, cleanup behavior, Console behavior, production configuration/state, credentials, schedules, application pilots or old provider sessions were changed.",
+    "No live service validation, Linear/GitHub writes, pushes or PR operations were performed; the full repository test suite was not run."
+  ]
+}

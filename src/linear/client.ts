@@ -87,12 +87,13 @@ const HistoryNode = z
   .object({
     id: Id,
     createdAt: Id,
-    actor: IdRef.nullish(),
-    botActor: z.object({ id: Id, type: z.string().nullish() }).passthrough().nullish(),
-    addedLabelIds: z.array(z.string()).nullish(),
-    removedLabelIds: z.array(z.string()).nullish(),
-    fromStateId: z.string().nullish(),
-    toStateId: z.string().nullish(),
+    // Queried authorization evidence must be present: omission is not proof of a human or no later change.
+    actor: IdRef.nullable(),
+    botActor: z.object({ id: Id, type: z.string().nullish() }).passthrough().nullable(),
+    addedLabelIds: z.array(z.string()).nullable(),
+    removedLabelIds: z.array(z.string()).nullable(),
+    fromStateId: z.string().nullable(),
+    toStateId: z.string().nullable(),
   })
   .passthrough();
 const IssuesPage = z.object({ issues: Connection(IssueNode) }).passthrough();
@@ -264,6 +265,7 @@ export class LinearClient implements LinearPort {
   /** Whole history, oldest first, paged 50 at a time (per-issue history is small); filtered by `createdAt > since`. */
   async issueHistory(issueId: string, sinceIso: string): Promise<LinearHistoryEntry[]> {
     const out: LinearHistoryEntry[] = [];
+    const cursors = new Set<string>();
     let after: string | null = null;
     do {
       const d: z.infer<typeof HistoryPage> = shaped(
@@ -276,6 +278,11 @@ export class LinearClient implements LinearPort {
       );
       out.push(...d.issue.history.nodes.filter((h) => h.createdAt > sinceIso).map(toHistory));
       after = d.issue.history.pageInfo.hasNextPage ? d.issue.history.pageInfo.endCursor : null;
+      if (d.issue.history.pageInfo.hasNextPage) {
+        if (!after || cursors.has(after))
+          throw new WingmateError("linear_shape", "history: missing or repeated pagination cursor");
+        cursors.add(after);
+      }
     } while (after);
     return out.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   }
