@@ -45,7 +45,7 @@ What developers and architects actually need is the **deterministic outer loop**
 - **🔒 Credential-Free Agent Sandboxes**: Agents never hold Git credentials, API keys, or direct push rights. All writes and comments occur via the official Wingmate Linear OAuth app.
 - **🛡️ 8 Deterministic Safety Gates**: No PR is ever opened without passing automated plan verification, unit tests, strict typechecking, linter checks, secret scanning, and dependency audits.
 - **🙋 Human-in-the-Loop Approval**: When agents formulate an implementation plan or hit ambiguous requirements, execution safely parks and notifies you with 1-click plan approval.
-- **🖥️ Architect Console UI**: Zero-dependency, lightweight web dashboard featuring both a 6-stage Kanban board and Funnel pipeline view, **Light theme by default (matching Orca ADE)**, **Dark**, and **System** themes.
+- **🖥️ Architect Command Center UI**: Zero-dependency, lightweight web dashboard featuring both a 6-stage Kanban board and Funnel pipeline view, **Light theme by default (matching Orca ADE)**, **Dark**, and **System** themes.
 
 ---
 
@@ -121,7 +121,7 @@ bun run build
 ### 2. Orca ADE Automation Plugin
 Wingmate integrates natively into Orca ADE as a first-class automation plugin:
 - **Native Automation Cadence**: Configures scheduled runs via `.orca/automations` executing `wingmate tick --precheck` every 5 minutes.
-- **Orca Light Theme Match**: The Architect Console defaults to a clean, crisp light theme designed to seamlessly match Orca ADE's default UI aesthetic.
+- **Orca Light Theme Match**: The Architect Command Center defaults to a clean, crisp light theme designed to seamlessly match Orca ADE's default UI aesthetic.
 - **Integrated Webview**: Run as an embedded Webview tab (`http://127.0.0.1:4848`) alongside active chat sessions.
 - **One-Click Worktree Jump**: Clicking **"Open in Orca ↗"** directly opens the agent's active worktree session in your editor.
 
@@ -179,7 +179,7 @@ wingmate doctor
 wingmate install --enable
 ```
 
-### Step 4: Launch the Architect Console
+### Step 4: Launch the Architect Command Center
 ```sh
 # Launch the dashboard and open in browser
 wingmate ui --open
@@ -191,9 +191,9 @@ Open **[http://127.0.0.1:4848](http://127.0.0.1:4848)** to monitor active worktr
 
 ---
 
-## 🎨 Architect Console UI
+## 🎨 Architect Command Center UI
 
-The built-in Web Console gives engineering architects complete visibility into the autonomous agent fleet:
+The built-in Command Center gives engineering architects complete visibility into the autonomous agent fleet:
 
 ![Theme Modes](https://img.shields.io/badge/Theme-Light_(Default)_%7C_Dark_%7C_System-38BDF8?style=flat-square)
 ![Views](https://img.shields.io/badge/Views-Pipeline_Funnel_%26_Kanban_Board-A855F7?style=flat-square)
@@ -202,7 +202,7 @@ The built-in Web Console gives engineering architects complete visibility into t
 - **☀️ Light Theme by Default (Orca-Matched)**: Crisp, high-contrast light theme calibrated to match Orca's default interface color palette.
 - **🌙 Dark & 💻 System Modes**: Obsidian slate dark theme and dynamic system theme mode that automatically respects your OS appearance preference.
 - **☷ 6-Column Responsive Kanban Board**: Fluid, full-width responsive layout adapting dynamically to any screen width (ultra-wide monitors, laptops, and split panes) with **zero horizontal sliders**.
-- **⚡ 1-Click Plan Approval & Question Modals**: Immediate in-app approvals and custom review dialogs that resume blocked agent worktrees without leaving the dashboard.
+- **↗ Answer in Linear**: Open the issue and reply to Wingmate's existing question as your signed-in owner account. Console answer submission is unavailable; the dispatcher verifies and delivers eligible replies on its next tick.
 - **📊 Native Automations & Routines Panel**: Live tracking of Orca Dispatcher Automation, Claude Code Routine Relay, and Codex Scheduled Review loops.
 - **🔄 Smart Adaptive Polling**: 3s active tab polling, 10s background polling, and action-driven instant updates. Completely avoids Chromium's 6-socket per-origin bottleneck.
 

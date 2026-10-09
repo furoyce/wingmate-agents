@@ -16,7 +16,11 @@ describe("templates", () => {
     expect(md.startsWith("<!-- wingmate:question id=01H -->")).toBe(true);
     expect(md).toContain("2. accuracy (recommended)");
     expect(md).toContain("add the label `human`");
-    expect(md).toContain("costs nothing until you answer");
+    expect(md).toContain("signed-in owner account");
+    expect(md).toContain("Answer in Linear");
+    expect(md).toContain("Console answer submission is unavailable");
+    expect(md).toContain("next dispatcher tick");
+    expect(md).not.toContain("Console replies immediately");
   });
   test("status comment stays under 6 KB with a long activity log", () => {
     const md = renderStatus({
