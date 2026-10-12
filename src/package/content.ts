@@ -8,7 +8,9 @@ description: Operate Wingmate project onboarding, Linear issue workflows, agent 
 
 Use the installed Wingmate CLI as the shared control surface. This skill can be read by any agent with file and terminal tools. The current managed execution and scheduler backend requires Orca; reading this skill does not add a native scheduler or sandbox adapter to another host.
 
-Start with \`wingmate package info --json\` to identify the installed package capabilities. For an existing installation, \`wingmate status --json\` reads local records. Missing or stale evidence is unknown, not proof that a worker exited or a routine ran.
+For first use, guide the user through harness, issue connector, project and scheduler selection. Run \`wingmate setup --questions --json\` to get the shared questions; use known session context and ask only for missing choices. Then run \`wingmate setup --host <host> --connector <linear|github> --project <key> --repo <owner/repo> --scheduler <orca|native> --json\` to prepare their plan. Selecting a host or connector is not proof that its execution adapter exists; report the plan's blockers and preserve the user's choice instead of silently switching to Orca or Linear. Native Claude Code routines are the next adapter priority. Do not create a competing job to bypass an unavailable adapter.
+
+Use \`wingmate package info --json\` to identify installed capabilities. For an existing installation, \`wingmate status --json\` reads local records; do not restart onboarding unless requested. Missing or stale evidence is unknown, not proof that a worker exited or a routine ran.
 
 ## Choose the workflow
 

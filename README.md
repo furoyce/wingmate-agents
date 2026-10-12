@@ -115,6 +115,32 @@ The capability manifest describes implementation, not the readiness of a particu
 
 ## Onboard a project
 
+### First launch: choose your harness and connections
+
+After building the CLI, run `wingmate` with no arguments in an interactive terminal, or run:
+
+```sh
+wingmate setup
+```
+
+Setup asks which harness you use (**Orca, Codex, Claude Code, Pi or OpenCode**), whether issues come from **Linear or GitHub**, your project key and repository, and where recurring jobs should run. It shows the selected connections and schedule plan, readiness requirements, and next steps. Downloading/exporting the package does not launch a process; launch `wingmate` without a command or use the skill for first setup to start the guided flow. Existing commands and unattended worker invocations keep their normal behavior.
+
+The native branch explicitly means **cloud routines for Claude Code** or **desktop scheduled tasks for Codex**. Claude Desktop local tasks and session `/loop` are separate modes that this setup does not select. Interactive labels name the execution location; agent clients use each option's `labelsByHost` for the selected harness.
+
+Agents and future plugin screens can use the same question interface and submit a complete selection without an interactive terminal:
+
+```sh
+wingmate setup --questions --json
+wingmate setup --host claude-code --connector linear --project my-app \
+  --repo my-org/my-app --scheduler native --json
+```
+
+`setup` currently **prepares a plan**. It does not authenticate connectors, edit project configuration, or create jobs. Orca plus Linear is the implemented execution path. Selecting GitHub Issues or a different native scheduler keeps that selection and reports the missing adapter; it does not create a misleading success state or substitute a different backend. GitHub repositories and PRs are supported separately from GitHub issue intake.
+
+**Claude Code routines are the next native scheduler priority.** The [first-run and adapter design](docs/superpowers/specs/2026-10-12-first-run-and-native-adapters.md) defines separate host, scheduler, execution and issue-connector interfaces. Linear and GitHub are the initial issue-connector scope; GitLab and Jira are future extensions. Plans distinguish proposed jobs from jobs actually created and observed in a host.
+
+### Configure and activate the supported backend
+
 Start with the guided checklist, even if no configuration exists yet:
 
 ```sh

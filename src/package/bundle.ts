@@ -31,7 +31,13 @@ export const CAPABILITIES = {
   unmanagedFrontendMeaning:
     "May read the skill and call available CLI commands; no managed execution, scheduler or isolation adapter is supplied for these frontends.",
   onboarding:
-    "Configuration-free first-run guide and offline plan for configured projects; no installation or activation by either.",
+    "Interactive harness/connector/project/scheduler setup plan, configuration-free guide and offline project plan; no installation or activation by these planners.",
+  firstRun: {
+    command: ["wingmate", "setup"],
+    questions: ["wingmate", "setup", "--questions", "--json"],
+    createsConnectionsOrSchedules: false,
+    nextNativeScheduler: "claude-code-routines",
+  },
   maintenance: "Dispatcher reconciliation and lifecycle-checked cleanup; manual operator diagnostics.",
   dashboard: "Linear issues, recorded agent assignments, worktrees and reported routine state.",
 } as const;

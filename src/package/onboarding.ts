@@ -16,6 +16,7 @@ export const ONBOARDING_GUIDE = freeze({
   summary:
     "An early technical release for Linear intake, Orca-managed agents and GitHub pull requests. This guide describes steps; it does not execute them or establish machine readiness. GitHub issue ingestion and native plugin installation are not shipped.",
   prerequisites: [
+    "On first launch, run wingmate with no arguments in a terminal, or wingmate setup, to choose harness, issue connector, project and scheduler. Agents can use wingmate setup --questions --json and supply the answers as flags. That plan reports adapter gaps; the detailed installation steps below cover the currently implemented Orca and Linear path.",
     "Local macOS, Git and Bun 1.4.2 or later; build the CLI and install the portable skill using the README. Managed execution additionally needs running Orca, its CLI, GitHub authentication and the configured provider accounts/CLIs.",
     "Commands below are examples, not a script to run all at once. Replace uppercase placeholders and example absolute paths with verified owner values. Never invent IDs, request secrets in chat or place credentials in project/skill files.",
   ],
