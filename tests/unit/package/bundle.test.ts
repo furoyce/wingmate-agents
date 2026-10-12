@@ -40,6 +40,7 @@ test("export is a self-contained skill bundle with verifiable content and no own
     "skills/wingmate/assets",
     "skills/wingmate/assets/projects.example.yaml",
     "skills/wingmate/references",
+    "skills/wingmate/references/installation.md",
     "skills/wingmate/references/onboarding.md",
     "skills/wingmate/references/operations.md",
     "wingmate-package.json",
@@ -123,4 +124,30 @@ test("capability metadata distinguishes a skill reader from an implemented sched
   expect(capabilities.scheduling.notImplemented).toContain("codex-scheduled-tasks");
   expect(capabilities.unmanagedFrontends).toContain("opencode");
   expect(capabilities.agentInterface.automaticHostInstallation).toBe(false);
+});
+
+test("Codex local marketplace resolves to a packaged onboarding skill with verified file hashes", async () => {
+  const destination = join(await temp(), "codex");
+  const result = await exportPackage(destination, "codex");
+  expect(result.format).toBe("wingmate-codex-plugin-bundle/v1");
+  expect(result.installed).toBe(false);
+  const marketplace = JSON.parse(
+    await readFile(join(destination, ".agents/plugins/marketplace.json"), "utf8"),
+  );
+  const pluginRoot = join(destination, marketplace.plugins[0].source.path);
+  const plugin = JSON.parse(await readFile(join(pluginRoot, ".codex-plugin/plugin.json"), "utf8"));
+  expect(plugin.name).toBe(marketplace.plugins[0].name);
+  expect(plugin.hooks).toBeUndefined();
+  const skill = await readFile(join(pluginRoot, plugin.extensions["com.openai"].onboardingSkill), "utf8");
+  expect(skill).toContain("references/installation.md");
+  expect(await readFile(join(pluginRoot, "skills/wingmate/references/installation.md"), "utf8")).toContain(
+    "Guided installation",
+  );
+  for (const file of result.files) {
+    const content = await readFile(join(destination, file.path));
+    expect(createHash("sha256").update(content).digest("hex")).toBe(file.sha256);
+  }
+  expect(JSON.parse(await readFile(join(destination, "wingmate-package.json"), "utf8"))).toEqual(
+    packageInfo("codex"),
+  );
 });

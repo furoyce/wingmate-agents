@@ -14,6 +14,10 @@ Current managed execution and scheduling use Orca; issue intake and authenticate
 
 The first implementation increment adds an interactive `wingmate`/`wingmate setup` entrypoint and `wingmate setup --questions --json` for agent-driven questions. Flags can supply answers noninteractively. Its `setupPlan` is a pure proposal: it does not read credentials, prove readiness, save project configuration, create connections/jobs, or activate automation. Downloading/exporting a package does not execute setup.
 
+Installation now has its own continuation: `package install --host codex|claude-code` writes the public skill exclusively and starts that host's interactive agent with the exact installed skill and CLI paths. JSON mode returns the same pending handoff to the current installer agent without launching a nested session. Other hosts require an explicit skill directory and use the shared question flow. The skill carries authorized work through the existing configuration/install/readiness steps; a host process exit is not completion evidence. Existing destinations are preserved and cancellation does not undo installed skill files.
+
+A `package export --format codex` local marketplace supplies the documented `onboardingSkill` setup entrypoint. The host user runs setup after installing it; this does not promise a universal post-install callback. Native Orca plugin activation is lazy and its separate release must provide an explicit setup surface. No lifecycle hooks or host approval overrides are added.
+
 ## 2. First-run journey
 
 | Step | Information gathered or displayed | Completion evidence |
