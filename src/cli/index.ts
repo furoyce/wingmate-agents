@@ -51,15 +51,17 @@ const registry: Record<string, () => Promise<Handler>> = {
   ui: async () => (await import("./commands/ui")).uiCommand,
   package: async () => (await import("./commands/package")).packageCommand,
   onboard: async () => (await import("./commands/onboard")).onboardCommand,
+  setup: async () => (await import("./commands/setup")).setupCommand,
   cleanup: async () => (await import("./commands/cleanup")).cleanupCommand,
 };
 export interface MainDeps {
+  interactive?: boolean;
   handlers?: Record<string, () => Promise<Handler>>;
   out?: (text: string) => void;
   err?: (text: string) => void;
 }
 const USAGE = `usage: wingmate <${Object.keys(registry).join("|")}> …\n`;
-const HELP = `${USAGE}\nwingmate tick [--precheck] [--dry-run] [--json]\nwingmate scan [--dry-run] [--json]\nwingmate issue <identifier> <verb> …\nwingmate package info [--json]\nwingmate package export --out <new-directory> [--json]\nwingmate onboard [--guide | --project <key>] [--json]\nwingmate cleanup (--issue <id> | --project <key> | --all) [--dry-run] [--json] [--force] [--orphaned]\n`;
+const HELP = `${USAGE}\nwingmate tick [--precheck] [--dry-run] [--json]\nwingmate scan [--dry-run] [--json]\nwingmate issue <identifier> <verb> …\nwingmate package info [--json]\nwingmate package export --out <new-directory> [--json]\nwingmate onboard [--guide | --project <key>] [--json]\nwingmate setup [--questions] [--json]\nwingmate setup --host <host> --connector <linear|github> --project <key> --repo <owner/repo> --scheduler <orca|native> [--json]\nwingmate cleanup (--issue <id> | --project <key> | --all) [--dry-run] [--json] [--force] [--orphaned]\n`;
 
 /** Every error a command lets escape: `code: message` on stderr (never a stack trace, never stdout), exit 2. */
 export function reportError(
@@ -92,7 +94,8 @@ export async function main(args: string[], deps: MainDeps = {}): Promise<number>
     out(HELP);
     return 0;
   }
-  const argv = parseArgv(args);
+  const interactive = deps.interactive ?? Boolean(process.stdin.isTTY && process.stdout.isTTY);
+  const argv = parseArgv(args.length === 0 && interactive ? ["setup"] : args);
   if (Object.values(argv.flags).includes(false)) {
     err(USAGE);
     return 2;
