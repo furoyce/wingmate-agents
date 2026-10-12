@@ -3,6 +3,10 @@ import { createHash } from "node:crypto";
 import { mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { parse } from "yaml";
+import { onboardCommand } from "../../../src/cli/commands/onboard";
+import { parseArgv } from "../../../src/cli/index";
+import { ConfigSchema, withDefaults } from "../../../src/config/schema";
 import { exportPackage, packageInfo } from "../../../src/package/bundle";
 
 const roots: string[] = [];
@@ -33,7 +37,10 @@ test("export is a self-contained skill bundle with verifiable content and no own
     "skills/wingmate/SKILL.md",
     "skills/wingmate/agents",
     "skills/wingmate/agents/openai.yaml",
+    "skills/wingmate/assets",
+    "skills/wingmate/assets/projects.example.yaml",
     "skills/wingmate/references",
+    "skills/wingmate/references/onboarding.md",
     "skills/wingmate/references/operations.md",
     "wingmate-package.json",
   ]);
@@ -49,6 +56,42 @@ test("export is a self-contained skill bundle with verifiable content and no own
   expect(await readFile(join(destination, "skills/wingmate/references/operations.md"), "utf8")).toContain(
     "## Onboarding",
   );
+});
+
+test("exported guide matches the CLI and the starter requires real mappings before use", async () => {
+  const destination = join(await temp(), "bundle");
+  await exportPackage(destination);
+  const output: string[] = [];
+  await onboardCommand(parseArgv(["onboard", "--guide"]), {
+    out: (line) => output.push(line),
+    plan: async () => {
+      throw new Error("guide must not load owner configuration");
+    },
+  });
+  expect(await readFile(join(destination, "skills/wingmate/references/onboarding.md"), "utf8")).toBe(
+    output.join("\n"),
+  );
+  const template = parse(
+    await readFile(join(destination, "skills/wingmate/assets/projects.example.yaml"), "utf8"),
+  );
+  expect(ConfigSchema.safeParse(template).success).toBe(false);
+  const id = "00000000-0000-4000-8000-000000000001";
+  template.workspace = { linearWorkspace: id, team: "TEST", owner: id, approvers: [id] };
+  template.defaults.timezone = "UTC";
+  template.projects["my-app"].linearProject = id;
+  Object.assign(template.projects["my-app"].repos.main, {
+    orcaRepo: id,
+    github: "example/project",
+    gates: [["bun", "test"]],
+    ui: { kind: "none" },
+  });
+  const cfg = withDefaults(ConfigSchema.parse(template));
+  expect(Object.keys(cfg.projects)).toEqual(["my-app"]);
+  expect(cfg.projects["my-app"]?.routing.default).toBe("main");
+  expect(cfg.projects["my-app"]?.autonomy).toBe("ask-first");
+  expect(cfg.projects["my-app"]?.done).toBe("review");
+  expect(cfg.defaults.providers.coordinatorCascade).toEqual(["claude"]);
+  expect(cfg.defaults.providers.workers).toEqual(["claude"]);
 });
 
 test("repeated export refuses existing output and preserves user edits", async () => {

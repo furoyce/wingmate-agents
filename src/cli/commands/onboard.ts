@@ -1,10 +1,11 @@
 import type { OnboardingPlan } from "../../ops/onboard";
 import { readOnboardingPlan } from "../../ops/onboard";
+import { ONBOARDING_GUIDE, renderOnboardingGuide } from "../../package/onboarding";
 import { WingmateError } from "../../shared/errors";
 import type { Argv } from "../index";
 import { UsageError, readFlags } from "../ops";
 
-const USAGE = "usage: wingmate onboard [--project KEY] [--json]";
+const USAGE = "usage: wingmate onboard [--guide | --project KEY] [--json]";
 export interface OnboardCommandDeps {
   plan?: (options: { project?: string }) => Promise<OnboardingPlan>;
   out?: (line: string) => void;
@@ -22,13 +23,18 @@ export async function onboardCommand(argv: Argv, deps: OnboardCommandDeps = {}):
   let flags: ReturnType<typeof readFlags>;
   try {
     if (argv.cmd.length !== 1) throw new UsageError(USAGE);
-    flags = readFlags(argv, { bool: ["json"], value: ["project"] }, USAGE);
+    flags = readFlags(argv, { bool: ["json", "guide"], value: ["project"] }, USAGE);
+    if (flags.bool.has("guide") && flags.value.has("project")) throw new UsageError(USAGE);
   } catch (e) {
     if (!(e instanceof UsageError)) throw e;
     err(e.usage);
     return 2;
   }
   const json = flags.bool.has("json");
+  if (flags.bool.has("guide")) {
+    out(json ? JSON.stringify(ONBOARDING_GUIDE, null, 2) : renderOnboardingGuide());
+    return 0;
+  }
   let plan: OnboardingPlan;
   try {
     const project = flags.value.get("project");

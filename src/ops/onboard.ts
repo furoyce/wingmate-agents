@@ -22,7 +22,7 @@ export function onboardingPlan(config: Config, configPath: string, project?: str
     throw new WingmateError(
       "config_path_invalid",
       "onboarding requires an absolute normalized config path without control characters",
-      "set WINGMATE_CONFIG to an existing project configuration file",
+      "run wingmate onboard --guide for first setup, or set WINGMATE_CONFIG to an existing project configuration file",
     );
   const configuredProjects = Object.keys(config.projects);
   if (project !== undefined && !Object.hasOwn(config.projects, project))
@@ -104,7 +104,7 @@ export function onboardingPlan(config: Config, configPath: string, project?: str
         mode: "dispatcher" as const,
         worktreeGraceHours: config.defaults.cleanup.worktreeGraceHours,
         detail:
-          "Dispatcher cleanup handles done/cancelled worktrees after the configured grace period, preserves open PRs and defers unverifiable cleanup. There is no separate cleanup CLI.",
+          "Dispatcher cleanup handles eligible worktrees after the configured grace period, preserves open PRs and defers unverifiable cleanup. Inspect the same policy with wingmate cleanup --project <key> --dry-run --json.",
       },
       otherHosts: {
         supported: false as const,
@@ -159,7 +159,7 @@ export async function readOnboardingPlan(options: OnboardingOptions = {}): Promi
     throw new WingmateError(
       e.code,
       e.message,
-      "set WINGMATE_CONFIG to an existing project configuration file",
+      "run wingmate onboard --guide for first setup, or set WINGMATE_CONFIG to an existing project configuration file",
     );
   }
   let config: Config;

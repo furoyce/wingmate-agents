@@ -12,7 +12,7 @@ Start with \`wingmate package info --json\` to identify the installed package ca
 
 ## Choose the workflow
 
-- **Onboard a project:** read [operations.md](references/operations.md#onboarding). Prepare a plan with \`wingmate onboard --project <key> --json\`; report missing configuration and checks before installing or activating routines.
+- **First setup or add a project:** run \`wingmate onboard --guide --json\`, or read [onboarding.md](references/onboarding.md) when the CLI is not yet available. Guide the user through the relevant steps, collect only missing inputs, and reuse their existing authorization. The guide also ships a [starter configuration](assets/projects.example.yaml); its placeholders must be replaced with real mappings and checks. For an existing installation, draft a separate additive copy and review rollout before publishing: editing its live config affects subsequent enabled ticks. Preserve existing settings and pause/automation state. Once configured, read [operations.md](references/operations.md#onboarding) and prepare a plan with \`wingmate onboard --project <key> --json\`.
 - **Inspect work:** use \`wingmate status --project <key> --json\` and the Command Center. Explain the Linear issue, coordinator and role assignments, worktree, pipeline gate and next action. Recorded assignments and running-status records are not live process observations.
 - **Maintain or recover:** read [operations.md](references/operations.md#maintenance-and-recovery). Preserve dirty work and unresolved attempts. Use supported operator commands within the user's existing authorization.
 - **Work inside an assigned issue:** read that worktree's \`.wingmate/BRIEF.md\` and \`PROTOCOL.md\`. Its configured policy and role determine which \`wingmate issue\` commands are permitted. Do not substitute operator commands for worker intents.
@@ -29,6 +29,8 @@ Use the capability inventory to distinguish the portable agent interface from ma
 export const OPERATIONS = `# Operator workflows
 
 ## Onboarding
+
+For a first-time user without configuration, start with [the guided workflow](onboarding.md) or \`wingmate onboard --guide\`. The guide is available offline; printing it creates no projects or routines. Explain the current Orca dependency before attempting installation in another agent host.
 
 1. Select a real project in the owner's Wingmate configuration. Required inputs include its Linear project, approvers, repository routing, Orca repository IDs, setup commands and pinned validation commands. \`WINGMATE_CONFIG\` selects the configuration file; use an absolute path for installation. Do not copy credentials or invent project IDs.
 2. Run \`wingmate config validate\`, then \`wingmate onboard --project <key> --json\`. The latter produces a plan only. Config validity does not establish working credentials, usable isolation or an enabled schedule.
