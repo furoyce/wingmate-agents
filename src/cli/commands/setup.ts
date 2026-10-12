@@ -198,7 +198,7 @@ export async function setupCommand(argv: Argv, deps: SetupCommandDeps = {}): Pro
       for (;;) {
         const answer = await ask?.(q);
         if (answer === undefined || answer === null || answer.trim().toLowerCase() === "q") {
-          err("Setup cancelled; no changes made.");
+          err("Project setup cancelled.");
           return 130;
         }
         const trimmed = answer.trim();

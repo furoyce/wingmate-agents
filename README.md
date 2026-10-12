@@ -10,14 +10,15 @@ Choose the interface you need:
 
 | Interface | Available on `main` | Installation |
 | --- | --- | --- |
-| Portable Wingmate skill | Yes | Build/export below, then copy the skill into your agent's skill directory |
-| Orca with a Claude Code or Codex agent | Yes | Install the skill for that agent, then use the Orca-backed CLI and Command Center |
+| Portable Wingmate skill | Yes | Build below, then run `wingmate package install --host codex` or `--host claude-code` to install and begin onboarding |
+| Orca with a Claude Code or Codex agent | Yes | Install for the actual agent running in Orca, then use the Orca-backed CLI and Command Center |
+| Codex local plugin | Yes | Export the local marketplace below, install it in Codex, then run its setup workflow |
 | Native Orca plugin | Not yet released | Use the skill and browser Command Center for now; see [plugin status](#native-orca-plugin-status) |
-| Other agents with file and terminal tools | Portable instructions only | Give the agent the exported `SKILL.md` path and access to the CLI |
+| Other agents with file and terminal tools | Portable instructions only | Install into an explicit skills directory or export the skill, then have the current agent continue onboarding |
 
-### 1. Build and export
+### 1. Build the CLI
 
-These shell examples target a local macOS installation. You need Git and **Bun 1.4.2 or later** to build. Skill export itself requires no Orca session or Linear credentials. Running managed work also needs Orca and its `orca` CLI, GitHub CLI authentication (`gh auth status`), and the provider CLIs/accounts selected by your project configuration.
+These shell examples target a local macOS installation. You need Git and **Bun 1.4.2 or later** to build. Installing or exporting skill files requires no Orca session or Linear credentials. Running managed work also needs Orca and its `orca` CLI, GitHub CLI authentication (`gh auth status`), and the provider CLIs/accounts selected by your project configuration.
 
 ```sh
 git clone https://github.com/furoyce/wingmate-agents.git
@@ -30,14 +31,71 @@ bun run build
 wingmate_checkout="$(pwd -P)"
 export PATH="$wingmate_checkout/dist:$PATH"
 wingmate package info --json
-wingmate package export --out dist/wingmate-package --json
 ```
 
 Keep this checkout at a stable path. To use the CLI in later terminals, add its **absolute** `dist` directory to your shell's PATH, or call `/absolute/path/to/wingmate-agents/dist/wingmate` directly. Launch your terminal agent from an environment with that PATH. A desktop agent may need the absolute executable path supplied explicitly.
 
-The compiled CLI contains the bundle's content, so export also works outside the source checkout. Export creates a new directory and refuses to overwrite an existing directory, file or symlink. If `dist/wingmate-package` already exists, choose a new output directory. Export reads no credentials, project configuration or runtime records.
+### 2. Install the skill and begin onboarding
 
-The exported bundle contains:
+Choose the agent you use. In an interactive terminal, installation copies the complete embedded skill, including references and assets, then immediately launches that agent with the Wingmate onboarding prompt. The agent's normal permissions apply. The prompt carries the selected host and absolute CLI invocation so the agent can continue setup without asking you to identify them again. The selected agent's CLI must be available.
+
+For **Codex**, install into `~/.agents/skills/wingmate` and start onboarding:
+
+```sh
+wingmate package install --host codex
+```
+
+For **Claude Code**, install into `~/.claude/skills/wingmate` and start onboarding:
+
+```sh
+wingmate package install --host claude-code
+```
+
+These are local personal skill directories; hosted sessions need their own skill files and access to the execution environment. See [Codex's local skill guidance](https://learn.chatgpt.com/docs/build-skills#where-codex-loads-local-skills) and [Claude Code's skill locations](https://code.claude.com/docs/en/skills#where-skills-live).
+
+**Installing from an agent or without an interactive terminal:** use JSON output so the current agent can continue the work directly:
+
+```sh
+wingmate package install --host codex --json
+```
+
+Both modes write skill files without launching an agent. Plain noninteractive output prints resume guidance; JSON returns a structured receipt with onboarding pending. The JSON receipt includes the installed skill path, CLI argv, known host, question argv, onboarding prompt, and instructions for the **current agent to continue now**. It does not launch a nested agent. The current agent should read the installed skill, collect only missing inputs, and carry out the supported configuration, installation, and full readiness checks within the user's existing authorization. A receipt or setup plan is an intermediate result.
+
+**Agents inside Orca:** choose the actual Codex or Claude Code agent using the commands above. Orca remains the runtime backend; selecting it as the operator host does not identify an agent's skill directory. For Orca, Pi, or OpenCode, an explicit parent directory is required:
+
+```sh
+wingmate package install --host pi --skills-dir /absolute/path/to/skills --json
+```
+
+`--skills-dir` selects the parent of the new `wingmate` directory and can also override a Codex or Claude Code destination. Use the host's documented location. Other hosts consume the receipt in the current agent; installing instructions does not implement their native scheduler or worker adapters.
+
+The installer refuses an existing destination, including a file or symlink, and never replaces an installed skill. If onboarding is cancelled or the agent fails to launch, the skill files remain installed. Resume in Codex with **`$wingmate`** or in Claude Code with **`/wingmate`**, asking the agent to finish setup using the CLI argv printed during installation (or included in the JSON receipt). For a custom directory outside host discovery, give the agent the printed absolute `SKILL.md` path. Do not reinstall merely to resume questions. See [updating an installation](#update-an-installation) when changing skill versions.
+
+### 3. Complete onboarding and verify the result
+
+The onboarding agent identifies the loaded skill and CLI, checks available capabilities, and continues through [project setup](#onboard-a-project). It should inspect existing configuration, obtain real repository and Linear mappings, preserve prior settings, validate the configuration, install the supported backend, and run full doctor. It reports precise missing inputs or failed checks when those block progress. It should continue independent setup work and reuse existing authorization rather than stop after displaying capabilities or a plan.
+
+Capability inspection is one diagnostic step:
+
+```sh
+wingmate package info --json
+```
+
+The output should identify `wingmate-skill-bundle/v1`, the `skills/wingmate/SKILL.md` entrypoint and Orca as the execution backend. If the skill is missing, check that its directory contains `SKILL.md` directly, then start a new session and resume onboarding. If `wingmate` is not found, use the receipt's absolute CLI invocation or fix the agent's PATH.
+
+Skill installation, backend installation, and automation activation are separate results. The supported Orca installer prepares the shared automation disabled. Enable it only within the user's authorized activation scope after full doctor and required acceptance checks pass, then verify the observed state. Selecting an unsupported native scheduler or GitHub issue intake keeps that choice and reports the missing adapter; the agent must not silently substitute a different backend.
+
+### Export for another host or distribution
+
+Export is optional when using `package install`. To create a portable bundle:
+
+```sh
+wingmate package export --out dist/wingmate-package --json
+```
+
+The compiled CLI contains the bundle's content, so export also works outside the source checkout. Export creates a new directory and refuses to overwrite an existing directory, file or symlink. If the destination already exists, choose a new output directory. Export reads no credentials, project configuration or runtime records and does not launch onboarding.
+
+The portable bundle contains:
 
 ```text
 wingmate-package.json                 Version, requirements and content hashes
@@ -45,51 +103,29 @@ capabilities.json                    Implemented capabilities and extension gaps
 skills/wingmate/SKILL.md              Portable operator entrypoint
 skills/wingmate/agents/openai.yaml    Codex skill UI metadata
 skills/wingmate/assets/projects.example.yaml
+skills/wingmate/references/installation.md
 skills/wingmate/references/onboarding.md
 skills/wingmate/references/operations.md
 ```
 
-### 2. Install into your agent
+Import the whole `skills/wingmate` directory using the host's documented mechanism, or give the agent its absolute `SKILL.md` path and the CLI invocation. Ask it to finish project onboarding through installation and readiness checks within the authorized scope. Copying a plain skill directory does not trigger an installation hook.
 
-Run the appropriate block from the Wingmate checkout after export. Copy the **whole `wingmate` directory**, including its references and metadata. These commands stop before copying if the destination already exists, including a symlink; review and back up an existing installation before replacing it.
-
-**Codex — personal skill:**
+A Codex local plugin bundle can be exported with:
 
 ```sh
-mkdir -p "$HOME/.agents/skills"
-test ! -e "$HOME/.agents/skills/wingmate" &&
-  test ! -L "$HOME/.agents/skills/wingmate" &&
-  cp -R dist/wingmate-package/skills/wingmate "$HOME/.agents/skills/wingmate"
+wingmate package export --format codex --out dist/wingmate-codex-plugin
 ```
 
-Start a new Codex session and ask: **“Use the Wingmate skill to run `wingmate package info --json`.”** Codex's personal discovery directory is documented in [OpenAI's local skill guidance](https://learn.chatgpt.com/docs/build-skills#where-codex-loads-local-skills).
-
-**Claude Code — personal skill:**
+The export is a local marketplace root: `.agents/plugins/marketplace.json` points to `plugins/wingmate`, whose `.codex-plugin/plugin.json` declares the setup skill. Keep that directory at a stable path. Register it and install the plugin with a Codex CLI that supports these commands (verified with 0.162.0):
 
 ```sh
-mkdir -p "$HOME/.claude/skills"
-test ! -e "$HOME/.claude/skills/wingmate" &&
-  test ! -L "$HOME/.claude/skills/wingmate" &&
-  cp -R dist/wingmate-package/skills/wingmate "$HOME/.claude/skills/wingmate"
+codex plugin marketplace add "$wingmate_checkout/dist/wingmate-codex-plugin" --json
+codex plugin add wingmate@wingmate-local --json
 ```
 
-In a new local Claude Code session, run **`/wingmate`** and ask it to report the installed package capabilities. See [Claude Code's skill locations](https://code.claude.com/docs/en/skills#where-skills-live). These personal directories apply to local agents; a hosted/cloud session needs its own skill files and access to the execution environment.
+Alternatively, use Codex's supported desktop plugin installation surface after registering the marketplace. If `plugin add` is unavailable, update Codex or use that desktop flow. This is a local distribution bundle, not a public marketplace listing. See [OpenAI's plugin packaging documentation](https://developers.openai.com/plugins/build/plugins).
 
-**Agents inside Orca:** use the installation block for the agent you launch in Orca. The skill calls Wingmate's CLI; [project setup](#onboard-a-project) connects the shared Orca dispatcher. Open the Command Center with `wingmate ui --open orca --serve` after configuring the project.
-
-**Other agents:** import `dist/wingmate-package/skills/wingmate` using the host's documented skill mechanism, or provide its absolute `SKILL.md` path and ask the agent to read it, follow its references, and run `wingmate package info --json`. Reading the skill does not implement a managed Pi, OpenCode, Grok or Gemini scheduler/worker adapter.
-
-### 3. Verify discovery and CLI access
-
-Ask the agent to identify the Wingmate skill it loaded and run:
-
-```sh
-wingmate package info --json
-```
-
-The output should identify `wingmate-skill-bundle/v1`, the `skills/wingmate/SKILL.md` entrypoint and Orca as the execution backend. If the skill is missing, check that its directory contains `SKILL.md` directly, then start a new session. If `wingmate` is not found, fix the agent's PATH or supply the absolute executable path from step 1.
-
-At this point the skill and CLI are usable, but no project credentials or automation have been installed. Continue with [project onboarding](#onboard-a-project) to manage real issues. There is currently no repository-provided curl installer, Homebrew formula or marketplace plugin package.
+Its manifest points `onboardingSkill` to the Wingmate skill. After installing the bundle through Codex's supported plugin flow, click **Run setup** to start onboarding. Exporting or installing that bundle does not automatically execute the onboarding skill. This Codex bundle is separate from the unreleased native Orca plugin.
 
 ### Native Orca plugin status
 
@@ -101,11 +137,11 @@ The [automation management design](docs/superpowers/specs/2026-10-09-wingmate-au
 
 | Layer | Current implementation |
 | --- | --- |
-| Agent interface | Exportable `SKILL.md` and CLI; automatic host installation is not provided |
+| Agent interface | Installable/exportable `SKILL.md` and CLI; interactive Codex/Claude Code installation launches agent-led onboarding |
 | Execution host | Orca worktrees, dispatches and terminal delivery |
 | Providers | Claude/Codex coordinator paths; additional worker choices remain subject to role and sandbox admission |
 | Scheduling | One shared Orca dispatcher, every five minutes, installed disabled |
-| Onboarding | Offline plan for configured projects, including routing, pinned checks and baseline routines |
+| Onboarding | Agent-led configuration, supported installation and readiness checks; CLI planners provide questions, routing and checks without applying them |
 | Maintenance | Dispatcher reconciliation and lifecycle-checked cleanup; on-demand diagnostics |
 | UI | Linear ticket, recorded agent assignment, worktree and gate visibility; routine evidence is qualified |
 | Pi, OpenCode, Grok, Gemini CLI | May consume the portable instructions; their managed execution and scheduler adapters are not implemented |
@@ -117,17 +153,17 @@ The capability manifest describes implementation, not the readiness of a particu
 
 ### First launch: choose your harness and connections
 
-After building the CLI, run `wingmate` with no arguments in an interactive terminal, or run:
+`wingmate package install --host codex` or `--host claude-code` starts onboarding during interactive skill installation. To inspect the shared questions and plan separately, run `wingmate` with no arguments in an interactive terminal, or run:
 
 ```sh
 wingmate setup
 ```
 
-Setup asks which harness you use (**Orca, Codex, Claude Code, Pi or OpenCode**), whether issues come from **Linear or GitHub**, your project key and repository, and where recurring jobs should run. It shows the selected connections and schedule plan, readiness requirements, and next steps. Downloading/exporting the package does not launch a process; launch `wingmate` without a command or use the skill for first setup to start the guided flow. Existing commands and unattended worker invocations keep their normal behavior.
+Setup asks which harness you use (**Orca, Codex, Claude Code, Pi or OpenCode**), whether issues come from **Linear or GitHub**, your project key and repository, and where recurring jobs should run. It shows the selected connections and schedule plan, readiness requirements, and next steps. The onboarding agent uses this interface with known answers and continues the installation workflow. Existing commands and unattended worker invocations keep their normal behavior.
 
 The native branch explicitly means **cloud routines for Claude Code** or **desktop scheduled tasks for Codex**. Claude Desktop local tasks and session `/loop` are separate modes that this setup does not select. Interactive labels name the execution location; agent clients use each option's `labelsByHost` for the selected harness.
 
-Agents and future plugin screens can use the same question interface and submit a complete selection without an interactive terminal:
+Agents and plugin screens can use the same question interface and submit a complete selection without an interactive terminal:
 
 ```sh
 wingmate setup --questions --json
@@ -148,11 +184,11 @@ wingmate onboard --guide
 wingmate onboard --guide --json
 ```
 
-It explains first setup, adding a project, queuing the first issue, and inspecting work. The same guide is included in the exported skill as `references/onboarding.md`. From Codex, Claude Code, or another local agent using the skill, ask: **“Use Wingmate to guide me through adding my project. Inspect any existing configuration, collect missing mappings and checks, and show the setup plan.”** The guide prints instructions; the agent helps prepare your configuration. It does not itself create projects or activate automations.
+It explains first setup, adding a project, queuing the first issue, and inspecting work. The same guide is included in the installed/exported skill as `references/onboarding.md`. To resume in Codex, Claude Code, or another local agent, ask: **“Use Wingmate to finish adding my project. Inspect existing configuration, collect only missing mappings and checks, validate the configuration, install the supported backend, and complete full readiness checks. Continue within my existing authorization and report any exact blockers.”** The guide prints instructions; the agent carries out the supported workflow. If the user has also authorized activation, the agent continues through enablement after the required checks pass.
 
 Wingmate currently serves technical users with a local Orca installation. Orca owns the shared schedule and managed worktrees; Codex and Claude Code can operate that backend through the skill. Separate native host schedulers and the native Orca plugin are still pending. Intake currently comes from **Linear issues**; GitHub supplies repositories and pull requests, not an implemented GitHub issue queue.
 
-For a fresh installation, the exported bundle includes `skills/wingmate/assets/projects.example.yaml`, a one-project starter without the owner's pilot IDs. Copy it to a new configuration file outside the checkout and replace every placeholder with verified values, including your repository's validation commands and UI kind. Its default policy is `ask-first` with delivery at review. For an existing installation, draft a separate copy preserving its settings and adding the requested entry under `projects.<key>`, then validate and review rollout before publishing it. **Edits to the live selected configuration affect subsequent enabled ticks without reinstalling.** Preserve prior pause/automation state during rollout. There is no `project add` command yet.
+For a fresh installation, the installed skill includes `assets/projects.example.yaml`, a one-project starter without the owner's pilot IDs. Portable exports place it at `skills/wingmate/assets/projects.example.yaml`. Copy it to a new configuration file outside the checkout and replace every placeholder with verified values, including your repository's validation commands and UI kind. Its default policy is `ask-first` with delivery at review. For an existing installation, draft a separate copy preserving its settings and adding the requested entry under `projects.<key>`, then validate and review rollout before publishing it. **Edits to the live selected configuration affect subsequent enabled ticks without reinstalling.** Preserve prior pause/automation state during rollout. There is no `project add` command yet.
 
 Configure your Linear workspace/team, approvers, project IDs, Orca repository IDs, GitHub repositories, routing, setup and pinned validation commands using [the configuration specification](docs/superpowers/specs/2026-10-05-wingmate-agents-design.md). The checked-in `config/projects.yaml` contains the owner's pilot projects; replace those mappings with your own in a separate configuration file before any live installation. Follow [Linear app setup](docs/linear-app-setup.md) for the OAuth app, labels, workflow states and credentials, substituting your configured team for the guide's pilot team. Secrets stay outside the skill and repository.
 

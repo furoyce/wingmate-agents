@@ -3,7 +3,8 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import pkg from "../../package.json";
 import { WingmateError } from "../shared/errors";
-import { OPENAI_METADATA, OPERATIONS, SKILL } from "./content";
+import { CODEX_MANIFEST, CODEX_MARKETPLACE } from "./codex";
+import { INSTALLATION, OPENAI_METADATA, OPERATIONS, SKILL } from "./content";
 import { renderOnboardingGuide } from "./onboarding";
 import { PROJECT_CONFIG_TEMPLATE } from "./projectTemplate";
 
@@ -14,6 +15,13 @@ export const CAPABILITIES = {
     transport: "wingmate CLI",
     discovery: "Import the skill folder with the host's supported skill mechanism, or read it explicitly.",
     automaticHostInstallation: false,
+    installer: ["wingmate", "package", "install", "--host", "<host>"],
+    interactiveInstallation:
+      "Starts the selected Codex or Claude Code agent for guided setup; other hosts receive the shared setup flow.",
+    agentInstallation:
+      "JSON receipt directs the calling agent to continue setup in the current conversation.",
+    codexPluginSetup:
+      "Exportable local plugin with a host Run setup entrypoint; not an automatic agent launch on import.",
   },
   execution: {
     backend: "orca",
@@ -45,32 +53,60 @@ export const CAPABILITIES = {
 const CONTENT = {
   "skills/wingmate/SKILL.md": SKILL,
   "skills/wingmate/references/operations.md": OPERATIONS,
+  "skills/wingmate/references/installation.md": INSTALLATION,
   "skills/wingmate/references/onboarding.md": renderOnboardingGuide(),
   "skills/wingmate/agents/openai.yaml": OPENAI_METADATA,
   "skills/wingmate/assets/projects.example.yaml": PROJECT_CONFIG_TEMPLATE,
   "capabilities.json": `${JSON.stringify(CAPABILITIES, null, 2)}\n`,
 };
 
-export function packageInfo() {
+/** Public embedded files relative to a host's wingmate skill directory. */
+export function skillFiles(): readonly { path: string; content: string }[] {
+  const prefix = "skills/wingmate/";
+  return Object.entries(CONTENT)
+    .filter(([path]) => path.startsWith(prefix))
+    .map(([path, content]) => ({ path: path.slice(prefix.length), content }));
+}
+
+export type PackageFormat = "skill" | "codex";
+
+function packageContent(format: PackageFormat): Record<string, string> {
+  if (format === "skill") return CONTENT;
+  if (format !== "codex")
+    throw new WingmateError("package_format_invalid", "Choose skill or codex as the package format.");
   return {
-    format: "wingmate-skill-bundle/v1",
+    ...Object.fromEntries(Object.entries(CONTENT).map(([path, text]) => [`plugins/wingmate/${path}`, text])),
+    "plugins/wingmate/.codex-plugin/plugin.json": `${JSON.stringify(CODEX_MANIFEST, null, 2)}\n`,
+    ".agents/plugins/marketplace.json": `${JSON.stringify(CODEX_MARKETPLACE, null, 2)}\n`,
+  };
+}
+
+export function packageInfo(format: PackageFormat = "skill") {
+  const content = packageContent(format);
+  return {
+    format: format === "codex" ? "wingmate-codex-plugin-bundle/v1" : "wingmate-skill-bundle/v1",
     name: "wingmate",
     version: pkg.version,
-    entrypoint: "skills/wingmate/SKILL.md",
+    entrypoint:
+      format === "codex" ? "plugins/wingmate/.codex-plugin/plugin.json" : "skills/wingmate/SKILL.md",
     requires: { wingmate: pkg.version, executionBackend: "orca" },
     capabilities: CAPABILITIES,
-    files: Object.entries(CONTENT).map(([path, text]) => ({
+    files: Object.entries(content).map(([path, text]) => ({
       path,
       bytes: Buffer.byteLength(text),
       sha256: createHash("sha256").update(text).digest("hex"),
     })),
     distribution:
-      "Portable skill bundle requiring an installed Wingmate CLI; not a vendor marketplace manifest or executable installer.",
+      format === "codex"
+        ? "Local Codex marketplace with an onboarding skill; requires the Wingmate CLI and host setup invocation. Export does not install a host plugin."
+        : "Portable skill bundle requiring an installed Wingmate CLI; use package install for installation with guided setup.",
   };
 }
 
 /** Only embedded public content is exported. No config, process environment, records or tokens are read. */
-export async function exportPackage(destination: string) {
+export async function exportPackage(destination: string, format: PackageFormat = "skill") {
+  const manifest = packageInfo(format);
+  const content = packageContent(format);
   if (!destination.trim() || [...destination].some((c) => c.charCodeAt(0) < 32 || c.charCodeAt(0) === 127))
     throw new WingmateError(
       "package_path_invalid",
@@ -88,9 +124,8 @@ export async function exportPackage(destination: string) {
       "choose a new directory beneath an existing writable parent",
     );
   }
-  const manifest = packageInfo();
   try {
-    for (const [relative, text] of Object.entries(CONTENT)) {
+    for (const [relative, text] of Object.entries(content)) {
       const path = join(out, relative);
       await mkdir(dirname(path), { recursive: true, mode: 0o755 });
       await writeFile(path, text, { flag: "wx", mode: 0o644 });

@@ -61,7 +61,7 @@ export interface MainDeps {
   err?: (text: string) => void;
 }
 const USAGE = `usage: wingmate <${Object.keys(registry).join("|")}> …\n`;
-const HELP = `${USAGE}\nwingmate tick [--precheck] [--dry-run] [--json]\nwingmate scan [--dry-run] [--json]\nwingmate issue <identifier> <verb> …\nwingmate package info [--json]\nwingmate package export --out <new-directory> [--json]\nwingmate onboard [--guide | --project <key>] [--json]\nwingmate setup [--questions] [--json]\nwingmate setup --host <host> --connector <linear|github> --project <key> --repo <owner/repo> --scheduler <orca|native> [--json]\nwingmate cleanup (--issue <id> | --project <key> | --all) [--dry-run] [--json] [--force] [--orphaned]\n`;
+const HELP = `${USAGE}\nwingmate tick [--precheck] [--dry-run] [--json]\nwingmate scan [--dry-run] [--json]\nwingmate issue <identifier> <verb> …\nwingmate package info [--json]\nwingmate package install --host <host> [--skills-dir <parent-directory>] [--json]\nwingmate package export --out <new-directory> [--format skill|codex] [--json]\nwingmate onboard [--guide | --project <key>] [--json]\nwingmate setup [--questions] [--json]\nwingmate setup --host <host> --connector <linear|github> --project <key> --repo <owner/repo> --scheduler <orca|native> [--json]\nwingmate cleanup (--issue <id> | --project <key> | --all) [--dry-run] [--json] [--force] [--orphaned]\n`;
 
 /** Every error a command lets escape: `code: message` on stderr (never a stack trace, never stdout), exit 2. */
 export function reportError(
