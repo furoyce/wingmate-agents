@@ -44,6 +44,8 @@ wingmate-package.json                 Version, requirements and content hashes
 capabilities.json                    Implemented capabilities and extension gaps
 skills/wingmate/SKILL.md              Portable operator entrypoint
 skills/wingmate/agents/openai.yaml    Codex skill UI metadata
+skills/wingmate/assets/projects.example.yaml
+skills/wingmate/references/onboarding.md
 skills/wingmate/references/operations.md
 ```
 
@@ -113,6 +115,19 @@ The capability manifest describes implementation, not the readiness of a particu
 
 ## Onboard a project
 
+Start with the guided checklist, even if no configuration exists yet:
+
+```sh
+wingmate onboard --guide
+wingmate onboard --guide --json
+```
+
+It explains first setup, adding a project, queuing the first issue, and inspecting work. The same guide is included in the exported skill as `references/onboarding.md`. From Codex, Claude Code, or another local agent using the skill, ask: **“Use Wingmate to guide me through adding my project. Inspect any existing configuration, collect missing mappings and checks, and show the setup plan.”** The guide prints instructions; the agent helps prepare your configuration. It does not itself create projects or activate automations.
+
+Wingmate currently serves technical users with a local Orca installation. Orca owns the shared schedule and managed worktrees; Codex and Claude Code can operate that backend through the skill. Separate native host schedulers and the native Orca plugin are still pending. Intake currently comes from **Linear issues**; GitHub supplies repositories and pull requests, not an implemented GitHub issue queue.
+
+For a fresh installation, the exported bundle includes `skills/wingmate/assets/projects.example.yaml`, a one-project starter without the owner's pilot IDs. Copy it to a new configuration file outside the checkout and replace every placeholder with verified values, including your repository's validation commands and UI kind. Its default policy is `ask-first` with delivery at review. For an existing installation, draft a separate copy preserving its settings and adding the requested entry under `projects.<key>`, then validate and review rollout before publishing it. **Edits to the live selected configuration affect subsequent enabled ticks without reinstalling.** Preserve prior pause/automation state during rollout. There is no `project add` command yet.
+
 Configure your Linear workspace/team, approvers, project IDs, Orca repository IDs, GitHub repositories, routing, setup and pinned validation commands using [the configuration specification](docs/superpowers/specs/2026-10-05-wingmate-agents-design.md). The checked-in `config/projects.yaml` contains the owner's pilot projects; replace those mappings with your own in a separate configuration file before any live installation. Follow [Linear app setup](docs/linear-app-setup.md) for the OAuth app, labels, workflow states and credentials, substituting your configured team for the guide's pilot team. Secrets stay outside the skill and repository.
 
 ```sh
@@ -161,6 +176,8 @@ wingmate ui --open orca --serve
 Enablement requires authorized activation, the configured acceptance requirements and a passing full doctor. Keep the Console process running while using the dashboard; Ctrl-C stops that UI server. Exporting or copying a skill never enables the dispatcher.
 
 The baseline five-minute dispatcher reconciles issues, replies and gates and handles eligible cleanup after the configured grace period. Use `wingmate cleanup --issue JRF-501 --dry-run --json` to inspect the same cleanup policy on demand; [cleanup safety and retained cases](docs/cleanup.md) documents explicit scopes and grace-only `--force`. Export and onboarding do not create extra schedules. Use `wingmate doctor --quick --json` for an on-demand health inspection; a separate daily health job, incident triage and dependency-maintenance jobs remain extension work.
+
+To queue work, create an issue in the configured Linear project with clear acceptance criteria, place it in Todo, and have a configured approver add one supported Agent-group label in Linear. Review `wingmate scan --dry-run --json`, then inspect `wingmate status --project my-app --json` and the Command Center as the enabled dispatcher runs. A label or dry-run candidate is not proof that an agent launched; admission and capacity checks still apply. `wingmate issue` operates an existing managed issue's workflow; it is not an issue-creation command.
 
 ## Operate and inspect
 

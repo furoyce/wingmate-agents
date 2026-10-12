@@ -57,6 +57,29 @@ const execute = async (args: string[]) => {
 };
 
 describe("onboard command", () => {
+  test("guide is available before configuration exists and never invokes the planner", async () => {
+    await rm(configPath);
+    for (const args of [
+      ["onboard", "--guide"],
+      ["onboard", "--guide", "--json"],
+    ]) {
+      const result = await execute(args);
+      expect(result.code).toBe(0);
+      expect(result.err).toEqual([]);
+      expect(result.calls).toEqual([]);
+      expect(result.out.join("\n").length).toBeGreaterThan(0);
+      if (args.includes("--json")) {
+        expect(JSON.parse(result.out[0] ?? "{}")).toMatchObject({
+          format: "wingmate-onboarding-guide/v1",
+          readOnly: true,
+          configurationRequired: false,
+          executionBackend: "orca",
+        });
+      }
+    }
+    expect(await readdir(root)).toEqual([]);
+  });
+
   test("JSON success is a read-only selected plan with no credential values", async () => {
     const result = await execute(["onboard", "--project", "sample", "--json"]);
     expect(result.code).toBe(0);
@@ -83,11 +106,14 @@ describe("onboard command", () => {
       ["onboard", "--json=false"],
       ["onboard", "--enable"],
       ["onboard", "--cleanup"],
+      ["onboard", "--guide", "--project", "sample"],
+      ["onboard", "--guide=false"],
+      ["onboard", "--guide", "--enable"],
     ]) {
       const result = await execute(args);
       expect(result.code).toBe(2);
       expect(result.calls).toEqual([]);
-      expect(result.err).toEqual(["usage: wingmate onboard [--project KEY] [--json]"]);
+      expect(result.err).toEqual(["usage: wingmate onboard [--guide | --project KEY] [--json]"]);
     }
   });
 
@@ -180,4 +206,32 @@ plan: options => readOnboardingPlan({...options,configPath:${JSON.stringify(conf
     });
     expect(await inventory(root)).toEqual(before);
   });
+});
+
+test("first-run guide through the real CLI requires no configured environment", async () => {
+  const driver = join(root, "guide-driver.ts");
+  const commandModule = resolve(import.meta.dir, "../../../src/cli/index.ts");
+  await writeFile(
+    driver,
+    `import {main} from ${JSON.stringify(commandModule)};
+globalThis.fetch = async () => { throw new Error("unexpected network access"); };
+process.exit(await main(["onboard", "--guide", "--json"]));\n`,
+  );
+  const child = Bun.spawnSync([process.execPath, "--no-env-file", "--no-autoload-dotenv", driver], {
+    cwd: root,
+    env: {
+      PATH: "/nonexistent",
+      WINGMATE_CONFIG: join(root, "missing.yaml"),
+      WINGMATE_HOME: join(root, "missing-state"),
+      WINGMATE_CONFIG_HOME: join(root, "missing-credentials"),
+      BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0",
+    },
+    stdout: "pipe",
+    stderr: "pipe",
+    timeout: 15_000,
+  });
+  expect(child.exitCode).toBe(0);
+  expect(new TextDecoder().decode(child.stderr)).toBe("");
+  expect(JSON.parse(new TextDecoder().decode(child.stdout)).configurationRequired).toBe(false);
+  expect((await readdir(root)).sort()).toEqual(["guide-driver.ts", "projects.yaml"]);
 });

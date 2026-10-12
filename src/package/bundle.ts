@@ -4,6 +4,8 @@ import { dirname, join, resolve } from "node:path";
 import pkg from "../../package.json";
 import { WingmateError } from "../shared/errors";
 import { OPENAI_METADATA, OPERATIONS, SKILL } from "./content";
+import { renderOnboardingGuide } from "./onboarding";
+import { PROJECT_CONFIG_TEMPLATE } from "./projectTemplate";
 
 /** This describes shipped implementation, never the readiness of the caller's installation. */
 export const CAPABILITIES = {
@@ -28,7 +30,8 @@ export const CAPABILITIES = {
   unmanagedFrontends: ["pi", "opencode", "grok", "gemini-cli"],
   unmanagedFrontendMeaning:
     "May read the skill and call available CLI commands; no managed execution, scheduler or isolation adapter is supplied for these frontends.",
-  onboarding: "Offline plan for configured projects; no installation or activation by the planner.",
+  onboarding:
+    "Configuration-free first-run guide and offline plan for configured projects; no installation or activation by either.",
   maintenance: "Dispatcher reconciliation and lifecycle-checked cleanup; manual operator diagnostics.",
   dashboard: "Linear issues, recorded agent assignments, worktrees and reported routine state.",
 } as const;
@@ -36,7 +39,9 @@ export const CAPABILITIES = {
 const CONTENT = {
   "skills/wingmate/SKILL.md": SKILL,
   "skills/wingmate/references/operations.md": OPERATIONS,
+  "skills/wingmate/references/onboarding.md": renderOnboardingGuide(),
   "skills/wingmate/agents/openai.yaml": OPENAI_METADATA,
+  "skills/wingmate/assets/projects.example.yaml": PROJECT_CONFIG_TEMPLATE,
   "capabilities.json": `${JSON.stringify(CAPABILITIES, null, 2)}\n`,
 };
 
