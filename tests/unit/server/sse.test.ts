@@ -176,26 +176,45 @@ describe("SSE authorization at every delivery and idempotent disposal", () => {
         },
       });
       if (!controllerPrototype) throw new Error("no controller prototype");
-      const enqueue = spyOn(controllerPrototype, "enqueue");
+      const origEnqueue = controllerPrototype.enqueue;
+      let shouldFail = false;
+      let sseCalls = 0;
+      const enqueue = spyOn(controllerPrototype, "enqueue").mockImplementation(function (
+        this: ReadableStreamDefaultController<Uint8Array>,
+        ...args: [Uint8Array?]
+      ) {
+        const chunk = args[0];
+        const isSse =
+          chunk instanceof Uint8Array &&
+          chunk.length >= 5 &&
+          chunk[0] === 100 && // 'd'
+          chunk[1] === 97 && // 'a'
+          chunk[2] === 116 && // 't'
+          chunk[3] === 97 && // 'a'
+          chunk[4] === 58; // ':'
+        if (isSse) {
+          sseCalls++;
+          if (shouldFail) {
+            shouldFail = false;
+            throw new Error("failed enqueue");
+          }
+        }
+        return origEnqueue.apply(this, args as [Uint8Array]);
+      });
       try {
         const session = await f.bootstrap();
-        if (initial)
-          enqueue.mockImplementationOnce(() => {
-            throw new Error("failed enqueue");
-          });
+        if (initial) shouldFail = true;
         const reader = await f.open(session);
         if (!initial) {
           await reader.read();
-          enqueue.mockImplementationOnce(() => {
-            throw new Error("failed enqueue");
-          });
+          shouldFail = true;
           await f.broadcast();
         }
         expect((await boundedRead(reader)).done).toBe(true);
         expect(f.timers.size).toBe(0);
-        const calls = enqueue.mock.calls.length;
+        const calls = sseCalls;
         await f.broadcast();
-        expect(enqueue.mock.calls.length).toBe(calls);
+        expect(sseCalls).toBe(calls);
       } finally {
         enqueue.mockRestore();
         f.cleanup();
