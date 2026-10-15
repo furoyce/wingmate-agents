@@ -17,13 +17,14 @@ describe("loadConfig", () => {
     for (const path of ["", "selected.yaml\n", "selected\0.yaml", "selected\t.yaml"])
       await expect(selectedConfigPath(path, dir)).rejects.toMatchObject({ code: "config_path_invalid" });
   });
-  test("loads the committed pilot config with four projects", async () => {
+  test("loads the committed pilot config with configured projects", async () => {
     const cfg = await loadConfig("config/projects.yaml");
     expect(Object.keys(cfg.projects).sort()).toEqual([
       "bouncr",
       "jr-learning-plus",
       "jr-travel-atlas",
       "smart-dispatcher",
+      "wingmate-agents",
     ]);
     expect(cfg.projects.bouncr?.routing.default).toBe("api");
     expect(cfg.projects.bouncr?.repos.api?.setup).toEqual([
